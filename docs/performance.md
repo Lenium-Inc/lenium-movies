@@ -19,3 +19,11 @@ Index catalogue queries, cache stable public responses at the edge, cache hot me
 ## Measurement
 
 Track Core Web Vitals, search latency, movie-page response time, playback startup, rebuffering, error rate, and provider latency by device class and region. Use synthetic checks and real-user measurements with privacy review.
+
+## Audit remediation: measurable budgets
+
+Initial release budgets are: p75 LCP under 2.5 seconds on mobile, p75 INP under 200 ms, p75 CLS under 0.1, public HTML under 100 KB compressed where practical, critical JavaScript under 180 KB compressed, search p95 under 300 ms for cached/common queries, and movie-page p95 under 800 ms excluding third-party playback startup. Budgets are measured in CI and real-user monitoring; exceptions require an owner and expiry date.
+
+Artwork processing creates AVIF and WebP derivatives at named widths, preserves focal point metadata, strips unnecessary metadata, and records source rights. The UI uses `srcset`/`sizes`, explicit dimensions, alt text from verified title data, and a low-quality placeholder only when it is generated from the same approved asset. Hero art is preloaded only on the route where it is the LCP candidate.
+
+Network-aware UX uses low-data artwork, poster-only rows, retry controls, and no autoplay by default. The player does not compete with page-critical resources. Caches use stale-while-revalidate for stable catalogue data and never share user-specific watch state.

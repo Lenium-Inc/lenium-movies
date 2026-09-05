@@ -29,3 +29,9 @@ The existing UI is a visual prototype with development-only fixture cards. Befor
 | 3 | Admin, ingestion, collections, moderation | Operators can publish without direct database edits |
 | 4 | Creator portal and reviews | Rights evidence and moderation are auditable |
 | 5 | Advanced recommendations and monetization | Business and privacy review complete |
+
+## Audit remediation: population without fake content
+
+The first production catalogue is a controlled batch, not a hardcoded UI array. Each title must enter through a provider adapter or approved admin import, carry provenance, pass duplicate detection, receive validated artwork and availability, and remain unpublished until rights and media state are ready. Empty catalogue, provider outage, metadata conflict, and rights-pending states are first-class UI states.
+
+Metadata refreshes are incremental and idempotent. A field-level conflict queue prevents an external provider from silently overwriting administrator edits. Operators can preview a proposed import, compare changed fields, reject records, and replay failed jobs without creating duplicates.

@@ -62,3 +62,17 @@ erDiagram
   COLLECTION ||--o{ COLLECTION_ITEM : contains
   MOVIE ||--o{ COLLECTION_ITEM : ordered_in
 ```
+
+## Audit remediation: indexes and lifecycle
+
+### Required index families
+
+Use a unique index on normalized user email and provider/external ID pairs. Use a unique index on movie slug plus locale when localized slugs are supported. Add partial indexes for published movies, active rights grants, public reviews, and enabled ad rules. Add composite indexes for `(movieId, status)`, `(userId, createdAt DESC)`, `(userId, movieId)`, `(territory, startsAt, endsAt, status)`, `(providerId, externalId)`, and `(status, createdAt)` on jobs and submissions. Use full-text/search fields only as a fallback; the search engine remains the primary query path.
+
+### Retention and partitioning
+
+Playback telemetry, raw provider payloads, audit logs, notifications, and ingestion logs need documented retention classes. Partition high-volume append-only telemetry and audit tables by month when measured volume justifies it. Keep legal evidence and takedown records for the contractually required period. Account deletion must anonymize or delete personal data while preserving legally required audit evidence.
+
+### Consistency
+
+Rights publication uses a transaction or outbox event so a movie cannot appear published while its rights state is missing. Search updates are asynchronous and reconciled from the database. The database is authoritative; search and cache are derived and rebuildable.

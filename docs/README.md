@@ -31,3 +31,7 @@ The deployed WebDev project is a visual prototype with development-only fixture 
 ## Immediate decisions
 
 The owner must select the initial metadata provider, video provider, target territories, authentication policy, and whether creator uploads are part of the first production release. Once those choices are confirmed, the schema, provider adapters, environment contract, and deployment plan can be implemented without inventing external behavior.
+
+## Audit
+
+The cross-functional production audit is documented in [audit.md](audit.md). It records findings, severity, remediation, and launch blockers across rights, playback, CDN, search, SEO, security, privacy, accessibility, disaster recovery, monitoring, and cost.

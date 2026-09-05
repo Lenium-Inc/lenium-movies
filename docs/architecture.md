@@ -78,3 +78,23 @@ flowchart TD
   J --> CDN
   J --> MP[Metadata providers]
 ```
+
+## Audit remediation: portability and scale
+
+### Provider-neutral playback
+
+The domain model must not store provider-specific assumptions in `Movie`, `RightsGrant`, or the public API. Each playback adapter declares capabilities such as HLS, DASH, DRM systems, caption formats, audio tracks, token binding, revocation, and webhook support. A capability matrix is evaluated before a title is published. Provider IDs and manifests remain adapter data behind a stable `PlaybackSource` contract.
+
+Playback provider migration uses dual-read or shadow validation in staging, followed by per-title cutover. New sessions use the selected source while existing sessions honor the original session contract. The system must support at least two approved provider adapters before production claims provider independence.
+
+### CDN and origin rules
+
+Artwork and public derivatives use immutable content hashes in their URLs. CDN cache keys exclude cookies and irrelevant query parameters. Private originals, manifests, caption files, and segments use signed access and origin protection. The CDN uses an origin shield, bounded TTLs for mutable availability metadata, purge-by-version rather than purge-by-wildcard, and egress monitoring by title and provider.
+
+### Work queues and backpressure
+
+Every long-running workflow has an idempotency key, retry policy, dead-letter queue, maximum attempts, timeout, and operator replay action. Media processing and metadata ingestion are separate queues. Queue depth, age of oldest job, and provider rate-limit responses are monitored. Workers apply bounded concurrency so one provider or title cannot exhaust the system.
+
+### Scale triggers
+
+The first scale trigger is measured load, not a premature microservice split. Split a module only when its CPU, memory, queue, database contention, or deployment cadence is independently constrained. Read replicas, search sharding, database partitioning, and regional media delivery are preferred before adding more application services.

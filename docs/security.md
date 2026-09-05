@@ -31,3 +31,21 @@ Deploy HTTPS, HSTS, CSP, frame restrictions, MIME sniffing protection, referrer 
 ## Incident response
 
 Monitor authentication failures, suspicious playback creation, upload failures, rights anomalies, provider errors, and admin changes. Maintain a documented process for credential rotation, rights takedown, data export, account deletion, and provider compromise.
+
+## Audit remediation: identity, uploads, and privacy
+
+### Authentication lifecycle
+
+Sessions rotate after login, privilege change, password reset, and suspicious activity. Refresh or session tokens are hashed at rest, revoked server-side, and bounded by idle and absolute expiry. Password reset tokens are single-use and short-lived. Email changes require re-verification. Account deletion and data export are authenticated, rate limited, and audited.
+
+### RBAC and policy versioning
+
+Permissions are deny-by-default, evaluated server-side, and scoped to resource ownership, partner contract, territory, and action. Roles are not sufficient for rights decisions. Permission changes invalidate relevant sessions and are logged with actor, reason, previous role, new role, and policy version. Admin MFA is required before production admin access.
+
+### Upload state machine
+
+Uploads move through `created -> uploading -> quarantined -> scanned -> validated -> processing -> ready -> published` or a terminal rejected state. Enforce resumable upload limits, archive/decompression-bomb protection, media duration and codec limits, image pixel limits, filename normalization, virus scanning, content-type sniffing, signed upload parts, object-lock or retention where required, and automatic cleanup of abandoned uploads.
+
+### Privacy and analytics
+
+Collect only events necessary for product, security, and playback operations. Consent gates non-essential analytics and marketing events. Store pseudonymous identifiers, separate account identity from telemetry, define retention by event class, honor deletion/export requests, and document regional processing, subprocessors, cookies, and lawful basis with counsel. Playback telemetry must not become a covert behavioral profile.

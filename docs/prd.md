@@ -35,3 +35,13 @@ Every user-facing feature must have a real state model, an owner, error handling
 ## References
 
 [1]: https://www.w3.org/WAI/standards-guidelines/wcag/ "Web Content Accessibility Guidelines"
+
+## Audit remediation: user trust and inclusive UX
+
+### Privacy acceptance criteria
+
+The product must provide a plain-language privacy notice, consent controls for non-essential analytics, account export and deletion flows, data retention explanations, cookie controls, and a visible way to report rights or privacy concerns. Personalized recommendations and playback telemetry must be explainable at a high level and must not be required for anonymous catalogue browsing.
+
+### Accessibility and mobile acceptance criteria
+
+The public experience targets WCAG 2.2 AA where practical. Keyboard users can reach navigation, search, cards, dialogs, and player controls. Focus is visible. Dialogs trap focus and restore it. Posters have meaningful alternative text or are marked decorative. Captions are available whenever supplied by the authorized source. Touch targets are at least 44 CSS pixels, horizontal rows support touch without trapping the page, and low-bandwidth mode avoids autoplay and heavy artwork. Reduced-motion preferences disable non-essential transitions.
