@@ -1,0 +1,21 @@
+# Lenflix Ad and Unwanted-Resource Blocking
+
+## Purpose and limits
+
+The engine protects the Lenflix experience from unwanted advertising and tracking in first-party surfaces and authorized playback environments. It must not bypass DRM, access controls, subscriptions, provider security, or contractual restrictions.
+
+## Rule model
+
+Rules are versioned records with type, pattern, resource type, action, scope, priority, allowlist relationship, enabled state, reason, and reviewer. Supported types include domain, URL pattern, script, iframe, tracker, telemetry, and cosmetic rules. Allowlist rules take precedence for essential application, authentication, analytics, captions, and playback resources.
+
+## Evaluation flow
+
+```text
+resource request -> policy engine -> allow / block / sandbox -> load
+```
+
+The engine is intentionally modular. Rules are updated independently, validated before activation, and rolled back by version. It records aggregate blocked categories rather than full browsing histories or unnecessary personal data.
+
+## Safety
+
+Default rules must be conservative. A blocked resource must not break login, media manifests, subtitles, accessibility controls, or required analytics. Admins can inspect test traces and temporarily disable a rule with an audit reason.
