@@ -8,17 +8,25 @@ interface Props {
 
 interface State {
   hasError: boolean;
-  error: Error | null;
 }
 
+/**
+ * Last-resort UI crash guard. The actual error is logged to the console;
+ * the user only ever sees a calm, neutral message — never a stack trace or
+ * internal status text.
+ */
 class ErrorBoundary extends Component<Props, State> {
   constructor(props: Props) {
     super(props);
-    this.state = { hasError: false, error: null };
+    this.state = { hasError: false };
   }
 
-  static getDerivedStateFromError(error: Error): State {
-    return { hasError: true, error };
+  static getDerivedStateFromError(): State {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, info: unknown) {
+    console.error("[ErrorBoundary] Unhandled UI error", error, info);
   }
 
   render() {
@@ -31,13 +39,7 @@ class ErrorBoundary extends Component<Props, State> {
               className="text-destructive mb-6 flex-shrink-0"
             />
 
-            <h2 className="text-xl mb-4">An unexpected error occurred.</h2>
-
-            <div className="p-4 w-full rounded bg-muted overflow-auto mb-6">
-              <pre className="text-sm text-muted-foreground whitespace-break-spaces">
-                {this.state.error?.stack}
-              </pre>
-            </div>
+            <h2 className="text-xl mb-4">Something went wrong.</h2>
 
             <button
               onClick={() => window.location.reload()}
@@ -48,7 +50,7 @@ class ErrorBoundary extends Component<Props, State> {
               )}
             >
               <RotateCcw size={16} />
-              Reload Page
+              Reload
             </button>
           </div>
         </div>

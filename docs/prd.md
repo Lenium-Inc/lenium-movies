@@ -1,8 +1,8 @@
-# Lenflix Product Requirements
+# FreeStream Product Requirements
 
 ## Product promise
 
-Lenflix helps viewers **discover, decide, play, and remember** authorized films with minimal friction. The product must never imply that a title is playable when the platform lacks valid rights or a healthy playback source.
+FreeStream helps viewers **discover, decide, play, and remember** authorized films with minimal friction. The product must never imply that a title is playable when the platform lacks valid rights or a healthy playback source.
 
 ## Personas
 
@@ -22,7 +22,7 @@ A title becomes playable only when it has a valid rights grant, an active playba
 
 ## Explicit non-goals
 
-Lenflix will not scrape unauthorized streaming sites, download copyrighted media without permission, bypass DRM or geo-restrictions, fabricate ratings or reviews, or expose fake play buttons. Social features, subscriptions, creator revenue reporting, and advanced recommendation models are post-MVP unless a business decision promotes them.
+FreeStream will not scrape unauthorized streaming sites, download copyrighted media without permission, bypass DRM or geo-restrictions, fabricate ratings or reviews, or expose fake play buttons. Social features, subscriptions, creator revenue reporting, and advanced recommendation models are post-MVP unless a business decision promotes them.
 
 ## Success metrics
 

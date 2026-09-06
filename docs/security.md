@@ -1,4 +1,4 @@
-# Lenflix Security Model
+# FreeStream Security Model
 
 ## Trust boundaries
 

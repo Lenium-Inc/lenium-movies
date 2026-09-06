@@ -1,4 +1,4 @@
-# Lenflix Roadmap
+# FreeStream Roadmap
 
 ## Phase 0: decisions and foundation
 

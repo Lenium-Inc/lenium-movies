@@ -1,8 +1,8 @@
-# Lenflix Content and Rights Model
+# FreeStream Content and Rights Model
 
 ## Allowed sources
 
-Lenflix may distribute licensed titles, public-domain works after verification, creator-submitted works with documented rights, and authorized partner catalogues. Metadata may be synchronized from legitimate providers, but the provider record is not proof of streaming rights.
+FreeStream may distribute licensed titles, public-domain works after verification, creator-submitted works with documented rights, and authorized partner catalogues. Metadata may be synchronized from legitimate providers, but the provider record is not proof of streaming rights.
 
 ## Rights record
 

@@ -1,8 +1,12 @@
-import { useCallback, useMemo, useState } from "react";
-import { toast } from "sonner";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Movie } from "@/components/movies/types";
 import type { View } from "@/components/layout/navigation";
 import { trpc } from "@/lib/trpc";
+import {
+  savedListIds,
+  subscribeList,
+  toggleListSave,
+} from "@/services/lists";
 
 export const genreFilterOptions = [
   "All",
@@ -41,7 +45,9 @@ interface UseCatalog {
 
 /**
  * Central owner of the catalog page state: the active view, the live search
- * term, the genre filter, and the temporary "My List" selection.
+ * term, the genre filter, and the persisted, tagged "My List" selection
+ * (`services/lists`), which the profile page curates with Plan/Favorites/
+ * Watched tags.
  *
  * Prefer the server-driven "popular" query when there is no search term, and
  * the server-driven "search" query otherwise. All shelf rows are derived with
@@ -51,10 +57,20 @@ export function useCatalog(): UseCatalog {
   const [view, setView] = useState<View>("home");
   const [search, setSearch] = useState("");
   const [genre, setGenre] = useState("All");
-  const [savedIds, setSavedIds] = useState<number[]>([]);
+  const [savedIds, setSavedIds] = useState<number[]>(() => savedListIds());
+
+  useEffect(() => subscribeList(() => setSavedIds(savedListIds())), []);
 
   const status = trpc.catalog.status.useQuery();
   const configured = Boolean(status.data?.configured);
+
+  const statusWarned = useRef(false);
+  if (!configured && !status.isLoading && !statusWarned.current) {
+    statusWarned.current = true;
+    console.error(
+      "[Catalog] metadata provider not configured — set TMDB_API_KEY on the server."
+    );
+  }
 
   const popular = trpc.catalog.popular.useQuery(
     { limit: 40 },
@@ -87,7 +103,7 @@ export function useCatalog(): UseCatalog {
   /**
    * Compose the shelf rows for the active view. The home view reuses the same
    * result set under different sortings; the "my-list" view reflects the
-   * temporary in-memory saves until persistence is connected.
+   * persisted tagged list.
    */
   const rows: CatalogRows[] = useMemo(() => {
     const byYearDesc = [...filtered].sort(
@@ -97,11 +113,15 @@ export function useCatalog(): UseCatalog {
       (a, b) => (b.score ?? 0) - (a.score ?? 0)
     );
 
+    const cap = 20;
+
     switch (view) {
       case "new":
-        return [{ title: "Recently Added", items: byYearDesc }];
+        return [{ title: "Recently Added", items: byYearDesc.slice(0, cap) }];
       case "popular":
-        return [{ title: "Popular on LeNium", items: byScoreDesc }];
+        return [
+          { title: "Popular on FreeStream", items: byScoreDesc.slice(0, cap) },
+        ];
       case "my-list":
         return [
           {
@@ -111,10 +131,10 @@ export function useCatalog(): UseCatalog {
         ];
       default:
         return [
-          { title: "Trending Now", items: filtered },
-          { title: "Popular on LeNium", items: byScoreDesc },
-          { title: "Recently Added", items: byYearDesc },
-          { title: "Top Rated", items: byScoreDesc },
+          { title: "Trending Now", items: filtered.slice(0, cap) },
+          { title: "Popular on FreeStream", items: byScoreDesc.slice(0, cap) },
+          { title: "Recently Added", items: byYearDesc.slice(0, cap) },
+          { title: "Top Rated", items: byScoreDesc.slice(0, cap) },
         ];
     }
   }, [view, filtered, savedIds]);
@@ -126,14 +146,10 @@ export function useCatalog(): UseCatalog {
     setGenre("All");
   }, []);
 
-  /** Toggle a movie in the in-memory "My List" selection. */
+  /** Toggle a movie in the persisted, tagged "My List" selection. */
   const toggleSave = useCallback((movie: Movie) => {
-    setSavedIds(current =>
-      current.includes(movie.id)
-        ? current.filter(id => id !== movie.id)
-        : [...current, movie.id]
-    );
-    toast.info("My List persistence is not connected yet.", { duration: 2200 });
+    toggleListSave(movie);
+    setSavedIds(savedListIds());
   }, []);
 
   return {

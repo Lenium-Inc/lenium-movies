@@ -1,4 +1,4 @@
-# Lenflix API Contract
+# FreeStream API Contract
 
 ## Principles
 

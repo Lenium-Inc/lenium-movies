@@ -2,7 +2,7 @@ import { useState } from "react";
 import { SlidersHorizontal } from "lucide-react";
 import { genreFilterOptions, useCatalog } from "@/hooks/useCatalog";
 import { BottomNav } from "@/components/layout/BottomNav";
-import { Header } from "@/components/layout/Header";
+import { GlassHeader } from "@/components/layout/GlassHeader";
 import { Sidebar } from "@/components/layout/Sidebar";
 import {
   CatalogEmptyState,
@@ -10,8 +10,9 @@ import {
 } from "@/components/movies/CatalogEmptyState";
 import { Details } from "@/components/movies/Details";
 import { DiscoverDialog, GenreChips } from "@/components/movies/DiscoverDialog";
-import { FeaturedHero } from "@/components/movies/FeaturedHero";
+import { Spotlight } from "@/components/movies/Spotlight";
 import { MovieRow } from "@/components/movies/MovieRow";
+import { ProfileMenu } from "@/components/layout/ProfileMenu";
 import type { Movie } from "@/components/movies/types";
 
 const moodActions: Array<{ mood: string; genre: string }> = [
@@ -50,7 +51,6 @@ export default function Home() {
   const [discoverOpen, setDiscoverOpen] = useState(false);
   const [selected, setSelected] = useState<Movie | null>(null);
 
-  const featured = filtered[0];
   const isClientSearch = search.trim().length > 0;
 
   /** Map a DiscoverDialog mood to an actual genre filter and return to movies. */
@@ -61,28 +61,24 @@ export default function Home() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0b0b0e] text-[#f1f1ee]">
+    <div className="min-h-screen bg-[#050505] text-[#FFFFFF]">
       <Sidebar
         view={view}
         onNavigate={setSection}
         open={menuOpen}
         onClose={() => setMenuOpen(false)}
       />
-      <div className="lg:pl-[232px]">
-        <div className="border-b border-white/10 bg-[#d7d7d3] px-4 py-1.5 text-center text-[9px] font-bold uppercase tracking-[0.16em] text-[#0b0b0e]">
-          Live metadata mode · TMDB source · Playback and rights are separate
-          capabilities
-        </div>
-        <Header
-          view={view}
-          search={search}
-          onSearchChange={value => {
-            setSearch(value);
-            setView("movies");
-          }}
-          onOpenMenu={() => setMenuOpen(true)}
-        />
-        <main className="mx-auto max-w-[1480px] px-4 pb-20 sm:px-6 lg:px-8">
+      <GlassHeader
+        search={search}
+        onSearchChange={value => {
+          setSearch(value);
+          setView("movies");
+        }}
+        onOpenMenu={() => setMenuOpen(true)}
+        profile={<ProfileMenu />}
+      />
+      <div className="lg:pl-[84px]">
+        <main className="mx-auto max-w-[1480px] px-4 pb-20 sm:px-6 lg:pl-0 lg:pr-8">
           {view === "collections" ? (
             <section className="py-12">
               <h1 className="text-2xl font-bold">Collections</h1>
@@ -118,11 +114,12 @@ export default function Home() {
             </section>
           ) : (
             <>
-              {view === "home" && featured ? (
-                <FeaturedHero
-                  movie={featured}
-                  onSelect={() => setSelected(featured)}
-                  onSave={() => toggleSave(featured)}
+              {view === "home" && !isClientSearch && filtered.length > 0 ? (
+                <Spotlight
+                  items={filtered}
+                  savedIds={savedIds}
+                  onDetails={setSelected}
+                  onSave={toggleSave}
                 />
               ) : (
                 <CatalogEmptyState loading={loading} configured={configured} />

@@ -1,4 +1,4 @@
-# Lenflix Deployment Plan
+# FreeStream Deployment Plan
 
 ## Environments
 

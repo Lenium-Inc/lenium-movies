@@ -1,6 +1,6 @@
-# Lenflix Production Documentation
+# FreeStream Production Documentation
 
-This directory defines the production target for Lenflix, a high-performance movie discovery and authorized streaming platform. The documents intentionally precede further production coding because provider, rights, identity, infrastructure, and compliance decisions materially change the implementation.
+This directory defines the production target for FreeStream, a high-performance movie discovery and authorized streaming platform. The documents intentionally precede further production coding because provider, rights, identity, infrastructure, and compliance decisions materially change the implementation.
 
 ## Documents
 

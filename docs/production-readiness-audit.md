@@ -1,4 +1,4 @@
-# Lenflix Production-Readiness Audit
+# FreeStream Production-Readiness Audit
 
 ## Audit scope
 
@@ -6,7 +6,7 @@ This audit inspected the actual source tree, not screenshots. Evidence was trace
 
 ## Executive verdict
 
-Lenflix is a polished **visual prototype**, not a production movie platform. The only substantive production-backed feature is the framework-provided Manus authentication/session plumbing. The catalogue, search, movie details, save/list behavior, playback, history, rights, administration, ingestion, SEO, and ad/tracker protection are either fixture-driven, local-only, or absent. The project must not be marketed as a real streaming service until the blocked provider, rights, database, and infrastructure decisions are implemented.
+FreeStream is a polished **visual prototype**, not a production movie platform. The only substantive production-backed feature is the framework-provided Manus authentication/session plumbing. The catalogue, search, movie details, save/list behavior, playback, history, rights, administration, ingestion, SEO, and ad/tracker protection are either fixture-driven, local-only, or absent. The project must not be marketed as a real streaming service until the blocked provider, rights, database, and infrastructure decisions are implemented.
 
 ## Classification summary
 
@@ -22,7 +22,7 @@ Lenflix is a polished **visual prototype**, not a production movie platform. The
 | History/continue watching | MOCKED | Static “Soft Focus”, “32 min left”, and “Episode 01” values are rendered; no history/progress tables or procedures exist. |
 | Playback | MOCKED | “Start watching” only calls `toast.success("Playback is ready for authorized titles")`; no player, source, rights check, session, signed access, captions, or telemetry. |
 | Rights management | UNIMPLEMENTED | No rights tables, policy service, procedures, UI, evidence workflow, or tests exist. |
-| Admin | UNIMPLEMENTED | Framework has `adminProcedure`, but no Lenflix admin routes, pages, entities, or mutations exist. |
+| Admin | UNIMPLEMENTED | Framework has `adminProcedure`, but no FreeStream admin routes, pages, entities, or mutations exist. |
 | Ingestion | UNIMPLEMENTED | No provider adapter, queue, background worker, idempotency, retries, rate limiting, or ingestion procedures exist. |
 | Search index | UNIMPLEMENTED | No search service, index state, indexing worker, reconciliation, or search router exists. |
 | SEO/server rendering | UNIMPLEMENTED | `App.tsx` is a client-side Wouter shell; no server-rendered movie pages, dynamic metadata, canonical tags, Open Graph, Twitter metadata, or JSON-LD. |
@@ -65,7 +65,7 @@ Lenflix is a polished **visual prototype**, not a production movie platform. The
 
 ### Rights, admin, and ingestion
 
-**Classification: UNIMPLEMENTED.** `server/routers.ts` contains only system and auth routes. `schema.ts` contains only `users`. Although framework `adminProcedure` exists, no Lenflix admin operation calls it. No provider credentials, legal evidence, rights state, submission workflow, ingestion job, retry queue, rate limiter, or search reconciliation exists.
+**Classification: UNIMPLEMENTED.** `server/routers.ts` contains only system and auth routes. `schema.ts` contains only `users`. Although framework `adminProcedure` exists, no FreeStream admin operation calls it. No provider credentials, legal evidence, rights state, submission workflow, ingestion job, retry queue, rate limiter, or search reconciliation exists.
 
 ### SEO
 

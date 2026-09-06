@@ -1,4 +1,4 @@
-# Lenflix SEO Architecture
+# FreeStream SEO Architecture
 
 ## Crawlable content
 

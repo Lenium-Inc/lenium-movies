@@ -85,7 +85,7 @@ function normalizeMovie(movie: TmdbMovie): MetadataMovie {
     year: Number.isFinite(year) ? year : null,
     runtime: movie.runtime
       ? `${Math.floor(movie.runtime / 60)}h ${movie.runtime % 60}m`
-      : "Runtime unavailable",
+      : "",
     rating: "Rating unavailable",
     score:
       typeof movie.vote_average === "number" && movie.vote_average > 0
@@ -130,16 +130,41 @@ async function tmdbFetch<T>(
 }
 
 /**
+ * Short-lived in-memory cache that avoids repeated TMDB round-trips while the
+ * catalog is browsed. The popular list and a given search phrase are
+ * effectively static at the minute scale, so a five-minute TTL removes almost
+ * all of the latency on repeat loads without showing stale data.
+ */
+const cache = new Map<string, { expiresAt: number; value: unknown }>();
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+async function loadCached<T>(
+  key: string,
+  loader: () => Promise<T>
+): Promise<T> {
+  const hit = cache.get(key);
+  if (hit && hit.expiresAt > Date.now()) return hit.value as T;
+  const value = await loader();
+  cache.set(key, { expiresAt: Date.now() + CACHE_TTL_MS, value });
+  return value;
+}
+
+/**
  * Fetch the currently popular movies from TMDB.
+ *
+ * Results are cached in memory for five minutes (keyed by limit), so repeat
+ * requests are served without hitting the TMDB API.
  *
  * @param limit - Maximum number of results to return (defaults to 20).
  * @returns An empty array if the provider returns no results.
  */
 export async function getPopularMovies(limit = 20) {
-  const payload = await tmdbFetch<TmdbResponse>("/movie/popular", {
-    page: "1",
+  return loadCached(`popular:${limit}`, async () => {
+    const payload = await tmdbFetch<TmdbResponse>("/movie/popular", {
+      page: "1",
+    });
+    return (payload.results ?? []).slice(0, limit).map(normalizeMovie);
   });
-  return (payload.results ?? []).slice(0, limit).map(normalizeMovie);
 }
 
 /**
@@ -156,99 +181,17 @@ export async function getPopularMovies(limit = 20) {
 export async function searchMovies(query: string, limit = 20) {
   const trimmed = query.trim();
   if (!trimmed) return [];
-  const payload = await tmdbFetch<TmdbResponse>("/search/movie", {
-    query: trimmed,
-    page: "1",
-    include_adult: "false",
+  return loadCached(`search:${trimmed}:${limit}`, async () => {
+    const payload = await tmdbFetch<TmdbResponse>("/search/movie", {
+      query: trimmed,
+      page: "1",
+      include_adult: "false",
+    });
+    return (payload.results ?? []).slice(0, limit).map(normalizeMovie);
   });
-  return (payload.results ?? []).slice(0, limit).map(normalizeMovie);
 }
 
 export async function getMovieById(id: number) {
   const movie = await tmdbFetch<TmdbMovie>(`/movie/${id}`);
   return normalizeMovie(movie);
-}
-
-export type VideoAssetCandidate = {
-  movieId: string;
-  provider: "youtube";
-  providerVideoId: string;
-  type: string;
-  name: string;
-  official: boolean;
-  language: string | null;
-  country: string | null;
-  thumbnailUrl: string;
-  publishedAt: Date | null;
-  duration: number | null;
-  embedUrl: string;
-  sourceUrl: string;
-};
-
-type TmdbVideo = {
-  key?: string;
-  name?: string;
-  site?: string;
-  type?: string;
-  official?: boolean;
-  iso_639_1?: string | null;
-  iso_3166_1?: string | null;
-  published_at?: string | null;
-};
-
-type TmdbVideosResponse = { results?: TmdbVideo[] };
-
-const videoPriority: Record<string, number> = {
-  Trailer: 0,
-  Teaser: 1,
-  Featurette: 2,
-  Clip: 3,
-};
-
-function normalizeVideo(
-  movieId: string,
-  video: TmdbVideo
-): VideoAssetCandidate | null {
-  if (!video.key || video.site !== "YouTube" || !video.name || !video.type)
-    return null;
-  return {
-    movieId,
-    provider: "youtube",
-    providerVideoId: video.key,
-    type: video.type,
-    name: video.name,
-    official: Boolean(video.official),
-    language: video.iso_639_1 ?? null,
-    country: video.iso_3166_1 ?? null,
-    thumbnailUrl: `https://i.ytimg.com/vi/${encodeURIComponent(video.key)}/hqdefault.jpg`,
-    publishedAt: video.published_at ? new Date(video.published_at) : null,
-    duration: null,
-    embedUrl: `https://www.youtube-nocookie.com/embed/${encodeURIComponent(video.key)}?rel=0&modestbranding=1`,
-    sourceUrl: `https://www.youtube.com/watch?v=${encodeURIComponent(video.key)}`,
-  };
-}
-
-export function selectOfficialVideo(videos: VideoAssetCandidate[]) {
-  return (
-    videos
-      .filter(video => video.official)
-      .sort(
-        (a, b) =>
-          (videoPriority[a.type] ?? 99) - (videoPriority[b.type] ?? 99) ||
-          (b.publishedAt?.getTime() ?? 0) - (a.publishedAt?.getTime() ?? 0)
-      )[0] ?? null
-  );
-}
-
-export async function getMovieVideos(movieId: number) {
-  const payload = await tmdbFetch<TmdbVideosResponse>(
-    `/movie/${movieId}/videos`
-  );
-  return (payload.results ?? [])
-    .map(video => normalizeVideo(String(movieId), video))
-    .filter((video): video is VideoAssetCandidate => Boolean(video));
-}
-
-export async function getOfficialMovieVideo(movieId: number) {
-  return selectOfficialVideo(await getMovieVideos(movieId));
 }

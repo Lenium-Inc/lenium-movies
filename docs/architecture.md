@@ -1,8 +1,8 @@
-# Lenflix Production Architecture
+# FreeStream Production Architecture
 
 ## Decision summary
 
-Lenflix should use a modular monolith first. The browser-facing application, API procedures, rights policy, ingestion workflows, and admin capabilities remain in one deployable codebase with strict module boundaries. Background jobs and media processing run as separately scalable workers only when their workload requires it.
+FreeStream should use a modular monolith first. The browser-facing application, API procedures, rights policy, ingestion workflows, and admin capabilities remain in one deployable codebase with strict module boundaries. Background jobs and media processing run as separately scalable workers only when their workload requires it.
 
 The current WebDev implementation is a visual prototype. It uses React, Tailwind, tRPC, Manus OAuth, and a MySQL-compatible database scaffold. Production work must replace fixture content with provider-backed records and must not expose playback controls until rights validation succeeds.
 

@@ -1,6 +1,6 @@
 # Trailer and video architecture
 
-Lenium does not host a separate trailer-video system. Trailers are represented as provider-neutral `VideoAsset` records and embedded through the provider’s supported player.
+FreeStream does not host a separate trailer-video system. Trailers are represented as provider-neutral `VideoAsset` records and embedded through the provider’s supported player.
 
 ## Lifecycle
 

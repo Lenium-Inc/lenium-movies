@@ -1,4 +1,4 @@
-# Lenflix Integrations
+# FreeStream Integrations
 
 | Integration | Purpose | Required configuration |
 |---|---|---|

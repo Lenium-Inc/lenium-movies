@@ -170,6 +170,12 @@ export default defineConfig({
   },
   server: {
     host: true,
+    proxy: {
+      "/api": {
+        target: "http://localhost:5000",
+        changeOrigin: true,
+      },
+    },
     // WebDev reverse-proxies the browser-facing app through port 3000 while
     // Vite itself listens internally on 5173. Without clientPort, @vite/client
     // advertises localhost:5173 and the browser cannot establish HMR.

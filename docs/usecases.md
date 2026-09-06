@@ -1,4 +1,4 @@
-# Lenflix Use Cases
+# FreeStream Use Cases
 
 | ID | Actor | Use case | Required policy |
 |---|---|---|---|

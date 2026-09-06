@@ -1,4 +1,4 @@
-# Lenflix Documentation Audit
+# FreeStream Documentation Audit
 
 ## Executive verdict
 

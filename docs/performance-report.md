@@ -1,8 +1,8 @@
-# Lenflix Performance Audit Report
+# FreeStream Performance Audit Report
 
 ## Scope and conclusion
 
-This audit evaluated the current Lenflix WebDev prototype, not a production streaming system. The homepage was measurable. Search, browse, movie detail, watchlist, player, database queries, search service latency, and cache-hit rate are not implemented in the current checkpoint, so those surfaces are reported as **not available**, not estimated. No feature work was added.
+This audit evaluated the current FreeStream WebDev prototype, not a production streaming system. The homepage was measurable. Search, browse, movie detail, watchlist, player, database queries, search service latency, and cache-hit rate are not implemented in the current checkpoint, so those surfaces are reported as **not available**, not estimated. No feature work was added.
 
 The highest-impact measured issue was image payload. The second was unnecessary client/runtime weight from an unused global tooltip provider. Both were addressed without adding arbitrary caching or changing product behavior.
 

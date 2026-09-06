@@ -1,8 +1,8 @@
-# Lenflix Ad and Unwanted-Resource Blocking
+# FreeStream Ad and Unwanted-Resource Blocking
 
 ## Purpose and limits
 
-The engine protects the Lenflix experience from unwanted advertising and tracking in first-party surfaces and authorized playback environments. It must not bypass DRM, access controls, subscriptions, provider security, or contractual restrictions.
+The engine protects the FreeStream experience from unwanted advertising and tracking in first-party surfaces and authorized playback environments. It must not bypass DRM, access controls, subscriptions, provider security, or contractual restrictions.
 
 ## Rule model
 
@@ -22,6 +22,6 @@ Default rules must be conservative. A blocked resource must not break login, med
 
 ## Audit remediation: enforcement boundary
 
-The policy engine runs only on Lenflix-controlled HTML/resource requests and on explicitly authorized provider integrations that permit this behavior. It is not a general browser extension, network circumvention layer, DRM interceptor, or subscription bypass. Provider SDKs and protected media paths are governed by contract and are allowlisted by default unless the provider expressly permits resource filtering.
+The policy engine runs only on FreeStream-controlled HTML/resource requests and on explicitly authorized provider integrations that permit this behavior. It is not a general browser extension, network circumvention layer, DRM interceptor, or subscription bypass. Provider SDKs and protected media paths are governed by contract and are allowlisted by default unless the provider expressly permits resource filtering.
 
 Every rule release runs a regression suite covering OAuth, CSS, JavaScript, analytics consent, manifests, segments, captions, audio tracks, accessibility controls, error reporting, and payment or partner flows where applicable. A blocked-resource metric includes rule ID, resource category, route class, and outcome, but not full URLs or user browsing history by default.

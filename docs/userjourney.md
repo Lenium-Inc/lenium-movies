@@ -1,4 +1,4 @@
-# Lenflix User Journeys
+# FreeStream User Journeys
 
 ## Viewer: discover to play
 

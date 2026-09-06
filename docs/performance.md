@@ -1,4 +1,4 @@
-# Lenflix Performance Plan
+# FreeStream Performance Plan
 
 ## Budgets
 

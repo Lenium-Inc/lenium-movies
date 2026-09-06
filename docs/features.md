@@ -1,4 +1,4 @@
-# Lenflix Feature Map
+# FreeStream Feature Map
 
 ## Public discovery
 

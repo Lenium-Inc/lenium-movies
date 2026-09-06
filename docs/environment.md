@@ -1,4 +1,4 @@
-# Lenflix Environment Configuration
+# FreeStream Environment Configuration
 
 ## Application configuration
 

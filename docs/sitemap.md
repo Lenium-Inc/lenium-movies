@@ -1,4 +1,4 @@
-# Lenflix Sitemap
+# FreeStream Sitemap
 
 ## Public, indexable routes
 

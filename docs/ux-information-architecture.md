@@ -1,10 +1,10 @@
-# LeNium Streaming Product UX Specification
+# FreeStream Streaming Product UX Specification
 
 ## Executive direction
 
-LeNium should operate as a **catalogue-first movie discovery application**. The interface should help a viewer move from opening the product to identifying a worthwhile title with minimal visual and cognitive friction.
+FreeStream should operate as a **catalogue-first movie discovery application**. The interface should help a viewer move from opening the product to identifying a worthwhile title with minimal visual and cognitive friction.
 
-The reference image is used only to study information architecture and interaction patterns. LeNium will not copy its branding, visual identity, content, artwork, layout details, or unauthorized streaming model. LeNium will retain its existing black, white, and refined grayscale brand palette.
+The reference image is used only to study information architecture and interaction patterns. FreeStream will not copy its branding, visual identity, content, artwork, layout details, or unauthorized streaming model. FreeStream will retain its existing black, white, and refined grayscale brand palette.
 
 The chosen direction is **Compact Catalog Shell**. It combines persistent application navigation, a collapsible desktop sidebar, a compact header, a reduced featured area, dense poster rows, and clear separation between metadata, trailers, watchlists, and authorized playback.
 
@@ -46,7 +46,7 @@ The sidebar includes no fabricated badges, watch counts, notification counts, or
 
 ### Compact header
 
-The header is **56–64 pixels high** and remains sticky during catalogue browsing. It contains the LeNium mark, the current section label when useful, a search control, and the account control.
+The header is **56–64 pixels high** and remains sticky during catalogue browsing. It contains the FreeStream mark, the current section label when useful, a search control, and the account control.
 
 Search is always reachable. On desktop and tablet, the search field is visible in the header. On mobile, a search icon opens a full-width search surface with focus placed in the input. The search surface supports movies, actors, directors, and genres only when corresponding real records or provider results exist.
 
@@ -61,7 +61,7 @@ Persistent shell
 ├── Compact featured strip
 ├── Fast category chips
 ├── Trending Now
-├── Popular on LeNium
+├── Popular on FreeStream
 ├── Recently Added
 ├── Top Rated
 ├── Hidden Gems
@@ -189,7 +189,7 @@ The mobile details surface may use a bottom sheet, but it must preserve an obvio
 
 ## Implementation guardrails
 
-The implementation must use the existing LeNium grayscale palette. It must not introduce copied branding or reference assets. It must not add unauthorized streaming sources, iframe players for unknown providers, fake counters, fake ratings, or hardcoded movie catalogue rows.
+The implementation must use the existing FreeStream grayscale palette. It must not introduce copied branding or reference assets. It must not add unauthorized streaming sources, iframe players for unknown providers, fake counters, fake ratings, or hardcoded movie catalogue rows.
 
 The first implementation should prioritize persistent navigation, real TMDB-backed movie rows, search, movie details, cached verified trailers, and truthful unavailable states. TV shows, personalization, notification systems, and richer collections should remain hidden until the corresponding real data and backend capabilities exist.
 

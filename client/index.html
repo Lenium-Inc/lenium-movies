@@ -4,12 +4,19 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
     <meta name="theme-color" content="#0b0b0e" />
-    <meta name="description" content="Lenflix — free, authorized streaming for stories worth watching." />
-    <title>Lenflix — Free streaming for stories worth watching</title>
+    <meta name="description" content="FreeStream — free, authorized streaming for stories worth watching." />
+    <title>FreeStream — Free streaming for stories worth watching</title>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
     <script defer src="%VITE_ANALYTICS_ENDPOINT%/umami" data-website-id="%VITE_ANALYTICS_WEBSITE_ID%"></script>
+    <!-- Cloudflare Web Analytics -->
+    <script
+      type="module"
+      src="https://static.cloudflareinsights.com/beacon.min.js"
+      data-cf-beacon='{"token": "855d0aafca0a404190b9efde05d9465e"}'
+    ></script>
+    <!-- End Cloudflare Web Analytics -->
   </body>
 </html>

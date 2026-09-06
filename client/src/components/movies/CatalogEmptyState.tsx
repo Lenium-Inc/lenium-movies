@@ -17,12 +17,12 @@ export function CatalogEmptyState({
     ? "Loading the catalogue…"
     : configured
       ? "No movies found"
-      : "Metadata provider not connected";
+      : "Movies aren't available right now";
   const description = loading
     ? "Fetching current movie metadata."
     : configured
       ? "Try another search or genre."
-      : "Configure the server-side TMDB_API_KEY to load real records.";
+      : "Please try again in a little while.";
 
   return (
     <section className="mt-5 rounded-xl border border-dashed border-white/15 bg-white/[0.03] px-6 py-16 text-center">

@@ -1,19 +1,18 @@
-import {
-  Clapperboard,
-  Compass,
-  Film,
-  Home as HomeIcon,
-  Library,
-  List,
-  Sparkles,
-} from "lucide-react";
+import { Film, Home as HomeIcon, List, UserRound } from "lucide-react";
 
 /**
  * Available catalog views. `home` maps to the landing page and every other
  * value maps to a filtered shelf view.
  */
 export type View =
-  "home" | "movies" | "new" | "popular" | "genres" | "collections" | "my-list";
+  | "home"
+  | "movies"
+  | "my-list"
+  | "profile"
+  | "new"
+  | "popular"
+  | "genres"
+  | "collections";
 
 export interface NavItem {
   id: View;
@@ -21,13 +20,10 @@ export interface NavItem {
   icon: typeof HomeIcon;
 }
 
-/** Primary browse destinations rendered in the sidebar and mobile nav. */
+/** The only primary destinations rendered in the sidebar. */
 export const navItems: NavItem[] = [
   { id: "home", label: "Home", icon: HomeIcon },
   { id: "movies", label: "Movies", icon: Film },
-  { id: "new", label: "New", icon: Clapperboard },
-  { id: "popular", label: "Popular", icon: Sparkles },
-  { id: "genres", label: "Genres", icon: Compass },
-  { id: "collections", label: "Collections", icon: Library },
   { id: "my-list", label: "My List", icon: List },
+  { id: "profile", label: "Profile", icon: UserRound },
 ];

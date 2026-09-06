@@ -1,4 +1,4 @@
-# Lenflix Agent Instructions
+# FreeStream Agent Instructions
 
 ## Non-negotiable rules
 

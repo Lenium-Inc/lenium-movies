@@ -1,4 +1,4 @@
-# Lenflix Data Model
+# FreeStream Data Model
 
 ## Core entities
 

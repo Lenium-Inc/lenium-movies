@@ -1,4 +1,4 @@
-# Lenflix Testing Strategy
+# FreeStream Testing Strategy
 
 ## Test layers
 
