@@ -39,3 +39,7 @@ The cross-functional production audit is documented in [audit.md](audit.md). It 
 ## Performance audit
 
 The latest measured performance audit, including before/after browser timings, image payloads, build sizes, scope limitations, and remaining production work, is documented in [performance-report.md](performance-report.md).
+
+## Production-readiness audit
+
+The evidence-based implementation audit, classification matrix, safe remediation record, and external blockers are documented in [production-readiness-audit.md](production-readiness-audit.md).
