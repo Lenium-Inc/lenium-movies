@@ -1,64 +1,178 @@
-import { useMemo, useState } from "react";
-import { useAuth } from "@/_core/hooks/useAuth";
-import { startLogin } from "@/const";
-import { trpc } from "@/lib/trpc";
-import { Bookmark, Check, ChevronLeft, ChevronRight, CirclePlay, Clapperboard, Compass, Film, Filter, Home as HomeIcon, Library, List, Menu, Play, Search, SlidersHorizontal, Sparkles, Star, Tv, UserRound, X } from "lucide-react";
-import { toast } from "sonner";
-import { getPlaybackUnavailableState } from "../../../shared/playback";
+import { useState } from "react";
+import { SlidersHorizontal } from "lucide-react";
+import { genreFilterOptions, useCatalog } from "@/hooks/useCatalog";
+import { BottomNav } from "@/components/layout/BottomNav";
+import { Header } from "@/components/layout/Header";
+import { Sidebar } from "@/components/layout/Sidebar";
+import { CatalogEmptyState, SearchStatusBar } from "@/components/movies/CatalogEmptyState";
+import { Details } from "@/components/movies/Details";
+import { DiscoverDialog, GenreChips } from "@/components/movies/DiscoverDialog";
+import { FeaturedHero } from "@/components/movies/FeaturedHero";
+import { MovieRow } from "@/components/movies/MovieRow";
+import type { Movie } from "@/components/movies/types";
 
-type Movie = { id: number; providerId: string; title: string; year: number | null; runtime: string; rating: string; score: number | null; genre: string[]; poster: string | null; backdrop: string | null; synopsis: string; director: string | null; source: "tmdb" };
-type View = "home" | "movies" | "new" | "popular" | "genres" | "collections" | "my-list";
-const genres = ["All", "Action", "Adventure", "Comedy", "Crime", "Drama", "Family", "Mystery", "Romance", "Sci-fi", "Thriller"];
-const moods = ["Something funny", "Something scary", "Something romantic", "Something intense", "Under 90 minutes", "Surprise me"];
-
-const navItems: Array<{ id: View; label: string; icon: typeof HomeIcon }> = [
-  { id: "home", label: "Home", icon: HomeIcon }, { id: "movies", label: "Movies", icon: Film }, { id: "new", label: "New", icon: Clapperboard }, { id: "popular", label: "Popular", icon: Sparkles }, { id: "genres", label: "Genres", icon: Compass }, { id: "collections", label: "Collections", icon: Library }, { id: "my-list", label: "My List", icon: List },
+const moodActions: Array<{ mood: string; genre?: string; search?: string }> = [
+  { mood: "Something funny", genre: "Comedy" },
+  { mood: "Something scary", genre: "Horror" },
+  { mood: "Something romantic", genre: "Romance" },
+  { mood: "Something intense", genre: "Crime" },
+  { mood: "Something epic", genre: "Action" },
+  { mood: "Something family-friendly", genre: "Family" },
 ];
 
-function Sidebar({ view, setView, open, onClose }: { view: View; setView: (view: View) => void; open: boolean; onClose: () => void }) {
-  return <><aside className={`fixed inset-y-0 left-0 z-50 flex w-[232px] flex-col border-r border-white/10 bg-[#101014] px-4 py-5 transition-transform duration-200 lg:translate-x-0 ${open ? "translate-x-0" : "-translate-x-full"}`}><div className="flex items-center justify-between px-2"><button onClick={() => { setView("home"); onClose(); }} className="flex items-center gap-2 text-left"><span className="grid h-8 w-8 place-items-center rounded-full bg-[#d7d7d3] text-[#0b0b0e]"><CirclePlay className="h-4 w-4 fill-current" /></span><span className="text-base font-bold tracking-tight">LeNium<span className="text-[#d7d7d3]">.</span></span></button><button onClick={onClose} className="rounded-md p-2 text-[#8e8e92] hover:bg-white/10 hover:text-white lg:hidden" aria-label="Close menu"><X className="h-4 w-4" /></button></div><p className="mb-2 mt-9 px-3 text-[10px] font-bold uppercase tracking-[0.18em] text-[#6f6f75]">Browse</p><nav className="space-y-1">{navItems.map(({ id, label, icon: Icon }) => <button key={id} onClick={() => { setView(id); onClose(); }} className={`flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm font-semibold transition ${view === id ? "bg-[#d7d7d3] text-[#0b0b0e]" : "text-[#a8a8aa] hover:bg-white/[0.06] hover:text-white"}`}><Icon className="h-4 w-4" />{label}</button>)}</nav><div className="mt-auto rounded-lg border border-white/10 bg-white/[0.03] p-3 text-xs leading-5 text-[#85858a]">Live metadata from TMDB.<br /><span className="text-[#c9c9c5]">Playback requires separate rights and source configuration.</span></div></aside>{open && <button onClick={onClose} className="fixed inset-0 z-40 bg-black/60 lg:hidden" aria-label="Close menu overlay" />}</>;
-}
-
-function MovieCard({ movie, saved, onSelect, onSave }: { movie: Movie; saved: boolean; onSelect: () => void; onSave: () => void }) {
-  return <article className="catalog-card group"><button onClick={onSelect} className="relative block w-full text-left"><div className="relative aspect-[2/3] overflow-hidden rounded-md bg-[#1a1a1f]">{movie.poster ? <img loading="lazy" decoding="async" src={movie.poster} alt={movie.title} className="h-full w-full object-cover transition duration-200 group-hover:scale-[1.04]" /> : <div className="grid h-full place-items-center p-3 text-center text-xs text-[#77777d]">Artwork unavailable</div>}<div className="absolute inset-0 bg-gradient-to-t from-black/75 via-transparent to-transparent" />{movie.score !== null && <span className="absolute bottom-2 left-2 flex items-center gap-1 text-[10px] font-bold text-white"><Star className="h-3 w-3 fill-[#d7d7d3] text-[#d7d7d3]" />{movie.score}</span>}<span className="absolute right-2 top-2 rounded-full bg-black/60 p-1.5 text-white opacity-0 transition group-hover:opacity-100"><Play className="h-3 w-3 fill-current" /></span></div><h3 className="mt-2 line-clamp-1 text-xs font-semibold text-[#eeeeeb]">{movie.title}</h3><p className="mt-1 text-[10px] text-[#89898e]">{movie.year ?? "Year unavailable"} · {movie.genre[0] ?? "Genre unavailable"}</p></button><button onClick={onSave} aria-label={saved ? `Remove ${movie.title}` : `Add ${movie.title} to My List`} className={`absolute right-2 top-2 rounded-full p-1.5 backdrop-blur transition ${saved ? "bg-[#d7d7d3] text-[#0b0b0e]" : "bg-black/55 text-white opacity-0 group-hover:opacity-100"}`}>{saved ? <Check className="h-3 w-3" /> : <Bookmark className="h-3 w-3" />}</button></article>;
-}
-
-function MovieRow({ title, items, savedIds, onSelect, onSave, eyebrow }: { title: string; items: Movie[]; savedIds: number[]; onSelect: (movie: Movie) => void; onSave: (movie: Movie) => void; eyebrow?: string }) {
-  if (!items.length) return null;
-  return <section className="mb-8"><div className="mb-3 flex items-end justify-between"><div>{eyebrow && <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em] text-[#8b8b90]">{eyebrow}</p>}<h2 className="text-lg font-bold tracking-tight text-[#f1f1ee] sm:text-xl">{title}</h2></div><button className="hidden items-center gap-1 text-xs font-semibold text-[#99999e] hover:text-white sm:flex">View all <ChevronRight className="h-3.5 w-3.5" /></button></div><div className="catalog-row">{items.map((movie) => <MovieCard key={`${title}-${movie.id}`} movie={movie} saved={savedIds.includes(movie.id)} onSelect={() => onSelect(movie)} onSave={() => onSave(movie)} />)}</div></section>;
-}
-
-function Details({ movie, onClose, onSave, saved }: { movie: Movie; onClose: () => void; onSave: () => void; saved: boolean }) {
-  const trailer = trpc.catalog.trailer.useQuery({ movieId: movie.id }, { retry: false });
-  return <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/75 p-0 backdrop-blur-sm sm:items-center sm:p-6" role="dialog" aria-modal="true" aria-label={`${movie.title} details`} onClick={onClose}><div onClick={(event) => event.stopPropagation()} className="max-h-[94vh] w-full max-w-2xl overflow-y-auto rounded-t-xl border border-white/10 bg-[#151519] shadow-2xl sm:rounded-xl"><div className="relative h-44 overflow-hidden sm:h-56">{movie.backdrop && <img src={movie.backdrop} alt="" className="h-full w-full object-cover" />}<div className="absolute inset-0 bg-gradient-to-t from-[#151519] to-transparent" /><button onClick={onClose} aria-label="Close details" className="absolute right-3 top-3 rounded-full bg-black/60 p-2 text-white"><X className="h-4 w-4" /></button><h2 className="absolute bottom-5 left-5 text-2xl font-bold sm:text-3xl">{movie.title}</h2></div><div className="p-5"><div className="flex flex-wrap items-center gap-2 text-xs text-[#aaa9ae]"><span>{movie.year ?? "Year unavailable"}</span><span>·</span><span>{movie.runtime}</span><span>·</span><span>{movie.genre.join(" · ")}</span>{movie.score !== null && <span className="flex items-center gap-1 text-[#d7d7d3]"><Star className="h-3.5 w-3.5 fill-current" />{movie.score}</span>}</div><p className="mt-4 text-sm leading-6 text-[#c5c5c1]">{movie.synopsis}</p>{trailer.isLoading ? <div className="mt-5 rounded-md border border-white/10 bg-white/[0.03] p-4 text-xs text-[#99999d]">Checking for an official trailer…</div> : trailer.data?.asset ? <div className="mt-5 overflow-hidden rounded-lg border border-white/10 bg-black"><div className="aspect-video"><iframe title={`${movie.title} official trailer`} src={trailer.data.asset.embedUrl} className="h-full w-full" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerPolicy="strict-origin-when-cross-origin" allowFullScreen /></div><div className="flex items-center justify-between gap-3 px-3 py-2 text-[11px] text-[#99999d]"><span className="line-clamp-1">{trailer.data.asset.name}</span><a href={trailer.data.asset.sourceUrl} target="_blank" rel="noreferrer" className="shrink-0 text-[#d7d7d3] hover:text-white">Open on YouTube</a></div></div> : <div className="mt-5 rounded-md border border-white/10 bg-white/[0.03] p-4 text-xs leading-5 text-[#99999d]">No verified official trailer is available. This does not affect streaming availability.</div>}<div className="mt-5 flex flex-wrap gap-2"><button onClick={() => toast.info(getPlaybackUnavailableState().message, { duration: 3000 })} className="flex items-center gap-2 rounded-md border border-white/15 px-4 py-2.5 text-xs font-semibold hover:bg-white/10"><Play className="h-3.5 w-3.5" /> Playback unavailable</button><button onClick={onSave} className="flex items-center gap-2 rounded-md bg-[#d7d7d3] px-4 py-2.5 text-xs font-bold text-[#0b0b0e] hover:bg-white">{saved ? <Check className="h-3.5 w-3.5" /> : <Bookmark className="h-3.5 w-3.5" />} {saved ? "In My List" : "Add to My List"}</button></div><div className="mt-5 rounded-md border border-white/10 bg-white/[0.03] p-3 text-xs leading-5 text-[#99999d]">TMDB supplies metadata and this verified trailer only. Streaming rights, captions, availability, and playback are separate capabilities.</div></div></div></div>;
-}
-
+/**
+ * Root catalog page: wires the sidebar, header, mobile nav, and all movie
+ * shelves around the shared `useCatalog` state owner. Any modal/selection
+ * state (menu, discovery, movie details) lives here, separate from the data
+ * layer in the hook.
+ */
 export default function Home() {
-  const { user, isAuthenticated, logout } = useAuth();
-  const [view, setView] = useState<View>("home");
-  const [search, setSearch] = useState("");
-  const [genre, setGenre] = useState("All");
+  const {
+    view,
+    search,
+    genre,
+    savedIds,
+    configured,
+    loading,
+    filtered,
+    rows,
+    setView,
+    setSection,
+    setSearch,
+    setGenre,
+    toggleSave,
+  } = useCatalog();
+
   const [menuOpen, setMenuOpen] = useState(false);
   const [discoverOpen, setDiscoverOpen] = useState(false);
   const [selected, setSelected] = useState<Movie | null>(null);
-  const [savedIds, setSavedIds] = useState<number[]>([]);
-  const status = trpc.catalog.status.useQuery();
-  const configured = Boolean(status.data?.configured);
-  const popular = trpc.catalog.popular.useQuery({ limit: 40 }, { enabled: configured, retry: false });
-  const results = trpc.catalog.search.useQuery({ query: search.trim(), limit: 40 }, { enabled: configured && search.trim().length > 0, retry: false });
-  const source = search.trim() ? (results.data ?? []) : (popular.data ?? []);
-  const filtered = useMemo(() => genre === "All" ? source : source.filter((movie) => movie.genre.includes(genre)), [genre, source]);
-  const loading = status.isLoading || (configured && popular.isLoading && !search.trim()) || (configured && results.isLoading && Boolean(search.trim()));
+
   const featured = filtered[0];
-  const toggleSave = (movie: Movie) => { setSavedIds((current) => current.includes(movie.id) ? current.filter((id) => id !== movie.id) : [...current, movie.id]); toast.info("My List persistence is not connected yet.", { duration: 2200 }); };
-  const setSection = (next: View) => { setView(next); setSearch(""); setGenre("All"); };
-  const rows = view === "new" ? [{ title: "Recently Added", items: [...filtered].sort((a, b) => (b.year ?? 0) - (a.year ?? 0)) }] : view === "popular" ? [{ title: "Popular on LeNium", items: [...filtered].sort((a, b) => (b.score ?? 0) - (a.score ?? 0)) }] : view === "my-list" ? [{ title: "My List", items: filtered.filter((movie) => savedIds.includes(movie.id)) }] : [{ title: "Trending Now", items: filtered }, { title: "Popular on LeNium", items: [...filtered].sort((a, b) => (b.score ?? 0) - (a.score ?? 0)) }, { title: "Recently Added", items: [...filtered].sort((a, b) => (b.year ?? 0) - (a.year ?? 0)) }, { title: "Top Rated", items: [...filtered].sort((a, b) => (b.score ?? 0) - (a.score ?? 0)) }, { title: "Hidden Gems", items: filtered.filter((movie) => (movie.score ?? 0) < 8) }, { title: "Classic Cinema", items: filtered.filter((movie) => (movie.year ?? 0) < 2023) }, { title: "Independent Films", items: filtered.filter((movie) => movie.genre.includes("Indie")) }, { title: "Documentaries", items: filtered.filter((movie) => movie.genre.includes("Documentary")) }];
+  const isClientSearch = search.trim().length > 0;
 
-  return <div className="min-h-screen bg-[#0b0b0e] text-[#f1f1ee]"><Sidebar view={view} setView={setSection} open={menuOpen} onClose={() => setMenuOpen(false)} /><div className="lg:pl-[232px]"><div className="border-b border-white/10 bg-[#d7d7d3] px-4 py-1.5 text-center text-[9px] font-bold uppercase tracking-[0.16em] text-[#0b0b0e]">Live metadata mode · TMDB source · Playback and rights are separate capabilities</div><header className="sticky top-0 z-30 border-b border-white/10 bg-[#0b0b0e]/95 backdrop-blur-xl"><div className="mx-auto flex h-16 max-w-[1480px] items-center gap-3 px-4 sm:px-6 lg:px-8"><button onClick={() => setMenuOpen(true)} className="grid h-9 w-9 place-items-center rounded-md border border-white/10 text-[#aaa9a5] hover:text-white lg:hidden" aria-label="Open menu"><Menu className="h-4 w-4" /></button><div className="flex min-w-0 items-center gap-2 lg:hidden"><span className="grid h-8 w-8 place-items-center rounded-full bg-[#d7d7d3] text-[#0b0b0e]"><CirclePlay className="h-4 w-4 fill-current" /></span><span className="text-base font-bold">LeNium<span className="text-[#d7d7d3]">.</span></span></div><div className="hidden text-sm font-semibold text-[#d4d4d0] lg:block">{view === "home" ? "Home" : navItems.find((item) => item.id === view)?.label}</div><div className="ml-auto flex items-center gap-2"><div className="flex items-center gap-2 rounded-md border border-white/10 bg-white/[0.05] px-3 py-2 text-[#aaa9a5] focus-within:border-white/30"><Search className="h-3.5 w-3.5" /><input value={search} onChange={(event) => { setSearch(event.target.value); setView("movies"); }} placeholder="Search movies, people, genres" className="w-[min(42vw,280px)] bg-transparent text-xs text-white outline-none placeholder:text-[#77777d]" /></div>{isAuthenticated ? <button onClick={() => logout()} className="hidden items-center gap-2 rounded-md border border-white/10 px-3 py-2 text-xs font-semibold text-[#ddd] hover:bg-white/10 sm:flex"><UserRound className="h-3.5 w-3.5" />{user?.name?.split(" ")[0] ?? "Account"}</button> : <button onClick={() => startLogin()} className="rounded-md bg-[#d7d7d3] px-3 py-2 text-xs font-bold text-[#0b0b0e] hover:bg-white">Sign in</button>}</div></div></header><main className="mx-auto max-w-[1480px] px-4 pb-20 sm:px-6 lg:px-8">{view === "collections" ? <section className="py-12"><h1 className="text-2xl font-bold">Collections</h1><p className="mt-2 max-w-xl text-sm leading-6 text-[#99999d]">Curated collections will appear when real collection records are imported and approved. No placeholder collections are shown.</p></section> : view === "genres" ? <section className="py-8"><div className="mb-6"><p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#8b8b90]">Browse the real catalogue</p><h1 className="mt-1 text-2xl font-bold">Genres</h1></div><div className="flex flex-wrap gap-2">{genres.slice(1).map((item) => <button key={item} onClick={() => { setGenre(item); setView("movies"); }} className="rounded-md border border-white/10 px-4 py-3 text-sm font-semibold text-[#d0d0cc] hover:border-white/30 hover:bg-white/[0.05]">{item}</button>)}</div></section> : <>{view === "home" && featured ? <section className="relative mt-5 h-[270px] overflow-hidden rounded-xl border border-white/10 bg-[#151519] sm:h-[315px] lg:h-[350px]">{featured.backdrop && <img loading="eager" fetchPriority="high" src={featured.backdrop} alt="" className="absolute inset-0 h-full w-full object-cover opacity-50" />}<div className="absolute inset-0 bg-gradient-to-r from-[#0b0b0e] via-[#0b0b0e]/80 to-transparent" /><div className="absolute inset-0 bg-gradient-to-t from-[#0b0b0e]/80 via-transparent to-transparent" /><div className="relative flex h-full max-w-xl flex-col justify-end p-5 pb-6 sm:p-8"><span className="mb-2 text-[10px] font-bold uppercase tracking-[0.18em] text-[#d7d7d3]">Featured from TMDB</span><h1 className="text-2xl font-bold tracking-tight sm:text-3xl">{featured.title}</h1><div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[#d0d0cc]"><span>{featured.year ?? "Year unavailable"}</span><span>·</span><span>{featured.runtime}</span><span>·</span><span>{featured.genre.join(" · ")}</span></div><p className="mt-2 line-clamp-2 max-w-lg text-sm leading-5 text-[#c0c0bd]">{featured.synopsis}</p><div className="mt-4 flex gap-2"><button onClick={() => setSelected(featured)} className="flex items-center gap-2 rounded-md bg-[#d7d7d3] px-4 py-2.5 text-xs font-bold text-[#0b0b0e] hover:bg-white"><InfoIcon /> Details</button><button onClick={() => toggleSave(featured)} className="flex items-center gap-2 rounded-md border border-white/20 px-4 py-2.5 text-xs font-semibold hover:bg-white/10"><Bookmark className="h-3.5 w-3.5" /> My List</button></div></div></section> : <section className="mt-5 rounded-xl border border-dashed border-white/15 bg-white/[0.03] px-6 py-16 text-center"><Search className="mx-auto mb-3 h-8 w-8 text-[#77777d]" /><h1 className="text-xl font-bold">{loading ? "Loading the catalogue…" : configured ? "No movies found" : "Metadata provider not connected"}</h1><p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-[#99999d]">{loading ? "Fetching current movie metadata." : configured ? "Try another search or genre." : "Configure the server-side TMDB_API_KEY to load real records."}</p></section>}<section className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div className="flex items-center gap-2 overflow-x-auto no-scrollbar">{genres.map((item) => <button key={item} onClick={() => { setGenre(item); setView("movies"); }} className={`whitespace-nowrap rounded-md px-3 py-2 text-xs font-semibold ${genre === item ? "bg-[#d7d7d3] text-[#0b0b0e]" : "border border-white/10 text-[#aaa9a5] hover:border-white/25 hover:text-white"}`}>{item}</button>)}</div><button onClick={() => setDiscoverOpen(true)} className="flex shrink-0 items-center justify-center gap-2 rounded-md border border-white/10 px-3 py-2 text-xs font-semibold text-[#c4c4c0] hover:bg-white/10"><SlidersHorizontal className="h-3.5 w-3.5" /> Discover</button></section>{search && <div className="mt-5 flex items-center justify-between rounded-md border border-white/10 bg-white/[0.03] px-4 py-3 text-xs text-[#c4c4c0]"><span>Live TMDB results for <strong className="text-white">{search}</strong></span><button onClick={() => setSearch("")} className="text-[#d7d7d3]">Clear</button></div>}<div className="mt-8">{rows.map((row, index) => <MovieRow key={row.title} title={row.title} items={row.items} savedIds={savedIds} onSelect={setSelected} onSave={toggleSave} eyebrow={index === 0 && view === "home" ? "Find something worth watching" : undefined} />)}</div>{!loading && configured && !filtered.length && <div className="py-16 text-center text-sm text-[#8d8d91]">No real catalogue records match this view.</div>}</>}</main><nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-4 border-t border-white/10 bg-[#101014]/95 px-2 py-2 backdrop-blur-xl lg:hidden"><BottomNavButton label="Home" icon={HomeIcon} active={view === "home"} onClick={() => setSection("home")} /><BottomNavButton label="Movies" icon={Film} active={view === "movies"} onClick={() => setSection("movies")} /><BottomNavButton label="Search" icon={Search} active={Boolean(search)} onClick={() => document.querySelector<HTMLInputElement>("header input")?.focus()} /><BottomNavButton label="My List" icon={List} active={view === "my-list"} onClick={() => setSection("my-list")} /></nav></div>{discoverOpen && <div className="fixed inset-0 z-[55] bg-black/70 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" onClick={() => setDiscoverOpen(false)}><div onClick={(event) => event.stopPropagation()} className="mx-auto mt-20 max-w-xl rounded-xl border border-white/10 bg-[#151519] p-5"><div className="flex items-center justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#d7d7d3]">Discovery</p><h2 className="mt-1 text-xl font-bold">What are you in the mood for?</h2></div><button onClick={() => setDiscoverOpen(false)} aria-label="Close discovery" className="rounded-md p-2 text-[#aaa9a5] hover:bg-white/10"><X className="h-4 w-4" /></button></div><div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-3">{moods.map((mood) => <button key={mood} onClick={() => { if (mood === "Something romantic") setGenre("Romance"); else if (mood === "Something intense") setGenre("Crime"); else if (mood === "Under 90 minutes") setSearch("90"); setView("movies"); setDiscoverOpen(false); }} className="rounded-lg border border-white/10 bg-white/[0.03] p-3 text-left text-xs font-semibold text-[#ddd] hover:border-white/25 hover:bg-white/10"><Sparkles className="mb-3 h-4 w-4 text-[#d7d7d3]" />{mood}</button>)}</div></div></div>}{selected && <Details movie={selected} onClose={() => setSelected(null)} onSave={() => toggleSave(selected)} saved={savedIds.includes(selected.id)} />}</div>;
+  /** Map a DiscoverDialog mood to an actual genre filter and return to movies. */
+  const applyMood = (action: (typeof moodActions)[number]) => {
+    if (action.genre) setGenre(action.genre);
+    if (action.search !== undefined) setSearch(action.search);
+    setView("movies");
+    setDiscoverOpen(false);
+  };
+
+  return (
+    <div className="min-h-screen bg-[#0b0b0e] text-[#f1f1ee]">
+      <Sidebar
+        view={view}
+        onNavigate={setSection}
+        open={menuOpen}
+        onClose={() => setMenuOpen(false)}
+      />
+      <div className="lg:pl-[232px]">
+        <div className="border-b border-white/10 bg-[#d7d7d3] px-4 py-1.5 text-center text-[9px] font-bold uppercase tracking-[0.16em] text-[#0b0b0e]">
+          Live metadata mode · TMDB source · Playback and rights are separate capabilities
+        </div>
+        <Header
+          view={view}
+          search={search}
+          onSearchChange={(value) => {
+            setSearch(value);
+            setView("movies");
+          }}
+          onOpenMenu={() => setMenuOpen(true)}
+        />
+        <main className="mx-auto max-w-[1480px] px-4 pb-20 sm:px-6 lg:px-8">
+          {view === "collections" ? (
+            <section className="py-12">
+              <h1 className="text-2xl font-bold">Collections</h1>
+              <p className="mt-2 max-w-xl text-sm leading-6 text-[#99999d]">
+                Curated collections will appear when real collection records are imported and
+                approved. No placeholder collections are shown.
+              </p>
+            </section>
+          ) : view === "genres" ? (
+            <section className="py-8">
+              <div className="mb-6">
+                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#8b8b90]">
+                  Browse the real catalogue
+                </p>
+                <h1 className="mt-1 text-2xl font-bold">Genres</h1>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {genreFilterOptions
+                  .filter((item) => item !== "All")
+                  .map((item) => (
+                    <button
+                      key={item}
+                      onClick={() => {
+                        setGenre(item);
+                        setView("movies");
+                      }}
+                      className="rounded-md border border-white/10 px-4 py-3 text-sm font-semibold text-[#d0d0cc] hover:border-white/30 hover:bg-white/[0.05]"
+                    >
+                      {item}
+                    </button>
+                  ))}
+              </div>
+            </section>
+          ) : (
+            <>
+              {view === "home" && featured ? (
+                <FeaturedHero
+                  movie={featured}
+                  onSelect={() => setSelected(featured)}
+                  onSave={() => toggleSave(featured)}
+                />
+              ) : (
+                <CatalogEmptyState loading={loading} configured={configured} />
+              )}
+              {isClientSearch && <SearchStatusBar query={search} onClear={() => setSearch("")} />}
+              <section className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <GenreChips
+                  genres={genreFilterOptions}
+                  active={genre}
+                  onSelect={(item) => {
+                    setGenre(item);
+                    setView("movies");
+                  }}
+                />
+                <button
+                  onClick={() => setDiscoverOpen(true)}
+                  className="flex shrink-0 items-center justify-center gap-2 rounded-md border border-white/10 px-3 py-2 text-xs font-semibold text-[#c4c4c0] hover:bg-white/10"
+                >
+                  <SlidersHorizontal className="h-3.5 w-3.5" /> Discover
+                </button>
+              </section>
+              <DiscoverDialog
+                open={discoverOpen}
+                actions={moodActions}
+                onClose={() => setDiscoverOpen(false)}
+                onApply={applyMood}
+              />
+              <div className="mt-8">
+                {rows.map((row, index) => (
+                  <MovieRow
+                    key={row.title}
+                    title={row.title}
+                    items={row.items}
+                    savedIds={savedIds}
+                    onSelect={setSelected}
+                    onSave={toggleSave}
+                    eyebrow={index === 0 && view === "home" ? "Find something worth watching" : undefined}
+                  />
+                ))}
+              </div>
+            </>
+          )}
+        </main>
+        <BottomNav view={view} searching={isClientSearch} onNavigate={setSection} />
+      </div>
+      {selected && (
+        <Details
+          movie={selected}
+          onClose={() => setSelected(null)}
+          onSave={() => toggleSave(selected)}
+          saved={savedIds.includes(selected.id)}
+        />
+      )}
+    </div>
+  );
 }
-
-function BottomNavButton({ label, icon: Icon, active, onClick }: { label: string; icon: typeof HomeIcon; active: boolean; onClick: () => void }) {
-  return <button onClick={onClick} className={`flex flex-col items-center gap-1 py-1 text-[10px] font-semibold ${active ? "text-[#f1f1ee]" : "text-[#77777d]"}`}><Icon className="h-4 w-4" />{label}</button>;
-}
-
-function InfoIcon() { return <span className="grid h-3.5 w-3.5 place-items-center rounded-full border border-current text-[9px]">i</span>; }

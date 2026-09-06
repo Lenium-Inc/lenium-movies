@@ -75,24 +75,57 @@ function normalizeMovie(movie: TmdbMovie): MetadataMovie {
   };
 }
 
-async function tmdbFetch<T>(path: string, params: Record<string, string> = {}): Promise<T> {
-  if (!ENV.tmdbApiKey) throw new MetadataProviderUnavailableError();
+/**
+ * Build a URL for the TMDB REST API with the API key and defaults applied.
+ *
+ * All query params are appended through `URLSearchParams`, which percent-encodes
+ * values so search terms with spaces or special characters arrive intact.
+ */
+function buildTmdbUrl(path: string, params: Record<string, string>): URL {
   const url = new URL(`${TMDB_BASE_URL}${path}`);
   url.searchParams.set("api_key", ENV.tmdbApiKey);
   url.searchParams.set("language", "en-US");
   Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
-  const response = await fetch(url, { headers: { accept: "application/json" } });
+  return url;
+}
+
+async function tmdbFetch<T>(path: string, params: Record<string, string> = {}): Promise<T> {
+  if (!ENV.tmdbApiKey) throw new MetadataProviderUnavailableError();
+  const response = await fetch(buildTmdbUrl(path, params), { headers: { accept: "application/json" } });
   if (!response.ok) throw new Error(`TMDB request failed with status ${response.status}`);
   return response.json() as Promise<T>;
 }
 
+/**
+ * Fetch the currently popular movies from TMDB.
+ *
+ * @param limit - Maximum number of results to return (defaults to 20).
+ * @returns An empty array if the provider returns no results.
+ */
 export async function getPopularMovies(limit = 20) {
   const payload = await tmdbFetch<TmdbResponse>("/movie/popular", { page: "1" });
   return (payload.results ?? []).slice(0, limit).map(normalizeMovie);
 }
 
+/**
+ * Search TMDB for movies matching `query` and normalize the results.
+ *
+ * The search hits the dedicated `/search/movie` discovery-adjacent endpoint and
+ * passes the raw query to `URLSearchParams` for correct encoding. An empty or
+ * whitespace-only query returns an empty list rather than hitting the API.
+ *
+ * @param query - Raw user search string. Trimmed and URL-encoded internally.
+ * @param limit - Maximum number of results to return (defaults to 20).
+ * @returns Normalized movies, or an empty array when there are no matches.
+ */
 export async function searchMovies(query: string, limit = 20) {
-  const payload = await tmdbFetch<TmdbResponse>("/search/movie", { query, page: "1", include_adult: "false" });
+  const trimmed = query.trim();
+  if (!trimmed) return [];
+  const payload = await tmdbFetch<TmdbResponse>("/search/movie", {
+    query: trimmed,
+    page: "1",
+    include_adult: "false",
+  });
   return (payload.results ?? []).slice(0, limit).map(normalizeMovie);
 }
 
