@@ -26,7 +26,9 @@ export function FeaturedHero({ movie, onSelect, onSave }: FeaturedHeroProps) {
         <span className="mb-2 text-[10px] font-bold uppercase tracking-[0.18em] text-[#d7d7d3]">
           Featured from TMDB
         </span>
-        <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">{movie.title}</h1>
+        <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">
+          {movie.title}
+        </h1>
         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[#d0d0cc]">
           <span>{movie.year ?? "Year unavailable"}</span>
           <span>·</span>

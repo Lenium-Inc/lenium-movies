@@ -4,14 +4,17 @@ import { genreFilterOptions, useCatalog } from "@/hooks/useCatalog";
 import { BottomNav } from "@/components/layout/BottomNav";
 import { Header } from "@/components/layout/Header";
 import { Sidebar } from "@/components/layout/Sidebar";
-import { CatalogEmptyState, SearchStatusBar } from "@/components/movies/CatalogEmptyState";
+import {
+  CatalogEmptyState,
+  SearchStatusBar,
+} from "@/components/movies/CatalogEmptyState";
 import { Details } from "@/components/movies/Details";
 import { DiscoverDialog, GenreChips } from "@/components/movies/DiscoverDialog";
 import { FeaturedHero } from "@/components/movies/FeaturedHero";
 import { MovieRow } from "@/components/movies/MovieRow";
 import type { Movie } from "@/components/movies/types";
 
-const moodActions: Array<{ mood: string; genre?: string; search?: string }> = [
+const moodActions: Array<{ mood: string; genre: string }> = [
   { mood: "Something funny", genre: "Comedy" },
   { mood: "Something scary", genre: "Horror" },
   { mood: "Something romantic", genre: "Romance" },
@@ -52,8 +55,7 @@ export default function Home() {
 
   /** Map a DiscoverDialog mood to an actual genre filter and return to movies. */
   const applyMood = (action: (typeof moodActions)[number]) => {
-    if (action.genre) setGenre(action.genre);
-    if (action.search !== undefined) setSearch(action.search);
+    setGenre(action.genre);
     setView("movies");
     setDiscoverOpen(false);
   };
@@ -68,12 +70,13 @@ export default function Home() {
       />
       <div className="lg:pl-[232px]">
         <div className="border-b border-white/10 bg-[#d7d7d3] px-4 py-1.5 text-center text-[9px] font-bold uppercase tracking-[0.16em] text-[#0b0b0e]">
-          Live metadata mode · TMDB source · Playback and rights are separate capabilities
+          Live metadata mode · TMDB source · Playback and rights are separate
+          capabilities
         </div>
         <Header
           view={view}
           search={search}
-          onSearchChange={(value) => {
+          onSearchChange={value => {
             setSearch(value);
             setView("movies");
           }}
@@ -84,8 +87,8 @@ export default function Home() {
             <section className="py-12">
               <h1 className="text-2xl font-bold">Collections</h1>
               <p className="mt-2 max-w-xl text-sm leading-6 text-[#99999d]">
-                Curated collections will appear when real collection records are imported and
-                approved. No placeholder collections are shown.
+                Curated collections will appear when real collection records are
+                imported and approved. No placeholder collections are shown.
               </p>
             </section>
           ) : view === "genres" ? (
@@ -98,8 +101,8 @@ export default function Home() {
               </div>
               <div className="flex flex-wrap gap-2">
                 {genreFilterOptions
-                  .filter((item) => item !== "All")
-                  .map((item) => (
+                  .filter(item => item !== "All")
+                  .map(item => (
                     <button
                       key={item}
                       onClick={() => {
@@ -124,12 +127,14 @@ export default function Home() {
               ) : (
                 <CatalogEmptyState loading={loading} configured={configured} />
               )}
-              {isClientSearch && <SearchStatusBar query={search} onClear={() => setSearch("")} />}
+              {isClientSearch && (
+                <SearchStatusBar query={search} onClear={() => setSearch("")} />
+              )}
               <section className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <GenreChips
                   genres={genreFilterOptions}
                   active={genre}
-                  onSelect={(item) => {
+                  onSelect={item => {
                     setGenre(item);
                     setView("movies");
                   }}
@@ -156,14 +161,22 @@ export default function Home() {
                     savedIds={savedIds}
                     onSelect={setSelected}
                     onSave={toggleSave}
-                    eyebrow={index === 0 && view === "home" ? "Find something worth watching" : undefined}
+                    eyebrow={
+                      index === 0 && view === "home"
+                        ? "Find something worth watching"
+                        : undefined
+                    }
                   />
                 ))}
               </div>
             </>
           )}
         </main>
-        <BottomNav view={view} searching={isClientSearch} onNavigate={setSection} />
+        <BottomNav
+          view={view}
+          searching={isClientSearch}
+          onNavigate={setSection}
+        />
       </div>
       {selected && (
         <Details

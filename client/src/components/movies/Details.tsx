@@ -17,7 +17,10 @@ interface DetailsProps {
  * playback / save actions.
  */
 export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
-  const trailer = trpc.catalog.trailer.useQuery({ movieId: movie.id }, { retry: false });
+  const trailer = trpc.catalog.trailer.useQuery(
+    { movieId: movie.id },
+    { retry: false }
+  );
   return (
     <div
       className="fixed inset-0 z-[60] flex items-end justify-center bg-black/75 p-0 backdrop-blur-sm sm:items-center sm:p-6"
@@ -27,11 +30,17 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
       onClick={onClose}
     >
       <div
-        onClick={(event) => event.stopPropagation()}
+        onClick={event => event.stopPropagation()}
         className="max-h-[94vh] w-full max-w-2xl overflow-y-auto rounded-t-xl border border-white/10 bg-[#151519] shadow-2xl sm:rounded-xl"
       >
         <div className="relative h-44 overflow-hidden sm:h-56">
-          {movie.backdrop && <img src={movie.backdrop} alt="" className="h-full w-full object-cover" />}
+          {movie.backdrop && (
+            <img
+              src={movie.backdrop}
+              alt=""
+              className="h-full w-full object-cover"
+            />
+          )}
           <div className="absolute inset-0 bg-gradient-to-t from-[#151519] to-transparent" />
           <button
             onClick={onClose}
@@ -40,7 +49,9 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
           >
             <X className="h-4 w-4" />
           </button>
-          <h2 className="absolute bottom-5 left-5 text-2xl font-bold sm:text-3xl">{movie.title}</h2>
+          <h2 className="absolute bottom-5 left-5 text-2xl font-bold sm:text-3xl">
+            {movie.title}
+          </h2>
         </div>
         <div className="p-5">
           <div className="flex flex-wrap items-center gap-2 text-xs text-[#aaa9ae]">
@@ -56,7 +67,9 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
               </span>
             )}
           </div>
-          <p className="mt-4 text-sm leading-6 text-[#c5c5c1]">{movie.synopsis}</p>
+          <p className="mt-4 text-sm leading-6 text-[#c5c5c1]">
+            {movie.synopsis}
+          </p>
           {trailer.isLoading ? (
             <div className="mt-5 rounded-md border border-white/10 bg-white/[0.03] p-4 text-xs text-[#99999d]">
               Checking for an official trailer…
@@ -87,12 +100,17 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
             </div>
           ) : (
             <div className="mt-5 rounded-md border border-white/10 bg-white/[0.03] p-4 text-xs leading-5 text-[#99999d]">
-              No verified official trailer is available. This does not affect streaming availability.
+              No verified official trailer is available. This does not affect
+              streaming availability.
             </div>
           )}
           <div className="mt-5 flex flex-wrap gap-2">
             <button
-              onClick={() => toast.info(getPlaybackUnavailableState().message, { duration: 3000 })}
+              onClick={() =>
+                toast.info(getPlaybackUnavailableState().message, {
+                  duration: 3000,
+                })
+              }
               className="flex items-center gap-2 rounded-md border border-white/15 px-4 py-2.5 text-xs font-semibold hover:bg-white/10"
             >
               <Play className="h-3.5 w-3.5" /> Playback unavailable
@@ -101,13 +119,18 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
               onClick={onSave}
               className="flex items-center gap-2 rounded-md bg-[#d7d7d3] px-4 py-2.5 text-xs font-bold text-[#0b0b0e] hover:bg-white"
             >
-              {saved ? <Check className="h-3.5 w-3.5" /> : <Bookmark className="h-3.5 w-3.5" />}{" "}
+              {saved ? (
+                <Check className="h-3.5 w-3.5" />
+              ) : (
+                <Bookmark className="h-3.5 w-3.5" />
+              )}{" "}
               {saved ? "In My List" : "Add to My List"}
             </button>
           </div>
           <div className="mt-5 rounded-md border border-white/10 bg-white/[0.03] p-3 text-xs leading-5 text-[#99999d]">
-            TMDB supplies metadata and this verified trailer only. Streaming rights, captions,
-            availability, and playback are separate capabilities.
+            TMDB supplies metadata and this verified trailer only. Streaming
+            rights, captions, availability, and playback are separate
+            capabilities.
           </div>
         </div>
       </div>

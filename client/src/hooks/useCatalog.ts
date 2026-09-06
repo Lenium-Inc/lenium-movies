@@ -56,10 +56,13 @@ export function useCatalog(): UseCatalog {
   const status = trpc.catalog.status.useQuery();
   const configured = Boolean(status.data?.configured);
 
-  const popular = trpc.catalog.popular.useQuery({ limit: 40 }, { enabled: configured, retry: false });
+  const popular = trpc.catalog.popular.useQuery(
+    { limit: 40 },
+    { enabled: configured, retry: false }
+  );
   const results = trpc.catalog.search.useQuery(
     { query: search.trim(), limit: 40 },
-    { enabled: configured && search.trim().length > 0, retry: false },
+    { enabled: configured && search.trim().length > 0, retry: false }
   );
 
   const source = search.trim() ? (results.data ?? []) : (popular.data ?? []);
@@ -69,13 +72,16 @@ export function useCatalog(): UseCatalog {
       status.isLoading ||
       (configured && popular.isLoading && !search.trim()) ||
       (configured && results.isLoading && Boolean(search.trim())),
-    [status.isLoading, configured, popular.isLoading, results.isLoading, search],
+    [status.isLoading, configured, popular.isLoading, results.isLoading, search]
   );
 
   /** Movies from `source` narrowed down by the selected genre chip. */
   const filtered = useMemo(
-    () => (genre === "All" ? source : source.filter((movie) => movie.genre.includes(genre))),
-    [genre, source],
+    () =>
+      genre === "All"
+        ? source
+        : source.filter(movie => movie.genre.includes(genre)),
+    [genre, source]
   );
 
   /**
@@ -84,8 +90,12 @@ export function useCatalog(): UseCatalog {
    * temporary in-memory saves until persistence is connected.
    */
   const rows: CatalogRows[] = useMemo(() => {
-    const byYearDesc = [...filtered].sort((a, b) => (b.year ?? 0) - (a.year ?? 0));
-    const byScoreDesc = [...filtered].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+    const byYearDesc = [...filtered].sort(
+      (a, b) => (b.year ?? 0) - (a.year ?? 0)
+    );
+    const byScoreDesc = [...filtered].sort(
+      (a, b) => (b.score ?? 0) - (a.score ?? 0)
+    );
 
     switch (view) {
       case "new":
@@ -93,7 +103,12 @@ export function useCatalog(): UseCatalog {
       case "popular":
         return [{ title: "Popular on LeNium", items: byScoreDesc }];
       case "my-list":
-        return [{ title: "My List", items: filtered.filter((movie) => savedIds.includes(movie.id)) }];
+        return [
+          {
+            title: "My List",
+            items: filtered.filter(movie => savedIds.includes(movie.id)),
+          },
+        ];
       default:
         return [
           { title: "Trending Now", items: filtered },
@@ -113,10 +128,10 @@ export function useCatalog(): UseCatalog {
 
   /** Toggle a movie in the in-memory "My List" selection. */
   const toggleSave = useCallback((movie: Movie) => {
-    setSavedIds((current) =>
+    setSavedIds(current =>
       current.includes(movie.id)
-        ? current.filter((id) => id !== movie.id)
-        : [...current, movie.id],
+        ? current.filter(id => id !== movie.id)
+        : [...current, movie.id]
     );
     toast.info("My List persistence is not connected yet.", { duration: 2200 });
   }, []);

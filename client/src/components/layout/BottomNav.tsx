@@ -9,7 +9,12 @@ interface BottomNavButtonProps {
   onClick: () => void;
 }
 
-function BottomNavButton({ label, icon: Icon, active, onClick }: BottomNavButtonProps) {
+function BottomNavButton({
+  label,
+  icon: Icon,
+  active,
+  onClick,
+}: BottomNavButtonProps) {
   return (
     <button
       onClick={onClick}
@@ -37,7 +42,9 @@ export function BottomNav({ view, searching, onNavigate }: BottomNavProps) {
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   const focusSearch = () => {
-    const input = searchInputRef.current ?? document.querySelector<HTMLInputElement>("header input");
+    const input =
+      searchInputRef.current ??
+      document.querySelector<HTMLInputElement>("header input");
     input?.focus();
   };
 

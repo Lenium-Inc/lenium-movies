@@ -10,7 +10,7 @@ interface GenreChipsProps {
 export function GenreChips({ genres, active, onSelect }: GenreChipsProps) {
   return (
     <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
-      {genres.map((item) => (
+      {genres.map(item => (
         <button
           key={item}
           onClick={() => onSelect(item)}
@@ -29,8 +29,7 @@ export function GenreChips({ genres, active, onSelect }: GenreChipsProps) {
 
 interface DiscoverAction {
   mood: string;
-  genre?: string;
-  search?: string;
+  genre: string;
 }
 
 interface DiscoverDialogProps {
@@ -42,9 +41,14 @@ interface DiscoverDialogProps {
 
 /**
  * Modal that asks "what are you in the mood for?" and maps each mood to a
- * genre filter or a search term, then returns to the movies view.
+ * genre filter, then returns to the movies view.
  */
-export function DiscoverDialog({ open, actions, onClose, onApply }: DiscoverDialogProps) {
+export function DiscoverDialog({
+  open,
+  actions,
+  onClose,
+  onApply,
+}: DiscoverDialogProps) {
   if (!open) return null;
   return (
     <div
@@ -54,7 +58,7 @@ export function DiscoverDialog({ open, actions, onClose, onApply }: DiscoverDial
       onClick={onClose}
     >
       <div
-        onClick={(event) => event.stopPropagation()}
+        onClick={event => event.stopPropagation()}
         className="mx-auto mt-20 max-w-xl rounded-xl border border-white/10 bg-[#151519] p-5"
       >
         <div className="flex items-center justify-between">
@@ -62,7 +66,9 @@ export function DiscoverDialog({ open, actions, onClose, onApply }: DiscoverDial
             <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#d7d7d3]">
               Discovery
             </p>
-            <h2 className="mt-1 text-xl font-bold">What are you in the mood for?</h2>
+            <h2 className="mt-1 text-xl font-bold">
+              What are you in the mood for?
+            </h2>
           </div>
           <button
             onClick={onClose}
@@ -73,7 +79,7 @@ export function DiscoverDialog({ open, actions, onClose, onApply }: DiscoverDial
           </button>
         </div>
         <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-3">
-          {actions.map((action) => (
+          {actions.map(action => (
             <button
               key={action.mood}
               onClick={() => onApply(action)}

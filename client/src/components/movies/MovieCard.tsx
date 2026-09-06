@@ -46,19 +46,26 @@ export function MovieCard({ movie, saved, onSelect, onSave }: MovieCardProps) {
           {movie.title}
         </h3>
         <p className="mt-1 text-[10px] text-[#89898e]">
-          {movie.year ?? "Year unavailable"} · {movie.genre[0] ?? "Genre unavailable"}
+          {movie.year ?? "Year unavailable"} ·{" "}
+          {movie.genre[0] ?? "Genre unavailable"}
         </p>
       </button>
       <button
         onClick={onSave}
-        aria-label={saved ? `Remove ${movie.title}` : `Add ${movie.title} to My List`}
+        aria-label={
+          saved ? `Remove ${movie.title}` : `Add ${movie.title} to My List`
+        }
         className={`absolute right-2 top-2 rounded-full p-1.5 backdrop-blur transition ${
           saved
             ? "bg-[#d7d7d3] text-[#0b0b0e]"
             : "bg-black/55 text-white opacity-0 group-hover:opacity-100"
         }`}
       >
-        {saved ? <Check className="h-3 w-3" /> : <Bookmark className="h-3 w-3" />}
+        {saved ? (
+          <Check className="h-3 w-3" />
+        ) : (
+          <Bookmark className="h-3 w-3" />
+        )}
       </button>
     </article>
   );

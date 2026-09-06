@@ -14,9 +14,15 @@ interface HeaderProps {
  * Sticky top bar containing the mobile menu / logo, the current view label,
  * the global search input, and the sign-in / account controls.
  */
-export function Header({ view, search, onSearchChange, onOpenMenu }: HeaderProps) {
+export function Header({
+  view,
+  search,
+  onSearchChange,
+  onOpenMenu,
+}: HeaderProps) {
   const { user, isAuthenticated, logout } = useAuth();
-  const currentLabel = view === "home" ? "Home" : navItems.find((item) => item.id === view)?.label;
+  const currentLabel =
+    view === "home" ? "Home" : navItems.find(item => item.id === view)?.label;
 
   return (
     <header className="sticky top-0 z-30 border-b border-white/10 bg-[#0b0b0e]/95 backdrop-blur-xl">
@@ -36,13 +42,15 @@ export function Header({ view, search, onSearchChange, onOpenMenu }: HeaderProps
             LeNium<span className="text-[#d7d7d3]">.</span>
           </span>
         </div>
-        <div className="hidden text-sm font-semibold text-[#d4d4d0] lg:block">{currentLabel}</div>
+        <div className="hidden text-sm font-semibold text-[#d4d4d0] lg:block">
+          {currentLabel}
+        </div>
         <div className="ml-auto flex items-center gap-2">
           <div className="flex items-center gap-2 rounded-md border border-white/10 bg-white/[0.05] px-3 py-2 text-[#aaa9a5] focus-within:border-white/30">
             <Search className="h-3.5 w-3.5" />
             <input
               value={search}
-              onChange={(event) => onSearchChange(event.target.value)}
+              onChange={event => onSearchChange(event.target.value)}
               placeholder="Search movies, people, genres"
               className="w-[min(42vw,280px)] bg-transparent text-xs text-white outline-none placeholder:text-[#77777d]"
             />

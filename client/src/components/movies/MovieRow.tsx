@@ -15,7 +15,14 @@ interface MovieRowProps {
  * A titled, horizontally scrollable shelf of `MovieCard`s. Renders nothing
  * when the shelf has no movies, so empty catalog views stay clean.
  */
-export function MovieRow({ title, items, savedIds, onSelect, onSave, eyebrow }: MovieRowProps) {
+export function MovieRow({
+  title,
+  items,
+  savedIds,
+  onSelect,
+  onSave,
+  eyebrow,
+}: MovieRowProps) {
   if (!items.length) return null;
   return (
     <section className="mb-8">
@@ -26,14 +33,16 @@ export function MovieRow({ title, items, savedIds, onSelect, onSave, eyebrow }: 
               {eyebrow}
             </p>
           )}
-          <h2 className="text-lg font-bold tracking-tight text-[#f1f1ee] sm:text-xl">{title}</h2>
+          <h2 className="text-lg font-bold tracking-tight text-[#f1f1ee] sm:text-xl">
+            {title}
+          </h2>
         </div>
         <button className="hidden items-center gap-1 text-xs font-semibold text-[#99999e] hover:text-white sm:flex">
           View all <ChevronRight className="h-3.5 w-3.5" />
         </button>
       </div>
       <div className="catalog-row">
-        {items.map((movie) => (
+        {items.map(movie => (
           <MovieCard
             key={`${title}-${movie.id}`}
             movie={movie}

@@ -34,10 +34,25 @@ type TmdbResponse = { results?: TmdbMovie[] };
 const TMDB_BASE_URL = "https://api.themoviedb.org/3";
 const TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p";
 const genreNames: Record<number, string> = {
-  12: "Adventure", 14: "Fantasy", 16: "Animation", 18: "Drama", 27: "Horror",
-  28: "Action", 35: "Comedy", 36: "History", 37: "Western", 53: "Thriller",
-  80: "Crime", 99: "Documentary", 878: "Sci-fi", 9648: "Mystery", 10402: "Music",
-  10749: "Romance", 10751: "Family", 10752: "War", 10770: "TV",
+  12: "Adventure",
+  14: "Fantasy",
+  16: "Animation",
+  18: "Drama",
+  27: "Horror",
+  28: "Action",
+  35: "Comedy",
+  36: "History",
+  37: "Western",
+  53: "Thriller",
+  80: "Crime",
+  99: "Documentary",
+  878: "Sci-fi",
+  9648: "Mystery",
+  10402: "Music",
+  10749: "Romance",
+  10751: "Family",
+  10752: "War",
+  10770: "TV",
 };
 
 export class MetadataProviderUnavailableError extends Error {
@@ -56,16 +71,26 @@ function imageUrl(path: string | null | undefined, size: "w342" | "w780") {
 }
 
 function normalizeMovie(movie: TmdbMovie): MetadataMovie {
-  const year = movie.release_date ? Number(movie.release_date.slice(0, 4)) : null;
-  const genres = movie.genres?.map((genre) => genre.name) ?? movie.genre_ids?.map((id) => genreNames[id]).filter(Boolean) ?? [];
+  const year = movie.release_date
+    ? Number(movie.release_date.slice(0, 4))
+    : null;
+  const genres =
+    movie.genres?.map(genre => genre.name) ??
+    movie.genre_ids?.map(id => genreNames[id]).filter(Boolean) ??
+    [];
   return {
     id: movie.id,
     providerId: String(movie.id),
     title: movie.title?.trim() || "Untitled",
     year: Number.isFinite(year) ? year : null,
-    runtime: movie.runtime ? `${Math.floor(movie.runtime / 60)}h ${movie.runtime % 60}m` : "Runtime unavailable",
+    runtime: movie.runtime
+      ? `${Math.floor(movie.runtime / 60)}h ${movie.runtime % 60}m`
+      : "Runtime unavailable",
     rating: "Rating unavailable",
-    score: typeof movie.vote_average === "number" && movie.vote_average > 0 ? Number(movie.vote_average.toFixed(1)) : null,
+    score:
+      typeof movie.vote_average === "number" && movie.vote_average > 0
+        ? Number(movie.vote_average.toFixed(1))
+        : null,
     genre: genres.length ? genres : ["Uncategorized"],
     poster: imageUrl(movie.poster_path, "w342"),
     backdrop: imageUrl(movie.backdrop_path, "w780"),
@@ -85,14 +110,22 @@ function buildTmdbUrl(path: string, params: Record<string, string>): URL {
   const url = new URL(`${TMDB_BASE_URL}${path}`);
   url.searchParams.set("api_key", ENV.tmdbApiKey);
   url.searchParams.set("language", "en-US");
-  Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
+  Object.entries(params).forEach(([key, value]) =>
+    url.searchParams.set(key, value)
+  );
   return url;
 }
 
-async function tmdbFetch<T>(path: string, params: Record<string, string> = {}): Promise<T> {
+async function tmdbFetch<T>(
+  path: string,
+  params: Record<string, string> = {}
+): Promise<T> {
   if (!ENV.tmdbApiKey) throw new MetadataProviderUnavailableError();
-  const response = await fetch(buildTmdbUrl(path, params), { headers: { accept: "application/json" } });
-  if (!response.ok) throw new Error(`TMDB request failed with status ${response.status}`);
+  const response = await fetch(buildTmdbUrl(path, params), {
+    headers: { accept: "application/json" },
+  });
+  if (!response.ok)
+    throw new Error(`TMDB request failed with status ${response.status}`);
   return response.json() as Promise<T>;
 }
 
@@ -103,7 +136,9 @@ async function tmdbFetch<T>(path: string, params: Record<string, string> = {}): 
  * @returns An empty array if the provider returns no results.
  */
 export async function getPopularMovies(limit = 20) {
-  const payload = await tmdbFetch<TmdbResponse>("/movie/popular", { page: "1" });
+  const payload = await tmdbFetch<TmdbResponse>("/movie/popular", {
+    page: "1",
+  });
   return (payload.results ?? []).slice(0, limit).map(normalizeMovie);
 }
 
@@ -163,10 +198,19 @@ type TmdbVideo = {
 
 type TmdbVideosResponse = { results?: TmdbVideo[] };
 
-const videoPriority: Record<string, number> = { Trailer: 0, Teaser: 1, Featurette: 2, Clip: 3 };
+const videoPriority: Record<string, number> = {
+  Trailer: 0,
+  Teaser: 1,
+  Featurette: 2,
+  Clip: 3,
+};
 
-function normalizeVideo(movieId: string, video: TmdbVideo): VideoAssetCandidate | null {
-  if (!video.key || video.site !== "YouTube" || !video.name || !video.type) return null;
+function normalizeVideo(
+  movieId: string,
+  video: TmdbVideo
+): VideoAssetCandidate | null {
+  if (!video.key || video.site !== "YouTube" || !video.name || !video.type)
+    return null;
   return {
     movieId,
     provider: "youtube",
@@ -185,14 +229,24 @@ function normalizeVideo(movieId: string, video: TmdbVideo): VideoAssetCandidate 
 }
 
 export function selectOfficialVideo(videos: VideoAssetCandidate[]) {
-  return videos
-    .filter((video) => video.official)
-    .sort((a, b) => (videoPriority[a.type] ?? 99) - (videoPriority[b.type] ?? 99) || (b.publishedAt?.getTime() ?? 0) - (a.publishedAt?.getTime() ?? 0))[0] ?? null;
+  return (
+    videos
+      .filter(video => video.official)
+      .sort(
+        (a, b) =>
+          (videoPriority[a.type] ?? 99) - (videoPriority[b.type] ?? 99) ||
+          (b.publishedAt?.getTime() ?? 0) - (a.publishedAt?.getTime() ?? 0)
+      )[0] ?? null
+  );
 }
 
 export async function getMovieVideos(movieId: number) {
-  const payload = await tmdbFetch<TmdbVideosResponse>(`/movie/${movieId}/videos`);
-  return (payload.results ?? []).map((video) => normalizeVideo(String(movieId), video)).filter((video): video is VideoAssetCandidate => Boolean(video));
+  const payload = await tmdbFetch<TmdbVideosResponse>(
+    `/movie/${movieId}/videos`
+  );
+  return (payload.results ?? [])
+    .map(video => normalizeVideo(String(movieId), video))
+    .filter((video): video is VideoAssetCandidate => Boolean(video));
 }
 
 export async function getOfficialMovieVideo(movieId: number) {
