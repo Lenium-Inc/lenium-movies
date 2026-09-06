@@ -53,3 +53,27 @@ button { cursor: pointer; }
   --color-input: rgba(255,255,255,0.1);
   --color-ring: #d7d7d3;
 }
+
+.catalog-row {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(142px, 1fr);
+  grid-template-rows: auto;
+  gap: 12px;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  padding: 2px 1px 10px;
+  scrollbar-width: none;
+  scroll-snap-type: inline proximity;
+}
+.catalog-row::-webkit-scrollbar { display: none; }
+.catalog-card { position: relative; min-width: 0; scroll-snap-align: start; }
+@media (min-width: 640px) {
+  .catalog-row { grid-auto-columns: minmax(160px, 1fr); gap: 14px; }
+}
+@media (min-width: 1024px) {
+  .catalog-row { grid-auto-columns: minmax(158px, 1fr); gap: 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .catalog-row { scroll-behavior: auto; }
+}
