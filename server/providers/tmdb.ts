@@ -1,0 +1,102 @@
+import { ENV } from "../_core/env";
+
+export type MetadataMovie = {
+  id: number;
+  providerId: string;
+  title: string;
+  year: number | null;
+  runtime: string;
+  rating: string;
+  score: number | null;
+  genre: string[];
+  poster: string | null;
+  backdrop: string | null;
+  synopsis: string;
+  director: string | null;
+  source: "tmdb";
+};
+
+type TmdbMovie = {
+  id: number;
+  title?: string;
+  release_date?: string;
+  vote_average?: number;
+  overview?: string;
+  poster_path?: string | null;
+  backdrop_path?: string | null;
+  genre_ids?: number[];
+  runtime?: number | null;
+  genres?: Array<{ id: number; name: string }>;
+};
+
+type TmdbResponse = { results?: TmdbMovie[] };
+
+const TMDB_BASE_URL = "https://api.themoviedb.org/3";
+const TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p";
+const genreNames: Record<number, string> = {
+  12: "Adventure", 14: "Fantasy", 16: "Animation", 18: "Drama", 27: "Horror",
+  28: "Action", 35: "Comedy", 36: "History", 37: "Western", 53: "Thriller",
+  80: "Crime", 99: "Documentary", 878: "Sci-fi", 9648: "Mystery", 10402: "Music",
+  10749: "Romance", 10751: "Family", 10752: "War", 10770: "TV",
+};
+
+export class MetadataProviderUnavailableError extends Error {
+  constructor() {
+    super("Movie metadata provider is not configured");
+    this.name = "MetadataProviderUnavailableError";
+  }
+}
+
+export function isTmdbConfigured() {
+  return Boolean(ENV.tmdbApiKey);
+}
+
+function imageUrl(path: string | null | undefined, size: "w342" | "w780") {
+  return path ? `${TMDB_IMAGE_BASE_URL}/${size}${path}` : null;
+}
+
+function normalizeMovie(movie: TmdbMovie): MetadataMovie {
+  const year = movie.release_date ? Number(movie.release_date.slice(0, 4)) : null;
+  const genres = movie.genres?.map((genre) => genre.name) ?? movie.genre_ids?.map((id) => genreNames[id]).filter(Boolean) ?? [];
+  return {
+    id: movie.id,
+    providerId: String(movie.id),
+    title: movie.title?.trim() || "Untitled",
+    year: Number.isFinite(year) ? year : null,
+    runtime: movie.runtime ? `${Math.floor(movie.runtime / 60)}h ${movie.runtime % 60}m` : "Runtime unavailable",
+    rating: "Rating unavailable",
+    score: typeof movie.vote_average === "number" && movie.vote_average > 0 ? Number(movie.vote_average.toFixed(1)) : null,
+    genre: genres.length ? genres : ["Uncategorized"],
+    poster: imageUrl(movie.poster_path, "w342"),
+    backdrop: imageUrl(movie.backdrop_path, "w780"),
+    synopsis: movie.overview?.trim() || "Synopsis unavailable.",
+    director: null,
+    source: "tmdb",
+  };
+}
+
+async function tmdbFetch<T>(path: string, params: Record<string, string> = {}): Promise<T> {
+  if (!ENV.tmdbApiKey) throw new MetadataProviderUnavailableError();
+  const url = new URL(`${TMDB_BASE_URL}${path}`);
+  url.searchParams.set("api_key", ENV.tmdbApiKey);
+  url.searchParams.set("language", "en-US");
+  Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
+  const response = await fetch(url, { headers: { accept: "application/json" } });
+  if (!response.ok) throw new Error(`TMDB request failed with status ${response.status}`);
+  return response.json() as Promise<T>;
+}
+
+export async function getPopularMovies(limit = 20) {
+  const payload = await tmdbFetch<TmdbResponse>("/movie/popular", { page: "1" });
+  return (payload.results ?? []).slice(0, limit).map(normalizeMovie);
+}
+
+export async function searchMovies(query: string, limit = 20) {
+  const payload = await tmdbFetch<TmdbResponse>("/search/movie", { query, page: "1", include_adult: "false" });
+  return (payload.results ?? []).slice(0, limit).map(normalizeMovie);
+}
+
+export async function getMovieById(id: number) {
+  const movie = await tmdbFetch<TmdbMovie>(`/movie/${id}`);
+  return normalizeMovie(movie);
+}
