@@ -35,3 +35,7 @@ The owner must select the initial metadata provider, video provider, target terr
 ## Audit
 
 The cross-functional production audit is documented in [audit.md](audit.md). It records findings, severity, remediation, and launch blockers across rights, playback, CDN, search, SEO, security, privacy, accessibility, disaster recovery, monitoring, and cost.
+
+## Performance audit
+
+The latest measured performance audit, including before/after browser timings, image payloads, build sizes, scope limitations, and remaining production work, is documented in [performance-report.md](performance-report.md).
