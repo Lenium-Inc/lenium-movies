@@ -8,6 +8,13 @@
       "when": 1788651470500,
       "tag": "0000_typical_fixer",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1788684137863,
+      "tag": "0001_mysterious_black_knight",
+      "breakpoints": true
     }
   ]
 }

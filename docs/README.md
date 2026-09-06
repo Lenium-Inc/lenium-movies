@@ -23,14 +23,16 @@ This directory defines the production target for Lenflix, a high-performance mov
 17. [Environment](environment.md)
 18. [Roadmap](roadmap.md)
 19. [Agent instructions](agent.md)
+20. [Metadata provider](metadata-provider.md)
+21. [Trailer architecture](trailer-architecture.md)
 
 ## Current state
 
-The deployed WebDev project is a visual prototype with development-only fixture cards and client-side interactions. It is useful for validating the black-and-white cinematic direction, but it does not claim to provide real catalogue data or playback. Production work begins after the unresolved decisions in `architecture.md`, `integrations.md`, and `content-rights.md` are approved.
+The deployed WebDev project now consumes live TMDB metadata through a server-only provider adapter and supports cached, official YouTube trailer assets. It still does not claim to provide licensed streaming playback, rights, or availability; those remain separate production capabilities.
 
 ## Immediate decisions
 
-The owner must select the initial metadata provider, video provider, target territories, authentication policy, and whether creator uploads are part of the first production release. Once those choices are confirmed, the schema, provider adapters, environment contract, and deployment plan can be implemented without inventing external behavior.
+The owner must complete TMDB commercial licensing and attribution review, confirm target territories, authentication policy, and playback provider before public launch. The schema, provider adapters, environment contract, and deployment plan must remain aligned with those decisions.
 
 ## Audit
 

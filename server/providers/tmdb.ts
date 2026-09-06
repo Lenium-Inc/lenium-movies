@@ -100,3 +100,68 @@ export async function getMovieById(id: number) {
   const movie = await tmdbFetch<TmdbMovie>(`/movie/${id}`);
   return normalizeMovie(movie);
 }
+
+export type VideoAssetCandidate = {
+  movieId: string;
+  provider: "youtube";
+  providerVideoId: string;
+  type: string;
+  name: string;
+  official: boolean;
+  language: string | null;
+  country: string | null;
+  thumbnailUrl: string;
+  publishedAt: Date | null;
+  duration: number | null;
+  embedUrl: string;
+  sourceUrl: string;
+};
+
+type TmdbVideo = {
+  key?: string;
+  name?: string;
+  site?: string;
+  type?: string;
+  official?: boolean;
+  iso_639_1?: string | null;
+  iso_3166_1?: string | null;
+  published_at?: string | null;
+};
+
+type TmdbVideosResponse = { results?: TmdbVideo[] };
+
+const videoPriority: Record<string, number> = { Trailer: 0, Teaser: 1, Featurette: 2, Clip: 3 };
+
+function normalizeVideo(movieId: string, video: TmdbVideo): VideoAssetCandidate | null {
+  if (!video.key || video.site !== "YouTube" || !video.name || !video.type) return null;
+  return {
+    movieId,
+    provider: "youtube",
+    providerVideoId: video.key,
+    type: video.type,
+    name: video.name,
+    official: Boolean(video.official),
+    language: video.iso_639_1 ?? null,
+    country: video.iso_3166_1 ?? null,
+    thumbnailUrl: `https://i.ytimg.com/vi/${encodeURIComponent(video.key)}/hqdefault.jpg`,
+    publishedAt: video.published_at ? new Date(video.published_at) : null,
+    duration: null,
+    embedUrl: `https://www.youtube-nocookie.com/embed/${encodeURIComponent(video.key)}?rel=0&modestbranding=1`,
+    sourceUrl: `https://www.youtube.com/watch?v=${encodeURIComponent(video.key)}`,
+  };
+}
+
+export function selectOfficialVideo(videos: VideoAssetCandidate[]) {
+  return videos
+    .filter((video) => video.official)
+    .sort((a, b) => (videoPriority[a.type] ?? 99) - (videoPriority[b.type] ?? 99) || (b.publishedAt?.getTime() ?? 0) - (a.publishedAt?.getTime() ?? 0))[0] ?? null;
+}
+
+export async function getMovieVideos(movieId: number) {
+  const payload = await tmdbFetch<TmdbVideosResponse>(`/movie/${movieId}/videos`);
+  return (payload.results ?? []).map((video) => normalizeVideo(String(movieId), video)).filter((video): video is VideoAssetCandidate => Boolean(video));
+}
+
+export async function getOfficialMovieVideo(movieId: number) {
+  return selectOfficialVideo(await getMovieVideos(movieId));
+}
