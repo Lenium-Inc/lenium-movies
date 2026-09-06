@@ -170,6 +170,12 @@ export default defineConfig({
   },
   server: {
     host: true,
+    // WebDev reverse-proxies the browser-facing app through port 3000 while
+    // Vite itself listens internally on 5173. Without clientPort, @vite/client
+    // advertises localhost:5173 and the browser cannot establish HMR.
+    hmr: {
+      clientPort: 3000,
+    },
     allowedHosts: [
       ".manuspre.computer",
       ".manus.computer",
