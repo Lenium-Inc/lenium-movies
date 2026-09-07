@@ -208,7 +208,7 @@ export function Spotlight({
                 <div className="mt-6 flex flex-wrap items-center gap-3">
                   <ActionButton
                     icon={CirclePlay}
-                    label="Details"
+                    label="Watch"
                     onClick={() => onDetails?.(current)}
                     className="bg-white font-black text-black ring-1 ring-inset ring-white/40 shadow-[0_12px_32px_rgba(0,0,0,0.5)] hover:bg-white/90 active:scale-[0.98]"
                   />

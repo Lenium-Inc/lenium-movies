@@ -3,6 +3,7 @@ import { MoonStar } from "lucide-react";
 import {
   capLimit,
   dayCount,
+  resetCap,
   subscribeCap,
 } from "@/services/capGate";
 import { secondsToReset } from "@/services/stats";
@@ -105,6 +106,16 @@ export function MindfulCapModal() {
           className="mt-5 w-full rounded-full border border-white/10 bg-white/[0.06] px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-white/15"
         >
           Close
+        </button>
+
+        <button
+          onClick={() => {
+            resetCap();
+            setOpen(false);
+          }}
+          className="mt-2 w-full rounded-full border border-white/20 bg-white/10 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-white/20"
+        >
+          Reset limit
         </button>
       </div>
     </div>

@@ -17,10 +17,17 @@ import {
   prefetchForOpen,
 } from "@/services/prefetch";
 import { attemptPlay } from "@/services/capGate";
+import {
+  getProgress,
+  progressForTitle,
+  subscribeStats,
+} from "@/services/stats";
 import type { Movie } from "./types";
 import { TrailerEmbed } from "./MediaCard";
 
 const WORDS = /[a-z0-9]+/g;
+
+const RATE_AFTER_SECONDS = 15 * 60;
 
 /** Title similarity used to rank fallback suggestions (0..1, 1 = identical). */
 function titleOverlap(a: string, b: string): number {
@@ -62,6 +69,7 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
   const [suggestions, setSuggestions] = useState<StreamMovie[]>([]);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [myRating, setMyRating] = useState<number>(() => getRating(movie.id) ?? 0);
+  const [watchedSeconds, setWatchedSeconds] = useState(0);
   const [trailer, setTrailer] = useState<TrailerInfo | null>(null);
 
   useEffect(
@@ -71,6 +79,21 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
       }),
     [movie.id]
   );
+
+  useEffect(() => {
+    const refresh = () =>
+      setWatchedSeconds(
+        Math.max(
+          getProgress(String(movie.id)),
+          resolved ? getProgress(resolved.stream.id) : 0,
+          progressForTitle(movie.title)
+        )
+      );
+    refresh();
+    return subscribeStats(refresh);
+  }, [movie.id, movie.title, resolved]);
+
+  const canRate = watchedSeconds >= RATE_AFTER_SECONDS;
 
   useEffect(() => {
     let active = true;
@@ -262,36 +285,39 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
               {saved ? "In My List" : "Add to My List"}
             </button>
           </div>
-          <div className="mt-3 flex items-center gap-2">
-            <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-white/40">
-              Your rating
-            </span>
-            <span className="flex items-center gap-0.5">
-              {[1, 2, 3, 4, 5].map(star => (
-                <button
-                  key={star}
-                  type="button"
-                  aria-label={`Rate ${star} out of 5`}
-                  onClick={() => {
-                    setRating(movie, star === myRating ? 0 : star);
-                    setMyRating(star === myRating ? 0 : star);
-                  }}
-                  className="p-0.5 text-white transition hover:scale-110"
-                >
-                  <Star
-                    className={`h-4 w-4 ${
-                      star <= myRating ? "fill-[#d7d7d3] text-[#d7d7d3]" : "text-white/30"
-                    }`}
-                  />
-                </button>
-              ))}
-            </span>
-            {myRating > 0 && (
-              <span className="text-[11px] tabular-nums text-white/50">
-                {myRating}/5
+          {canRate && (
+            <div className="mt-3 flex items-center gap-2">
+              <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-white/40">
+                Your rating
               </span>
-            )}
-          </div>
+              <span className="flex items-center gap-0.5">
+                {[1, 2, 3, 4, 5].map(star => (
+                  <button
+                    key={star}
+                    type="button"
+                    aria-label={`Rate ${star} out of 5`}
+                    disabled={!canRate}
+                    onClick={() => {
+                      setRating(movie, star === myRating ? 0 : star);
+                      setMyRating(star === myRating ? 0 : star);
+                    }}
+                    className="p-0.5 text-white transition hover:scale-110"
+                  >
+                    <Star
+                      className={`h-4 w-4 ${
+                        star <= myRating ? "fill-[#d7d7d3] text-[#d7d7d3]" : "text-white/30"
+                      }`}
+                    />
+                  </button>
+                ))}
+              </span>
+              {myRating > 0 && (
+                <span className="text-[11px] tabular-nums text-white/50">
+                  {myRating}/5
+                </span>
+              )}
+            </div>
+          )}
           {playError && (
             <div className="mt-3 rounded-md border border-white/10 bg-white/[0.03] px-3 py-2.5 text-xs leading-5 text-[#c5c5c1]">
               <p>{playError}</p>

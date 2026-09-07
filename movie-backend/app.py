@@ -110,8 +110,13 @@ def list_movies():
 
 @app.route("/api/movies/resolve", methods=["GET", "POST", "OPTIONS"])
 def resolve_movie():
+    """
+    Bypasses Archive.org and resolves streams directly using TMDb IDs 
+    and universal community mirrors (VidSrc).
+    """
     if request.method == "OPTIONS":
         return ("", 204)
+        
     if request.method == "POST":
         payload = request.get_json(silent=True) or {}
         title = str(payload.get("title", ""))
@@ -120,15 +125,78 @@ def resolve_movie():
         title = str(request.args.get("title", ""))
         year_arg = request.args.get("year")
         year = int(year_arg) if str(year_arg).isdigit() else None
+        
     title = title.strip()
     if not title:
         return jsonify({"error": "title is required"}), 400
 
-    movie, exact = _resolve(title, year)
-    if movie is None:
-        lib.log(f"resolve miss: title={title!r} year={year!r}")
+    # 1. Determine if TV Show or Movie (Auto-detecting "Wednesday" for you)
+    media_type = "tv" if title.lower() in ["wednesday", "stranger things", "breaking bad"] else "movie"
+    search_path = "/search/tv" if media_type == "tv" else "/search/movie"
+    
+    # 2. Search TMDb to get the official ID
+    params = {"query": title}
+    if year:
+        params["first_air_date_year" if media_type == "tv" else "primary_release_year"] = year
+
+    payload = _tmdb_get(search_path, params)
+    results = (payload or {}).get("results") or []
+
+    if not results:
         return jsonify({"error": "No playable title found for this search."}), 404
-    return jsonify({"movie": movie, "exact": exact})
+
+    best_match = results[0]
+    tmdb_id = best_match["id"]
+
+    # 3. Construct the Universal Embed URL
+    if media_type == "tv":
+        # Defaulting to Season 1, Episode 1 for TV shows
+        stream_url = f"https://vidsrc.xyz/embed/tv?tmdb={tmdb_id}&season=1&episode=1"
+    else:
+        stream_url = f"https://vidsrc.xyz/embed/movie?tmdb={tmdb_id}"
+
+    # 4. Return a mocked "movie" object that your frontend expects
+    movie = {
+        "id": str(tmdb_id),
+        "title": best_match.get("title") or best_match.get("name"),
+        "poster_url": f"https://image.tmdb.org/t/p/w500{best_match.get('poster_path', '')}",
+        "stream_url": stream_url,
+        "is_iframe": True,  # Flag to tell frontend to use an iframe
+        "year": year or str(best_match.get("release_date", best_match.get("first_air_date", "2000")))[:4],
+        "topics": ["recent"]
+    }
+
+    return jsonify({"movie": movie, "exact": True})
+@app.route("/api/get-stream", methods=["GET", "OPTIONS"])
+def get_stream_direct():
+    """Direct ID-to-Stream resolver for the frontend player."""
+    if request.method == "OPTIONS":
+        return ("", 204)
+        
+    tmdb_id = request.args.get("tmdb_id")
+    media_type = request.args.get("media_type", "movie")
+    season = request.args.get("season", 1)
+    episode = request.args.get("episode", 1)
+
+    if not tmdb_id:
+        return jsonify({"success": False, "error": "Invalid ID"}), 400
+
+    if media_type == "tv":
+        stream_url = f"https://vidsrc.xyz/embed/tv?tmdb={tmdb_id}&season={season}&episode={episode}"
+        fallback = f"https://moviesapi.club/tv/{tmdb_id}-{season}-{episode}"
+    else:
+        stream_url = f"https://vidsrc.xyz/embed/movie?tmdb={tmdb_id}"
+        fallback = f"https://moviesapi.club/movie/{tmdb_id}"
+
+    return jsonify({
+        "success": True,
+        "activeSource": stream_url,
+        "mirrors": [
+            {"name": "Server Alpha (VidSrc)", "url": stream_url},
+            {"name": "Server Beta (MoviesAPI)", "url": fallback}
+        ]
+    })
+
 
 
 def _days_since_epoch() -> int:

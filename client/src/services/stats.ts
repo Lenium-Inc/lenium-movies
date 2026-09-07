@@ -150,6 +150,23 @@ export function getProgressFraction(id: string): number {
   return load().progressFraction[id] ?? 0;
 }
 
+/** Watch seconds for a title across every stream id that shares its name. */
+export function progressForTitle(title: string): number {
+  const data = load();
+  let total = 0;
+  for (const [id, entry] of Object.entries(data.lastWatched)) {
+    if (entry.title === title) {
+      total += data.progress[id] ?? 0;
+    }
+  }
+  if (total > 0) return total;
+  for (const id of Object.keys(data.progress)) {
+    const entry = data.lastWatched[id];
+    if (entry && entry.title === title) total += data.progress[id] ?? 0;
+  }
+  return total;
+}
+
 /** Continue Watching snapshot — most recently played titles and their state. */
 export function lastWatchedList(): Stats["lastWatched"] {
   return load().lastWatched;
@@ -253,6 +270,13 @@ export function recordWatch(
   const gained = newlyEarned(data);
   save(data);
   return gained;
+}
+
+/** Reset the daily play counter (clears today's cap). */
+export function resetDailyLimit(): void {
+  const data = load();
+  data.playsByDay = {};
+  save(data);
 }
 
 /** Drop a title's progress and Continue Watching entry (privacy clear-one). */

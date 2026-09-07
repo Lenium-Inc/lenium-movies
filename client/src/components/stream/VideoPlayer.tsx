@@ -42,6 +42,17 @@ const rank = (quality: StreamQuality) => {
 
 const RATES = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
+function isEmbedStreamUrl(url: string): boolean {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    return ["vidsrc.xyz", "vidsrc.to", "goojara.to", "moviebox.ph"].some(
+      host => hostname === host || hostname.endsWith(`.${host}`)
+    );
+  } catch {
+    return false;
+  }
+}
+
 function fmtTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
   const h = Math.floor(seconds / 3600);
@@ -173,13 +184,15 @@ export function VideoPlayer({ title, movie, onClose }: VideoPlayerProps) {
     cancelInFlightPrefetch();
   }, [quality, movie.id]);
 
-  const networkUrl = useMemo(() => {
+  const streamUrl = useMemo(() => {
     const variant = quality
       ? variants.find(v => v.quality === quality)
       : undefined;
-    return proxiedStreamUrl(variant?.url ?? movie.stream_url);
+    return variant?.url ?? movie.stream_url;
   }, [variants, quality, movie.stream_url]);
 
+  const isEmbedStream = isEmbedStreamUrl(streamUrl);
+  const networkUrl = isEmbedStream ? streamUrl : proxiedStreamUrl(streamUrl);
   const src = usingBlob && blobUrl ? blobUrl : networkUrl;
 
   // ---- ui auto-hide --------------------------------------------------------
@@ -382,64 +395,77 @@ export function VideoPlayer({ title, movie, onClose }: VideoPlayerProps) {
             </div>
           )}
 
-          <video
-            key={`${quality ?? "default"}-${usingBlob ? "blob" : "net"}`}
-            ref={videoRef}
-            src={src}
-            autoPlay
-            playsInline
-            muted={muted}
-            onClick={togglePlay}
-            className={`block w-full cursor-pointer bg-black object-contain ${
-              isFullscreen ? "h-full w-full" : "max-h-[72vh]"
-            }`}
-            onLoadedMetadata={() => {
-              const video = videoRef.current;
-              if (video) {
-                setDuration(video.duration || 0);
-                durationRef.current = video.duration || 0;
-                video.volume = volume;
-                video.muted = muted;
-                if (!usingBlob && timeToRestore.current > 0) {
-                  video.currentTime = timeToRestore.current;
-                  timeToRestore.current = 0;
-                  void video.play().catch(() => {});
+          {isEmbedStream ? (
+            <iframe
+              src={src}
+              title={`${title} player`}
+              allow="autoplay; fullscreen; picture-in-picture"
+              allowFullScreen
+              frameBorder="0"
+              className={`block w-full bg-black ${
+                isFullscreen ? "h-full" : "aspect-video"
+              }`}
+            />
+          ) : (
+            <video
+              key={`${quality ?? "default"}-${usingBlob ? "blob" : "net"}`}
+              ref={videoRef}
+              src={src}
+              autoPlay
+              playsInline
+              muted={muted}
+              onClick={togglePlay}
+              className={`block w-full cursor-pointer bg-black object-contain ${
+                isFullscreen ? "h-full w-full" : "max-h-[72vh]"
+              }`}
+              onLoadedMetadata={() => {
+                const video = videoRef.current;
+                if (video) {
+                  setDuration(video.duration || 0);
+                  durationRef.current = video.duration || 0;
+                  video.volume = volume;
+                  video.muted = muted;
+                  if (!usingBlob && timeToRestore.current > 0) {
+                    video.currentTime = timeToRestore.current;
+                    timeToRestore.current = 0;
+                    void video.play().catch(() => {});
+                  }
                 }
-              }
-            }}
-            onLoadedData={() => setStatus("ready")}
-            onPlaying={() => setStatus("ready")}
-            onWaiting={() => setStatus("loading")}
-            onPlay={() => setPlaying(true)}
-            onPause={() => setPlaying(false)}
-            onTimeUpdate={() => {
-              if (usingBlob && duration > 0) {
-                if (currentTime >= Math.max(duration - 0.75, 0)) handoff();
-              }
-            }}
-            onError={event => {
-              console.error(
-                `[VideoPlayer] stream failed for "${title}"`,
-                event.currentTarget.error,
-                src
-              );
-              if (usingBlob) {
-                handoff();
-              } else if (status !== "error") {
-                setStatus("error");
-              }
-            }}
-          >
-            {movie.subtitles?.map(track => (
-              <track
-                key={track.lang}
-                kind="subtitles"
-                srcLang={track.lang}
-                label={track.label}
-                src={proxiedStreamUrl(track.url)}
-              />
-            ))}
-          </video>
+              }}
+              onLoadedData={() => setStatus("ready")}
+              onPlaying={() => setStatus("ready")}
+              onWaiting={() => setStatus("loading")}
+              onPlay={() => setPlaying(true)}
+              onPause={() => setPlaying(false)}
+              onTimeUpdate={() => {
+                if (usingBlob && duration > 0) {
+                  if (currentTime >= Math.max(duration - 0.75, 0)) handoff();
+                }
+              }}
+              onError={event => {
+                console.error(
+                  `[VideoPlayer] stream failed for "${title}"`,
+                  event.currentTarget.error,
+                  src
+                );
+                if (usingBlob) {
+                  handoff();
+                } else if (status !== "error") {
+                  setStatus("error");
+                }
+              }}
+            >
+              {movie.subtitles?.map(track => (
+                <track
+                  key={track.lang}
+                  kind="subtitles"
+                  srcLang={track.lang}
+                  label={track.label}
+                  src={proxiedStreamUrl(track.url)}
+                />
+              ))}
+            </video>
+          )}
 
           {/* centered pause / play */}
           <button

@@ -2,7 +2,7 @@
  * Single gateway every playback entry point passes through. Enforces the
  * daily mindful viewing cap (8/day) before a title ever mounts a player.
  */
-import { DAILY_LIMIT, playsToday, recordPlay } from "./stats";
+import { DAILY_LIMIT, playsToday, recordPlay, resetDailyLimit } from "./stats";
 
 type Listener = (locked: boolean, count: number) => void;
 
@@ -41,4 +41,10 @@ export function attemptPlay(): boolean {
   const { locked } = recordPlay();
   emit();
   return !locked;
+}
+
+/** Reset the daily viewing cap counter and notify subscribers. */
+export function resetCap(): void {
+  resetDailyLimit();
+  emit();
 }
