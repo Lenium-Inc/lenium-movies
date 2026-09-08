@@ -1,5 +1,4 @@
-import { useState } from "react";
-import { SlidersHorizontal } from "lucide-react";
+import { useState, useRef } from "react";
 import { genreFilterOptions, useCatalog } from "@/hooks/useCatalog";
 import { BottomNav } from "@/components/layout/BottomNav";
 import { GlassHeader } from "@/components/layout/GlassHeader";
@@ -9,20 +8,14 @@ import {
   SearchStatusBar,
 } from "@/components/movies/CatalogEmptyState";
 import { Details } from "@/components/movies/Details";
-import { DiscoverDialog, GenreChips } from "@/components/movies/DiscoverDialog";
 import { Spotlight } from "@/components/movies/Spotlight";
 import { MovieRow } from "@/components/movies/MovieRow";
+import { SkeletonMovieGrid } from "@/components/movies/SkeletonMovieCard";
 import { ProfileMenu } from "@/components/layout/ProfileMenu";
+import { DiscoverDropdown } from "@/components/DiscoverDropdown";
+import { TopProgressBar } from "@/components/ui/TopProgressBar";
 import type { Movie } from "@/components/movies/types";
-
-const moodActions: Array<{ mood: string; genre: string }> = [
-  { mood: "Something funny", genre: "Comedy" },
-  { mood: "Something scary", genre: "Horror" },
-  { mood: "Something romantic", genre: "Romance" },
-  { mood: "Something intense", genre: "Crime" },
-  { mood: "Something epic", genre: "Action" },
-  { mood: "Something family-friendly", genre: "Family" },
-];
+import type { View } from "@/components/layout/navigation";
 
 /**
  * Root catalog page: wires the sidebar, header, mobile nav, and all movie
@@ -38,6 +31,7 @@ export default function Home() {
     savedIds,
     configured,
     loading,
+    searchLoading,
     filtered,
     rows,
     setView,
@@ -48,25 +42,21 @@ export default function Home() {
   } = useCatalog();
 
   const [menuOpen, setMenuOpen] = useState(false);
-  const [discoverOpen, setDiscoverOpen] = useState(false);
   const [selected, setSelected] = useState<Movie | null>(null);
 
   const isClientSearch = search.trim().length > 0;
-
-  /** Map a DiscoverDialog mood to an actual genre filter and return to movies. */
-  const applyMood = (action: (typeof moodActions)[number]) => {
-    setGenre(action.genre);
-    setView("movies");
-    setDiscoverOpen(false);
-  };
+  const isHomeView = view === "home" && !isClientSearch;
 
   return (
     <div className="min-h-screen bg-[#050505] text-[#FFFFFF]">
+      <TopProgressBar isLoading={loading || searchLoading} />
       <Sidebar
         view={view}
         onNavigate={setSection}
         open={menuOpen}
         onClose={() => setMenuOpen(false)}
+        activeGenre={genre}
+        onGenreChange={setGenre}
       />
       <GlassHeader
         search={search}
@@ -114,57 +104,60 @@ export default function Home() {
             </section>
           ) : (
             <>
-              {view === "home" && !isClientSearch && filtered.length > 0 ? (
+              <section className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <DiscoverDropdown
+                  genre={genre}
+                  setGenre={setGenre}
+                  setView={setView}
+                  filteredCount={filtered.length}
+                  isLoading={loading || searchLoading}
+                />
+              </section>
+              {isClientSearch ? (
+                <SearchStatusBar query={search} onClear={() => setSearch("")} />
+              ) : null}
+              {!isClientSearch && isHomeView && filtered.length > 0 ? (
                 <Spotlight
                   items={filtered}
                   savedIds={savedIds}
                   onDetails={setSelected}
                   onSave={toggleSave}
                 />
-              ) : (
-                <CatalogEmptyState loading={loading} configured={configured} />
-              )}
-              {isClientSearch && (
-                <SearchStatusBar query={search} onClear={() => setSearch("")} />
-              )}
-              <section className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <GenreChips
-                  genres={genreFilterOptions}
-                  active={genre}
-                  onSelect={item => {
-                    setGenre(item);
-                    setView("movies");
-                  }}
+              ) : !isClientSearch ? (
+                <CatalogEmptyState loading={false} configured={configured} />
+              ) : null}
+              {isClientSearch && filtered.length === 0 && !loading && !searchLoading && (
+                <CatalogEmptyState
+                  loading={false}
+                  configured={true}
+                  query={search}
+                  searchLoading={searchLoading}
                 />
-                <button
-                  onClick={() => setDiscoverOpen(true)}
-                  className="flex shrink-0 items-center justify-center gap-2 rounded-md border border-white/10 px-3 py-2 text-xs font-semibold text-[#c4c4c0] hover:bg-white/10"
-                >
-                  <SlidersHorizontal className="h-3.5 w-3.5" /> Discover
-                </button>
-              </section>
-              <DiscoverDialog
-                open={discoverOpen}
-                actions={moodActions}
-                onClose={() => setDiscoverOpen(false)}
-                onApply={applyMood}
-              />
+              )}
               <div className="mt-8">
-                {rows.map((row, index) => (
-                  <MovieRow
-                    key={row.title}
-                    title={row.title}
-                    items={row.items}
-                    savedIds={savedIds}
-                    onSelect={setSelected}
-                    onSave={toggleSave}
-                    eyebrow={
-                      index === 0 && view === "home"
-                        ? "Find something worth watching"
-                        : undefined
-                    }
-                  />
-                ))}
+                {loading ? (
+                  <SkeletonMovieGrid count={12} />
+                ) : searchLoading && isClientSearch ? (
+                  <SkeletonMovieGrid count={12} />
+                ) : (
+                  rows.map((row, index) => (
+                    <MovieRow
+                      key={row.title}
+                      title={row.title}
+                      items={row.items}
+                      savedIds={savedIds}
+                      onSelect={setSelected}
+                      onSave={toggleSave}
+                      eyebrow={
+                        index === 0 && view === "home"
+                          ? "Find something worth watching"
+                          : undefined
+                      }
+                      grid
+                      rowIndex={index}
+                    />
+                  ))
+                )}
               </div>
             </>
           )}

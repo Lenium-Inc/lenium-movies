@@ -39,7 +39,7 @@ function genresText(genres: readonly string[] | string | null | undefined) {
 }
 
 /** Cover-cropped 16:9 trailer embed pinned inside the 2:3 poster frame. */
-export function TrailerEmbed({ provider, id }: TrailerInfo) {
+export function TrailerEmbed({ provider, id, onLoad }: TrailerInfo & { onLoad?: () => void }) {
   const src =
     provider === "dailymotion"
       ? `https://www.dailymotion.com/embed/video/${id}?autoplay=1&muted=1&loop=1&controls=0`
@@ -53,6 +53,7 @@ export function TrailerEmbed({ provider, id }: TrailerInfo) {
         tabIndex={-1}
         aria-hidden
         className="h-full w-full"
+        onLoad={onLoad}
       />
     </div>
   );
@@ -69,6 +70,11 @@ export function TrailerEmbed({ provider, id }: TrailerInfo) {
  * at a subtle `scale(1.05)`, then a quiet zoom on the poster — so every tile
  * answers hover identically. Missing posters / metadata degrade to a polished
  * typographic skeleton card instead of dead space.
+ *
+ * Image Persistence: The poster remains visible until the trailer/hover video
+ * has buffered enough data to begin playback, preventing black/blank flashes.
+ * Video Centering: The embedded hover trailer player is absolutely positioned
+ * and perfectly centered within the card container.
  */
 export function MediaCard({
   id,
@@ -87,6 +93,7 @@ export function MediaCard({
   const [videoFailed, setVideoFailed] = useState(false);
   const [posterFailed, setPosterFailed] = useState(false);
   const [trailer, setTrailer] = useState<TrailerInfo | null>(null);
+  const [trailerReady, setTrailerReady] = useState(false);
   const timer = useRef<number | null>(null);
   const trailerRequested = useRef(false);
 
@@ -95,6 +102,7 @@ export function MediaCard({
     setVideoFailed(false);
     setPosterFailed(false);
     setTrailer(null);
+    setTrailerReady(false);
     trailerRequested.current = false;
   }, [posterUrl, previewUrl, backdropUrl, trailerResolver]);
 
@@ -126,6 +134,7 @@ export function MediaCard({
     timer.current = window.setTimeout(() => {
       timer.current = null;
       setPeeked(true);
+      setTrailerReady(false); // Reset ready state on new hover
     }, 300);
   };
 
@@ -136,10 +145,15 @@ export function MediaCard({
     }
     setPeeked(false);
     setVideoFailed(false);
+    setTrailerReady(false);
+  };
+
+  const handleTrailerLoad = () => {
+    setTrailerReady(true);
   };
 
   const showSkeleton = !posterUrl || posterFailed;
-  const showTrailer = peeked && trailer;
+  const showTrailer = peeked && trailer && trailerReady;
   const showVideo = peeked && !showTrailer && previewUrl && !videoFailed;
   const showBackdrop = peeked && !showTrailer && !showVideo && backdropUrl;
   const genreLine = genresText(genres);
@@ -175,14 +189,16 @@ export function MediaCard({
               alt={title}
               onError={() => setPosterFailed(true)}
               className={`absolute inset-0 h-full w-full object-cover transition-[opacity,transform] duration-300 group-hover:scale-[1.05] ${
-                peeked ? "opacity-0" : "opacity-100"
+                showTrailer ? "opacity-0" : "opacity-100"
               }`}
             />
           )}
 
           {/* Preview layer: official trailer → muted native clip → backdrop */}
           {showTrailer && trailer ? (
-            <TrailerEmbed provider={trailer.provider} id={trailer.id} />
+            <div className="absolute inset-0 flex items-center justify-center z-10">
+              <TrailerEmbed provider={trailer.provider} id={trailer.id} onLoad={handleTrailerLoad} />
+            </div>
           ) : null}
           {showVideo && (
             <video
@@ -195,7 +211,7 @@ export function MediaCard({
               disablePictureInPicture
               preload="auto"
               onError={() => setVideoFailed(true)}
-              className="absolute inset-0 h-full w-full scale-[1.02] object-cover transition-opacity duration-300"
+              className="absolute inset-0 h-full w-full scale-[1.02] object-cover object-center transition-opacity duration-300"
             />
           )}
           {showBackdrop && (
@@ -204,7 +220,7 @@ export function MediaCard({
               alt=""
               loading="lazy"
               decoding="async"
-              className="absolute inset-0 h-full w-full scale-[1.05] object-cover opacity-100 transition-opacity duration-300"
+              className="absolute inset-0 h-full w-full scale-[1.05] object-cover object-center opacity-100 transition-opacity duration-300"
             />
           )}
 

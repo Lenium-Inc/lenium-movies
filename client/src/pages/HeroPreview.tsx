@@ -181,6 +181,7 @@ function toMovie(film: PreviewFilm): Movie {
     id: film.id,
     providerId: `tmdb-${film.id}`,
     source: "tmdb",
+    mediaType: "movie",
     title: film.title,
     year: film.year,
     runtime: fmtRuntime(film.runtimeMin) ?? "",

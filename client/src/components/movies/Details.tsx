@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Bookmark, Check, Play, Star, X } from "lucide-react";
+import { Bookmark, Check, Play, Star, X, MessageSquare, Clock } from "lucide-react";
 import { getRating, setRating, subscribeRatings } from "@/services/ratings";
 import {
   fetchTrailer,
   getStreamCatalog,
+  getStreamSource,
   resolveStream,
   StreamNotFoundError,
   type ResolvedStream,
@@ -24,6 +25,13 @@ import {
 } from "@/services/stats";
 import type { Movie } from "./types";
 import { TrailerEmbed } from "./MediaCard";
+
+const TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p";
+
+function getImageUrl(path: string, size: string): string {
+  if (path.startsWith("http")) return path;
+  return `${TMDB_IMAGE_BASE_URL}/${size}${path}`;
+}
 
 const WORDS = /[a-z0-9]+/g;
 
@@ -55,22 +63,22 @@ interface DetailsProps {
 }
 
 /**
- * Bottom-sheet style modal that shows a movie's metadata plus real Play / save
- * actions. The Play action asks the movie backend to resolve a playable stream
- * (it scrapes on demand when the title is not yet in the catalog) and plays it
- * in the native HTML5 player. A non-exact match is labeled explicitly so the
- * actual film being played is never disguised.
+ * Bottom-sheet style modal that opens instantly with skeleton placeholders.
+ * Loads full metadata and stream resolution in the background.
  */
 export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
   const [resolved, setResolved] = useState<ResolvedStream | null>(null);
   const [playerOpen, setPlayerOpen] = useState(false);
   const [resolving, setResolving] = useState(false);
   const [playError, setPlayError] = useState<string | null>(null);
+  const [season, setSeason] = useState(1);
+  const [episode, setEpisode] = useState(1);
   const [suggestions, setSuggestions] = useState<StreamMovie[]>([]);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [myRating, setMyRating] = useState<number>(() => getRating(movie.id) ?? 0);
   const [watchedSeconds, setWatchedSeconds] = useState(0);
   const [trailer, setTrailer] = useState<TrailerInfo | null>(null);
+  const [detailsLoaded, setDetailsLoaded] = useState(false);
 
   useEffect(
     () =>
@@ -95,6 +103,7 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
 
   const canRate = watchedSeconds >= RATE_AFTER_SECONDS;
 
+  // Fetch trailer in background
   useEffect(() => {
     let active = true;
     setTrailer(null);
@@ -111,8 +120,6 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
   }, [movie.title, movie.year]);
 
   // When a title has no playable stream, offer sibling films from the archive
-  // that DO stream, ranked by title similarity — a recovery path instead of a
-  // dead end.
   const suggestFor = useCallback(async (title: string) => {
     setSuggestionsLoading(true);
     try {
@@ -132,21 +139,68 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
     }
   }, []);
 
-  const play = async () => {
+  /**
+   * Build the playable stream for the selected title/episode and open the player.
+   */
+  const resolveAndPlay = async (
+    targetSeason: number,
+    targetEpisode: number
+  ) => {
     if (resolving) return;
     if (!attemptPlay()) return;
-    if (resolved) {
-      cancelInFlightPrefetch();
-      prefetchForOpen(resolved.stream);
-      setPlayerOpen(true);
-      return;
-    }
     setResolving(true);
     setPlayError(null);
     try {
-      const stream = await resolveStream(movie.title, movie.year);
-      setResolved(stream);
-      prefetchForOpen(stream.stream);
+      let base = resolved?.stream ?? null;
+      if (!base) {
+        const stream = await resolveStream(movie.title, movie.year);
+        setResolved(stream);
+        base = stream.stream;
+      }
+      setSeason(targetSeason);
+      setEpisode(targetEpisode);
+
+      let playable: StreamMovie = base;
+      const mediaType: "movie" | "tv" | null =
+        base.media_type === "movie" || base.media_type === "tv"
+          ? base.media_type
+          : null;
+      if (mediaType && /^\d+$/.test(base.id)) {
+        try {
+          const source = await getStreamSource({
+            tmdbId: base.id,
+            mediaType,
+            season: mediaType === "tv" ? targetSeason : undefined,
+            episode: mediaType === "tv" ? targetEpisode : undefined,
+          });
+          playable = {
+            ...base,
+            stream_url: source.url,
+            mirrors: source.mirrors,
+            season: targetSeason,
+            episode: targetEpisode,
+          };
+        } catch (error) {
+          console.warn(
+            `[Details] get-stream failed for "${base.title}" (S${targetSeason}E${targetEpisode}), using resolved source`,
+            error
+          );
+          if (mediaType === "tv") {
+            const stream = await resolveStream(movie.title, movie.year, {
+              season: targetSeason,
+              episode: targetEpisode,
+            });
+            playable = {
+              ...stream.stream,
+              season: targetSeason,
+              episode: targetEpisode,
+            };
+          }
+        }
+      }
+
+      setResolved({ stream: playable, exact: true });
+      prefetchForOpen(playable);
       setPlayerOpen(true);
     } catch (error) {
       const isNotFound = error instanceof StreamNotFoundError;
@@ -165,31 +219,46 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
     }
   };
 
+  const play = async () => {
+    if (resolving) return;
+    if (!attemptPlay()) return;
+    if (resolved) {
+      const isSeries = resolved.stream.media_type === "tv";
+      await resolveAndPlay(isSeries ? season : 1, isSeries ? episode : 1);
+      return;
+    }
+    await resolveAndPlay(1, 1);
+  };
+
+  const showMainPlayButton = !resolved?.stream.media_type || resolved.stream.media_type !== "tv";
+
+  const playEpisode = (targetSeason: number, targetEpisode: number) => {
+    void resolveAndPlay(targetSeason, targetEpisode);
+  };
+
   const pickSuggestion = (item: StreamMovie) => {
     if (!attemptPlay()) return;
     cancelInFlightPrefetch();
     prefetchForOpen(item);
     setResolved({ stream: item, exact: true });
+    setSeason(1);
+    setEpisode(1);
     setPlayerOpen(true);
     setPlayError(null);
   };
 
-  const replay = () => {
-    if (!resolved) return;
-    if (!attemptPlay()) return;
-    cancelInFlightPrefetch();
-    prefetchForOpen(resolved.stream);
-    setPlayerOpen(true);
-  };
-
   // Pre-cache engine: the moment the sheet opens, silently resolve the title
-  // and warm the leading bytes so Play starts instantly. Failures are quiet —
-  // the Play button re-resolves and surfaces the real state.
   const opened = useRef(false);
   useEffect(() => {
     if (opened.current) return;
     opened.current = true;
     let disposed = false;
+    
+    // Mark details as loaded after a brief moment for smooth UX
+    const loadTimer = setTimeout(() => {
+      if (!disposed) setDetailsLoaded(true);
+    }, 100);
+
     void (async () => {
       try {
         const stream = await resolveStream(movie.title, movie.year);
@@ -205,8 +274,53 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
     })();
     return () => {
       disposed = true;
+      clearTimeout(loadTimer);
     };
   }, [movie.id, movie.title, movie.year]);
+
+  // Skeleton placeholder for metadata
+  const SkeletonMetadata = () => (
+    <div className="space-y-3 animate-pulse">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="h-4 w-16 bg-white/10 rounded" />
+        <div className="h-4 w-4 bg-white/10 rounded-full" />
+        <div className="h-4 w-24 bg-white/10 rounded" />
+        <div className="h-4 w-20 bg-white/10 rounded" />
+      </div>
+      <div className="h-4 w-full bg-white/10 rounded" />
+      <div className="h-4 w-3/4 bg-white/10 rounded" />
+      <div className="h-4 w-1/2 bg-white/10 rounded" />
+    </div>
+  );
+
+  // Skeleton placeholder for action buttons
+  const SkeletonActions = () => (
+    <div className="flex flex-wrap gap-2 animate-pulse">
+      <div className="h-10 w-28 bg-white/10 rounded-md" />
+      <div className="h-10 w-32 bg-white/10 rounded-md border border-white/10" />
+    </div>
+  );
+
+  // Skeleton placeholder for EpisodeMatrix
+  const SkeletonEpisodes = () => (
+    <section className="mt-8 rounded-xl border border-white/10 bg-[#121212] p-5 animate-pulse">
+      <div className="flex items-center justify-between">
+        <div className="h-4 w-32 bg-white/10 rounded" />
+      </div>
+      <div className="mt-3 space-y-2">
+        {[1, 2, 3].map(i => (
+          <div key={i} className="flex items-center gap-3 border-b border-white/5 px-4 py-3">
+            <div className="h-8 w-8 rounded-full border border-white/10" />
+            <div className="flex-1">
+              <div className="h-4 w-3/4 bg-white/10 rounded" />
+              <div className="mt-1 h-3 w-24 bg-white/10 rounded" />
+            </div>
+            <div className="h-9 w-9 rounded-full bg-white/10" />
+          </div>
+        ))}
+      </div>
+    </section>
+  );
 
   return (
     <div
@@ -225,7 +339,7 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
             <TrailerEmbed provider={trailer.provider} id={trailer.id} />
           ) : movie.backdrop ? (
             <img
-              src={movie.backdrop}
+              src={getImageUrl(movie.backdrop, "original")}
               alt=""
               className="h-full w-full object-cover"
             />
@@ -244,49 +358,65 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
           </h2>
         </div>
         <div className="p-5">
-          <div className="flex flex-wrap items-center gap-2 text-xs text-[#aaa9ae]">
-            {movie.year && <span>{movie.year}</span>}
-            {movie.runtime && (
-              <>
+          {detailsLoaded ? (
+            <>
+              <div className="flex flex-wrap items-center gap-2 text-xs text-[#aaa9ae]">
+                {movie.year && <span>{movie.year}</span>}
+                {movie.runtime && (
+                  <>
+                    <span>·</span>
+                    <span>{movie.runtime}</span>
+                  </>
+                )}
                 <span>·</span>
-                <span>{movie.runtime}</span>
-              </>
+                <span>{movie.genre.join(" · ")}</span>
+                {movie.score !== null && (
+                  <span className="flex items-center gap-1 text-[#d7d7d3]">
+                    <Star className="h-3.5 w-3.5 fill-current" />
+                    {movie.score}
+                  </span>
+                )}
+              </div>
+              <p className="mt-4 text-sm leading-6 text-[#c5c5c1]">
+                {movie.synopsis}
+              </p>
+            </>
+          ) : (
+            <SkeletonMetadata />
+          )}
+          
+          <div className="mt-5 flex flex-wrap items-center gap-3">
+            {showMainPlayButton && (
+              <button
+                onClick={play}
+                disabled={resolving}
+                className="flex-1 sm:flex-none flex items-center justify-center gap-2 rounded-md bg-[#d7d7d3] px-6 py-3 text-sm font-black text-[#0b0b0e] hover:bg-white disabled:opacity-60 transition-all active:scale-[0.98] shadow-lg shadow-[#d7d7d3]/20"
+              >
+                <Play className="h-5 w-5 fill-current" />
+                {resolving ? "Loading Stream…" : "Play"}
+              </button>
             )}
-            <span>·</span>
-            <span>{movie.genre.join(" · ")}</span>
-            {movie.score !== null && (
-              <span className="flex items-center gap-1 text-[#d7d7d3]">
-                <Star className="h-3.5 w-3.5 fill-current" />
-                {movie.score}
-              </span>
-            )}
-          </div>
-          <p className="mt-4 text-sm leading-6 text-[#c5c5c1]">
-            {movie.synopsis}
-          </p>
-          <div className="mt-5 flex flex-wrap gap-2">
-            <button
-              onClick={play}
-              disabled={resolving}
-              className="flex items-center gap-2 rounded-md bg-[#d7d7d3] px-4 py-2.5 text-xs font-bold text-[#0b0b0e] hover:bg-white disabled:opacity-60"
-            >
-              <Play className="h-3.5 w-3.5 fill-current" />
-              {resolving ? "Searching for a stream…" : "Play"}
-            </button>
             <button
               onClick={onSave}
-              className="flex items-center gap-2 rounded-md border border-white/15 px-4 py-2.5 text-xs font-semibold hover:bg-white/10"
+              className="flex items-center gap-2 rounded-md border border-white/15 bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/10 transition-colors"
             >
               {saved ? (
-                <Check className="h-3.5 w-3.5" />
+                <Check className="h-4 w-4" />
               ) : (
-                <Bookmark className="h-3.5 w-3.5" />
-              )}{" "}
-              {saved ? "In My List" : "Add to My List"}
+                <Bookmark className="h-4 w-4" />
+              )}
+              <span>{saved ? "In My List" : "Add to My List"}</span>
+            </button>
+            <button
+              className="flex items-center gap-2 rounded-md border border-white/15 bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/10 transition-colors"
+            >
+              <MessageSquare className="h-4 w-4" />
+              <span>Comments</span>
             </button>
           </div>
-          {canRate && (
-            <div className="mt-3 flex items-center gap-2">
+          
+          {canRate && detailsLoaded && (
+            <div className="mt-4 flex items-center gap-2">
               <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-white/40">
                 Your rating
               </span>
@@ -318,8 +448,9 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
               )}
             </div>
           )}
-          {playError && (
-            <div className="mt-3 rounded-md border border-white/10 bg-white/[0.03] px-3 py-2.5 text-xs leading-5 text-[#c5c5c1]">
+          
+          {playError && detailsLoaded && (
+            <div className="mt-4 rounded-md border border-white/10 bg-white/[0.03] px-3 py-2.5 text-xs leading-5 text-[#c5c5c1]">
               <p>{playError}</p>
               {suggestionsLoading && (
                 <p className="mt-2 text-[#8E8E93]">
@@ -350,16 +481,23 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
               )}
             </div>
           )}
-          {resolved && !resolved.exact && (
-            <p className="mt-3 rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-xs leading-5 text-[#c5c5c1]">
+          
+          {resolved && !resolved.exact && detailsLoaded && (
+            <p className="mt-4 rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-xs leading-5 text-[#c5c5c1]">
               Closest matching archive film:{" "}
               <span className="font-semibold text-white">
                 {resolved.stream.title}
               </span>
             </p>
           )}
-          {resolved && (
-            <EpisodeMatrix movie={resolved.stream} onPlay={replay} />
+          
+          {resolved && resolved.stream.media_type === "tv" ? (
+            <EpisodeMatrix
+              movie={resolved.stream}
+              onPlay={ep => playEpisode(ep.season, ep.number)}
+            />
+          ) : detailsLoaded ? null : (
+            <SkeletonEpisodes />
           )}
         </div>
       </div>

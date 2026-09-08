@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Movie } from "@/components/movies/types";
 import type { View } from "@/components/layout/navigation";
-import { trpc } from "@/lib/trpc";
+import { searchCatalog, fetchTrending, fetchPopular, type StreamMovie } from "@/services/api";
 import {
   savedListIds,
   subscribeList,
@@ -34,6 +34,7 @@ interface UseCatalog {
   savedIds: number[];
   configured: boolean;
   loading: boolean;
+  searchLoading: boolean;
   filtered: Movie[];
   rows: CatalogRows[];
   setView: (view: View) => void;
@@ -43,16 +44,50 @@ interface UseCatalog {
   toggleSave: (movie: Movie) => void;
 }
 
-/**
- * Central owner of the catalog page state: the active view, the live search
- * term, the genre filter, and the persisted, tagged "My List" selection
- * (`services/lists`), which the profile page curates with Plan/Favorites/
- * Watched tags.
- *
- * Prefer the server-driven "popular" query when there is no search term, and
- * the server-driven "search" query otherwise. All shelf rows are derived with
- * `useMemo` so they only recompute when their inputs change.
- */
+/** Stable numeric fallback for non-TMDB (archive.org) ids in the backend search. */
+function stableId(id: string): number {
+  const parsed = Number(id);
+  if (Number.isFinite(parsed)) return parsed;
+  let hash = 2166136261;
+  for (let i = 0; i < id.length; i += 1) {
+    hash ^= id.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return Math.abs(hash) || 1;
+}
+
+/** Map a backend `StreamMovie` (playable, embed-ready) to a catalog `Movie`. */
+function toCatalogMovie(item: StreamMovie): Movie {
+  const mediaType: "movie" | "tv" =
+    item.media_type === "tv" ? "tv" : "movie";
+  const year = typeof item.year === "number" ? item.year : Number(item.year) || null;
+  return {
+    id: stableId(item.id),
+    providerId: item.id,
+    title: item.title,
+    year: Number.isFinite(year) ? year : null,
+    runtime: "",
+    rating: "Rating unavailable",
+    score: null,
+    genre: [mediaType === "tv" ? "Series" : "Movie"],
+    poster: item.poster_url || null,
+    backdrop: item.backdrop_url || null,
+    synopsis: "Playable right now — pick it to start watching.",
+    director: null,
+    source: "tmdb",
+    mediaType,
+  };
+}
+
+const SEARCH_DEBOUNCE_MS = 300;
+
+interface SearchCacheEntry {
+  results: StreamMovie[];
+  timestamp: number;
+}
+
+const SEARCH_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
 export function useCatalog(): UseCatalog {
   const [view, setView] = useState<View>("home");
   const [search, setSearch] = useState("");
@@ -61,58 +96,129 @@ export function useCatalog(): UseCatalog {
 
   useEffect(() => subscribeList(() => setSavedIds(savedListIds())), []);
 
-  const status = trpc.catalog.status.useQuery();
-  const configured = Boolean(status.data?.configured);
+  const [catalogItems, setCatalogItems] = useState<StreamMovie[]>([]);
+  const [searchResults, setSearchResults] = useState<StreamMovie[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [searchLoading, setSearchLoading] = useState(false);
 
-  const statusWarned = useRef(false);
-  if (!configured && !status.isLoading && !statusWarned.current) {
-    statusWarned.current = true;
-    console.error(
-      "[Catalog] metadata provider not configured — set TMDB_API_KEY on the server."
-    );
-  }
+  // Search cache and in-flight request tracking
+  const searchCacheRef = useRef<Map<string, SearchCacheEntry>>(new Map());
+  const inflightSearchRef = useRef<AbortController | null>(null);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const popular = trpc.catalog.popular.useQuery(
-    { limit: 40 },
-    { enabled: configured, retry: false }
-  );
-  const results = trpc.catalog.search.useQuery(
-    { query: search.trim(), limit: 40 },
-    { enabled: configured && search.trim().length > 0, retry: false }
-  );
+  // Load initial catalog from trending + popular endpoints for diversity
+  useEffect(() => {
+    async function fetchCatalog() {
+      try {
+        setLoading(true);
+        // Fetch trending (movies + TV) and popular movies for a diverse mix
+        const [trending, popular] = await Promise.all([
+          fetchTrending({ time_window: "week", media_type: "all" }),
+          fetchPopular({ media_type: "movie" }),
+        ]);
 
-  const source = search.trim() ? (results.data ?? []) : (popular.data ?? []);
+        // Combine and deduplicate by ID
+        const combined = [...trending, ...popular];
+        const seen = new Set<string>();
+        const unique = combined.filter(item => {
+          if (seen.has(item.id)) return false;
+          seen.add(item.id);
+          return true;
+        });
 
-  const loading = useMemo(
-    () =>
-      status.isLoading ||
-      (configured && popular.isLoading && !search.trim()) ||
-      (configured && results.isLoading && Boolean(search.trim())),
-    [status.isLoading, configured, popular.isLoading, results.isLoading, search]
-  );
+        // Shuffle for variety on each load
+        for (let i = unique.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [unique[i], unique[j]] = [unique[j], unique[i]];
+        }
 
-  /** Movies from `source` narrowed down by the selected genre chip. */
-  const filtered = useMemo(
-    () =>
-      genre === "All"
-        ? source
-        : source.filter(movie => movie.genre.includes(genre)),
-    [genre, source]
-  );
+        setCatalogItems(unique.slice(0, 40));
+      } catch (err) {
+        console.error("Failed to fetch catalog from backend:", err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchCatalog();
+  }, []);
 
-  /**
-   * Compose the shelf rows for the active view. The home view reuses the same
-   * result set under different sortings; the "my-list" view reflects the
-   * persisted tagged list.
-   */
+  // Handle live searches against Flask backend with debounce and caching
+  useEffect(() => {
+    const query = search.trim();
+    
+    if (!query) {
+      setSearchResults([]);
+      setSearchLoading(false);
+      return;
+    }
+
+    // Clear any pending debounce timer
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+
+    // Check cache first
+    const cached = searchCacheRef.current.get(query);
+    if (cached && Date.now() - cached.timestamp < SEARCH_CACHE_TTL_MS) {
+      setSearchResults(cached.results);
+      setSearchLoading(false);
+      return;
+    }
+
+    // Set loading state immediately when we have a query and no cached result
+    setSearchLoading(true);
+
+    debounceTimerRef.current = setTimeout(() => {
+      // Cancel any in-flight request
+      if (inflightSearchRef.current) {
+        inflightSearchRef.current.abort();
+      }
+
+      const controller = new AbortController();
+      inflightSearchRef.current = controller;
+
+      searchCatalog(query)
+        .then(results => {
+          if (!controller.signal.aborted) {
+            searchCacheRef.current.set(query, { results, timestamp: Date.now() });
+            setSearchResults(results);
+            setSearchLoading(false);
+          }
+        })
+        .catch(err => {
+          if (!controller.signal.aborted && err.name !== "AbortError") {
+            console.error("Search failed:", err);
+            setSearchResults([]);
+            setSearchLoading(false);
+          }
+        });
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+      if (inflightSearchRef.current) {
+        inflightSearchRef.current.abort();
+      }
+    };
+  }, [search]);
+
+  const searching = search.trim().length > 0;
+  const activeStreamMovies = searching ? searchResults : catalogItems;
+  const movies = useMemo(() => activeStreamMovies.map(toCatalogMovie), [activeStreamMovies]);
+
+  const filtered = useMemo(() => {
+    if (searching) return movies;
+    return genre === "All"
+      ? movies
+      : movies.filter(movie => movie.genre.includes(genre));
+  }, [genre, movies, searching]);
+
   const rows: CatalogRows[] = useMemo(() => {
     const byYearDesc = [...filtered].sort(
       (a, b) => (b.year ?? 0) - (a.year ?? 0)
     );
-    const byScoreDesc = [...filtered].sort(
-      (a, b) => (b.score ?? 0) - (a.score ?? 0)
-    );
-
     const cap = 20;
 
     switch (view) {
@@ -120,7 +226,7 @@ export function useCatalog(): UseCatalog {
         return [{ title: "Recently Added", items: byYearDesc.slice(0, cap) }];
       case "popular":
         return [
-          { title: "Popular on FreeStream", items: byScoreDesc.slice(0, cap) },
+          { title: "Popular on FreeStream", items: filtered.slice(0, cap) },
         ];
       case "my-list":
         return [
@@ -132,21 +238,17 @@ export function useCatalog(): UseCatalog {
       default:
         return [
           { title: "Trending Now", items: filtered.slice(0, cap) },
-          { title: "Popular on FreeStream", items: byScoreDesc.slice(0, cap) },
           { title: "Recently Added", items: byYearDesc.slice(0, cap) },
-          { title: "Top Rated", items: byScoreDesc.slice(0, cap) },
         ];
     }
   }, [view, filtered, savedIds]);
 
-  /** Navigate to a view and reset the search + genre so the catalogue is fresh. */
   const setSection = useCallback((next: View) => {
     setView(next);
     setSearch("");
     setGenre("All");
   }, []);
 
-  /** Toggle a movie in the persisted, tagged "My List" selection. */
   const toggleSave = useCallback((movie: Movie) => {
     toggleListSave(movie);
     setSavedIds(savedListIds());
@@ -157,8 +259,9 @@ export function useCatalog(): UseCatalog {
     search,
     genre,
     savedIds,
-    configured,
+    configured: true,
     loading,
+    searchLoading,
     filtered,
     rows,
     setView,

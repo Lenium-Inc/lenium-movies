@@ -5,17 +5,24 @@ import {
   ChevronLeft,
   ChevronRight,
   CirclePlay,
+  Play,
   Star,
+  Users,
+  Clock,
+  Award,
   type LucideIcon,
 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { Movie } from "./types";
+
+const TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p";
 
 interface SpotlightProps {
   /** Rotation pool. Filter changes that alter this list are picked up instantly. */
   items: readonly Movie[];
   savedIds?: ReadonlyArray<Movie["id"]>;
   onDetails?: (movie: Movie) => void;
+  onPlay?: (movie: Movie) => void;
   onSave?: (movie: Movie) => void;
   /** Seconds per auto-rotation; 0 disables rotation. Defaults to 8. */
   rotateSeconds?: number;
@@ -32,23 +39,56 @@ function chip(primary: boolean): string {
   ].join(" ");
 }
 
-const ActionButton = ({
+function getBackdropUrl(backdrop: string | null | undefined): string | null {
+  if (!backdrop) return null;
+  if (backdrop.startsWith("http")) return backdrop;
+  return `${TMDB_IMAGE_BASE_URL}/original${backdrop}`;
+}
+
+const PrimaryActionButton = ({
   icon: Icon,
   label,
   className,
   onClick,
+  disabled = false,
 }: {
   icon: LucideIcon;
   label: string;
   className: string;
   onClick?: () => void;
+  disabled?: boolean;
 }) => (
   <button
     type="button"
     onClick={onClick}
-    className={`inline-flex items-center gap-2 rounded-full px-6 py-3 text-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white ${className}`}
+    disabled={disabled}
+    className={`inline-flex items-center gap-2 rounded-full px-7 py-3.5 text-sm font-semibold transition-all duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white disabled:opacity-50 disabled:cursor-not-allowed ${className}`}
   >
-    <Icon className="h-4 w-4" />
+    <Icon className="h-5 w-5" />
+    {label}
+  </button>
+);
+
+const SecondaryActionButton = ({
+  icon: Icon,
+  label,
+  className,
+  onClick,
+  disabled = false,
+}: {
+  icon: LucideIcon;
+  label: string;
+  className: string;
+  onClick?: () => void;
+  disabled?: boolean;
+}) => (
+  <button
+    type="button"
+    onClick={onClick}
+    disabled={disabled}
+    className={`inline-flex items-center gap-2 rounded-full px-7 py-3.5 text-sm font-semibold transition-all duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white disabled:opacity-50 disabled:cursor-not-allowed ${className}`}
+  >
+    <Icon className="h-5 w-5" />
     {label}
   </button>
 );
@@ -69,6 +109,7 @@ export function Spotlight({
   items,
   savedIds = [],
   onDetails,
+  onPlay,
   onSave,
   rotateSeconds = 8,
 }: SpotlightProps) {
@@ -94,8 +135,7 @@ export function Spotlight({
   const current: Movie | undefined = count > 0 ? items[index] : undefined;
   const saved = current ? savedIds.includes(current.id) : false;
 
-  const backdrop =
-    current?.backdrop?.replace("/w780/", "/w1280/") ?? current?.backdrop;
+  const backdropUrl = getBackdropUrl(current?.backdrop);
 
   return (
     <section
@@ -116,9 +156,9 @@ export function Spotlight({
               exit={{ opacity: 0, scale: 1.02 }}
               transition={{ duration: 0.7, ease: EASE }}
             >
-              {backdrop ? (
+              {backdropUrl ? (
                 <img
-                  src={backdrop}
+                  src={backdropUrl}
                   alt=""
                   loading="eager"
                   fetchPriority="high"
@@ -145,27 +185,27 @@ export function Spotlight({
       />
       <div
         aria-hidden
-        className="absolute inset-x-0 bottom-0 h-44 bg-[linear-gradient(180deg,transparent_0%,#050505_92%)]"
+        className="absolute inset-x-0 bottom-0 h-48 bg-[linear-gradient(180deg,transparent_0%,#050505_92%)]"
       />
 
-      {/* Cross-fading content block */}
-      <div className="absolute inset-0 z-10 flex items-end px-5 pb-14 sm:px-8 lg:px-14">
-        <div className="max-w-2xl">
+      {/* Cross-fading content block - positioned higher for better visibility */}
+      <div className="absolute inset-0 z-10 flex items-center px-5 pb-16 sm:px-8 lg:px-14">
+        <div className="max-w-2xl w-full">
           {current ? (
             <AnimatePresence initial={false} mode="popLayout">
               <motion.div
                 key={current.id}
-                initial={{ opacity: 0, y: 16 }}
+                initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.45, ease: EASE }}
+                exit={{ opacity: 0, y: -12 }}
+                transition={{ duration: 0.5, ease: EASE }}
               >
-                <p className="flex items-center gap-2.5 text-[11px] font-bold uppercase tracking-[0.3em] text-white/60">
+                <p className="flex items-center gap-2.5 text-[11px] font-bold uppercase tracking-[0.3em] text-white/70 mb-2">
                   <span className="h-1.5 w-1.5 rounded-full bg-white shadow-[0_0_10px_rgba(255,255,255,0.9)]" />
                   FreeStream · Now streaming
                 </p>
 
-                <h1 className="mt-4 text-4xl font-black leading-[0.95] tracking-[-0.03em] text-[#FFFFFF] drop-shadow-[0_2px_20px_rgba(0,0,0,0.7)] sm:text-5xl lg:text-6xl">
+                <h1 className="mt-2 text-4xl font-black leading-[0.95] tracking-[-0.03em] text-[#FFFFFF] drop-shadow-[0_4px_24px_rgba(0,0,0,0.8)] sm:text-5xl lg:text-6xl xl:text-7xl">
                   {current.title}
                 </h1>
 
@@ -200,23 +240,55 @@ export function Spotlight({
                 </div>
 
                 {current.synopsis ? (
-                  <p className="mt-4 line-clamp-3 max-w-xl text-sm leading-6 text-[#D6D6DA]">
+                  <p className="mt-4 line-clamp-4 max-w-2xl text-base leading-7 text-zinc-300">
                     {current.synopsis}
                   </p>
                 ) : null}
 
-                <div className="mt-6 flex flex-wrap items-center gap-3">
-                  <ActionButton
-                    icon={CirclePlay}
-                    label="Watch"
-                    onClick={() => onDetails?.(current)}
-                    className="bg-white font-black text-black ring-1 ring-inset ring-white/40 shadow-[0_12px_32px_rgba(0,0,0,0.5)] hover:bg-white/90 active:scale-[0.98]"
+                {/* Expanded metadata row - cast, rating, genres */}
+                <div className="mt-6 flex flex-wrap items-center gap-4 text-sm text-zinc-400">
+                  {current.vote_average && current.vote_average > 0 && (
+                    <span className="flex items-center gap-1.5 bg-white/5 px-3 py-1.5 rounded-full backdrop-blur-sm">
+                      <Award className="h-4 w-4 text-amber-400" />
+                      <span className="font-semibold text-white">{current.vote_average.toFixed(1)}</span>
+                      <span className="text-zinc-500">/10</span>
+                    </span>
+                  )}
+                  {current.runtime && (
+                    <span className="flex items-center gap-1.5 bg-white/5 px-3 py-1.5 rounded-full backdrop-blur-sm">
+                      <Clock className="h-4 w-4" />
+                      <span className="font-medium text-zinc-300">{current.runtime}</span>
+                    </span>
+                  )}
+                  {(current as any).genres?.length && (
+                    <span className="flex items-center gap-1.5 bg-white/5 px-3 py-1.5 rounded-full backdrop-blur-sm">
+                      <span className="text-[10px] font-medium text-zinc-500 uppercase">Genres:</span>
+                      <span className="font-medium text-zinc-300">{(current as any).genres.slice(0, 4).join(", ")}</span>
+                    </span>
+                  )}
+                </div>
+
+                {/* Cast/Director info if available */}
+                {(current as any).director && (
+                  <div className="mt-4 flex items-center gap-2 text-sm text-zinc-400">
+                    <Users className="h-4 w-4" />
+                    <span className="text-zinc-500">Director:</span>
+                    <span className="font-medium text-zinc-300">{(current as any).director}</span>
+                  </div>
+                )}
+
+                <div className="mt-8 flex flex-wrap items-center gap-4">
+                  <PrimaryActionButton
+                    icon={Play}
+                    label="Play"
+                    onClick={() => onPlay?.(current)}
+                    className="bg-white font-black text-black ring-1 ring-inset ring-white/40 shadow-[0_16px_40px_rgba(0,0,0,0.6)] hover:bg-white/95 hover:shadow-[0_20px_48px_rgba(0,0,0,0.7)] active:scale-[0.97] active:shadow-[0_8px_24px_rgba(0,0,0,0.5)]"
                   />
-                  <ActionButton
+                  <SecondaryActionButton
                     icon={saved ? Check : Bookmark}
                     label={saved ? "In My List" : "My List"}
                     onClick={() => onSave?.(current)}
-                    className="border border-white/15 bg-white/[0.07] font-semibold text-white backdrop-blur-md hover:border-white/30 hover:bg-white/[0.14] active:scale-[0.98]"
+                    className="border-2 border-white/20 bg-black/30 text-white backdrop-blur-md hover:border-white/40 hover:bg-white/10 hover:text-white active:scale-[0.97] active:border-white/50"
                   />
                 </div>
               </motion.div>

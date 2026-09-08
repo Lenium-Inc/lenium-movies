@@ -14,12 +14,17 @@ export type MetadataMovie = {
   synopsis: string;
   director: string | null;
   source: "tmdb";
+  /** Whether the entry is a feature film or a TV series. */
+  mediaType: "movie" | "tv";
 };
 
 type TmdbMovie = {
   id: number;
+  media_type?: string;
   title?: string;
+  name?: string;
   release_date?: string;
+  first_air_date?: string;
   vote_average?: number;
   overview?: string;
   poster_path?: string | null;
@@ -71,9 +76,9 @@ function imageUrl(path: string | null | undefined, size: "w342" | "w780") {
 }
 
 function normalizeMovie(movie: TmdbMovie): MetadataMovie {
-  const year = movie.release_date
-    ? Number(movie.release_date.slice(0, 4))
-    : null;
+  const isTv = movie.media_type === "tv";
+  const date = isTv ? movie.first_air_date : movie.release_date;
+  const year = date ? Number(date.slice(0, 4)) : null;
   const genres =
     movie.genres?.map(genre => genre.name) ??
     movie.genre_ids?.map(id => genreNames[id]).filter(Boolean) ??
@@ -81,7 +86,7 @@ function normalizeMovie(movie: TmdbMovie): MetadataMovie {
   return {
     id: movie.id,
     providerId: String(movie.id),
-    title: movie.title?.trim() || "Untitled",
+    title: (movie.title ?? movie.name)?.trim() || "Untitled",
     year: Number.isFinite(year) ? year : null,
     runtime: movie.runtime
       ? `${Math.floor(movie.runtime / 60)}h ${movie.runtime % 60}m`
@@ -97,6 +102,7 @@ function normalizeMovie(movie: TmdbMovie): MetadataMovie {
     synopsis: movie.overview?.trim() || "Synopsis unavailable.",
     director: null,
     source: "tmdb",
+    mediaType: isTv ? "tv" : "movie",
   };
 }
 
@@ -168,26 +174,46 @@ export async function getPopularMovies(limit = 20) {
 }
 
 /**
- * Search TMDB for movies matching `query` and normalize the results.
+ * Search TMDB and normalize the results.
  *
- * The search hits the dedicated `/search/movie` discovery-adjacent endpoint and
- * passes the raw query to `URLSearchParams` for correct encoding. An empty or
- * whitespace-only query returns an empty list rather than hitting the API.
+ * By default the search spans both movies and TV via `/search/multi` (results
+ * carry a `media_type` and are normalized accordingly — `name`/`first_air_date`
+ * map to `title`/`release_date` for TV entries). Pass `type: "movie"` or
+ * `type: "tv"` to target a single media type's dedicated search endpoint.
  *
  * @param query - Raw user search string. Trimmed and URL-encoded internally.
+ * @param type - Which media types to match: `movie`, `tv`, or `multi`.
  * @param limit - Maximum number of results to return (defaults to 20).
- * @returns Normalized movies, or an empty array when there are no matches.
+ * @returns Normalized movies/series, or an empty array when there are no matches.
  */
-export async function searchMovies(query: string, limit = 20) {
+export async function searchMovies(
+  query: string,
+  type: "movie" | "tv" | "multi" = "multi",
+  limit = 20
+) {
   const trimmed = query.trim();
   if (!trimmed) return [];
-  return loadCached(`search:${trimmed}:${limit}`, async () => {
-    const payload = await tmdbFetch<TmdbResponse>("/search/movie", {
+  return loadCached(`search:${type}:${trimmed}:${limit}`, async () => {
+    const endpoint =
+      type === "movie"
+        ? "/search/movie"
+        : type === "tv"
+          ? "/search/tv"
+          : "/search/multi";
+    const payload = await tmdbFetch<TmdbResponse>(endpoint, {
       query: trimmed,
       page: "1",
       include_adult: "false",
     });
-    return (payload.results ?? []).slice(0, limit).map(normalizeMovie);
+    return (payload.results ?? [])
+      .filter(
+        result =>
+          !result.media_type ||
+          result.media_type === "movie" ||
+          result.media_type === "tv"
+      )
+      .slice(0, limit)
+      .map(normalizeMovie);
   });
 }
 

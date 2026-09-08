@@ -36,10 +36,13 @@ export const appRouter = router({
       .input(
         z.object({
           query: z.string().trim().min(1).max(120),
+          type: z.enum(["movie", "tv", "multi"]).default("multi"),
           limit: z.number().int().min(1).max(40).default(20),
         })
       )
-      .query(({ input }) => searchMovies(input.query, input.limit)),
+      .query(({ input }) =>
+        searchMovies(input.query, input.type, input.limit)
+      ),
     movieById: publicProcedure
       .input(z.object({ id: z.number().int().positive() }))
       .query(({ input }) => getMovieById(input.id)),

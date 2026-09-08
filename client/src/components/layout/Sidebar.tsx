@@ -1,12 +1,15 @@
-import { X } from "lucide-react";
+import { X, ChevronDown, ChevronUp, Film, ChevronLeft, ChevronRight } from "lucide-react";
 import { Link } from "wouter";
-import { navItems, type NavItem, type View } from "./navigation";
+import { useState } from "react";
+import { navItems, type NavItem, type View, genreFilterOptions } from "./navigation";
 
 interface SidebarProps {
   view: View;
   onNavigate: (view: View) => void;
   open: boolean;
   onClose: () => void;
+  activeGenre: string;
+  onGenreChange: (genre: string) => void;
 }
 
 function RailButton({
@@ -62,36 +65,104 @@ function RailButton({
 /**
  * Navigation.
  *
- * On desktop this is a floating, ultra-slim glassmorphic dock — a translucent
- * pill (`backdrop-blur-[16px]`) vertically centered on the left edge of the
- * viewport, with generous spacing, micro tooltip labels on hover, and a soft
- * glow on the active destination. On mobile the same items render inside a
- * slide-in drawer that is toggled from the header.
- *
- * The brand lives in the pinned top bar (GlassHeader), so the dock carries no
- * duplicate logo.
+ * Collapsible sidebar that defaults to closed (icon-only rail).
+ * Expands on hover or click to show labels and genre filters.
+ * Non-intrusive design that doesn't crowd content.
  */
-export function Sidebar({ view, onNavigate, open, onClose }: SidebarProps) {
+export function Sidebar({ view, onNavigate, open, onClose, activeGenre, onGenreChange }: SidebarProps) {
   const navigate = (next: View) => {
     onNavigate(next);
     onClose();
   };
 
+  const [expanded, setExpanded] = useState(false);
+  const [genreExpanded, setGenreExpanded] = useState(false);
+
   return (
     <>
-      {/* Floating glass dock — desktop only */}
+      {/* Collapsible sidebar rail — desktop only */}
       <aside
-        className="fixed left-4 top-1/2 z-40 hidden -translate-y-1/2 flex-col items-center gap-1.5 rounded-2xl border border-white/10 bg-white/[0.05] px-2.5 py-7 shadow-[0_16px_48px_rgba(0,0,0,0.55)] backdrop-blur-[16px] lg:flex"
+        className={`fixed left-4 top-1/2 z-40 -translate-y-1/2 flex-col items-center gap-1.5 rounded-2xl border border-white/10 bg-white/[0.05] px-2.5 py-4 shadow-[0_16px_48px_rgba(0,0,0,0.55)] backdrop-blur-[16px] lg:flex transition-all duration-300 ease-out ${
+          expanded ? "w-56" : "w-14"
+        }`}
         aria-label="Primary navigation"
+        onMouseEnter={() => setExpanded(true)}
+        onMouseLeave={() => setExpanded(false)}
       >
-        {navItems.map(item => (
-          <RailButton
-            key={item.id}
-            item={item}
-            active={view === item.id}
-            onClick={() => navigate(item.id)}
-          />
-        ))}
+        {/* Nav items */}
+        <div className="flex flex-col items-center gap-1.5 w-full">
+          {navItems.map(item => (
+            <RailButton
+              key={item.id}
+              item={item}
+              active={view === item.id}
+              onClick={() => navigate(item.id)}
+            />
+          ))}
+        </div>
+
+        {/* Genre Filters Section - only visible when expanded */}
+        {expanded && (
+          <div className="w-full mt-6 pt-6 border-t border-white/10 animate-in slide-in-from-left-2 duration-200">
+            <button
+              type="button"
+              onClick={() => setGenreExpanded(!genreExpanded)}
+              className="flex w-full items-center justify-between px-2 py-2 text-left text-[10px] font-bold uppercase tracking-[0.18em] text-[#8b8b90] transition hover:text-white"
+              aria-expanded={genreExpanded}
+              aria-controls="sidebar-genres"
+            >
+              <span className="flex items-center gap-2">
+                <Film className="h-3.5 w-3.5" />
+                Genres
+              </span>
+              {genreExpanded ? (
+                <ChevronUp className="h-3.5 w-3.5 transition-transform" />
+              ) : (
+                <ChevronDown className="h-3.5 w-3.5 transition-transform" />
+              )}
+            </button>
+            {genreExpanded && (
+              <div id="sidebar-genres" className="mt-2 flex flex-col gap-1 animate-in slide-in-from-top-2 duration-150">
+                {genreFilterOptions.map(genre => (
+                  <button
+                    key={genre}
+                    onClick={() => onGenreChange(genre)}
+                    className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium transition ${
+                      activeGenre === genre
+                        ? "bg-white/10 text-white"
+                        : "text-[#8a8a8e] hover:bg-white/[0.05] hover:text-white"
+                    }`}
+                    aria-current={activeGenre === genre ? "page" : undefined}
+                  >
+                    <span className="flex-1 text-left">{genre}</span>
+                    {activeGenre === genre && <Film className="h-3.5 w-3.5 text-[#d7d7d3]" />}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Expand/Collapse toggle button at bottom */}
+        <button
+          type="button"
+          onClick={() => setExpanded(!expanded)}
+          className="mt-auto flex w-full items-center justify-center gap-2 rounded-lg px-2 py-2 text-[10px] font-bold uppercase tracking-[0.18em] text-[#8b8b90] transition hover:text-white hover:bg-white/[0.05]"
+          aria-expanded={expanded}
+          aria-label={expanded ? "Collapse sidebar" : "Expand sidebar"}
+        >
+          {expanded ? (
+            <>
+              <ChevronLeft className="h-3.5 w-3.5" />
+              <span>Collapse</span>
+            </>
+          ) : (
+            <>
+              <ChevronRight className="h-3.5 w-3.5" />
+              <span className="hidden lg:inline">Menu</span>
+            </>
+          )}
+        </button>
       </aside>
 
       {/* Slide-in drawer — mobile only */}
@@ -118,6 +189,49 @@ export function Sidebar({ view, onNavigate, open, onClose }: SidebarProps) {
               onClick={() => navigate(item.id)}
             />
           ))}
+        </div>
+
+        {/* Mobile Genre Filters */}
+        <div className="w-full mt-6 pt-6 border-t border-white/10 px-2">
+          <button
+            type="button"
+            onClick={() => setGenreExpanded(!genreExpanded)}
+            className="flex w-full items-center justify-between px-2 py-2 text-left text-[10px] font-bold uppercase tracking-[0.18em] text-[#8b8b90] transition hover:text-white"
+            aria-expanded={genreExpanded}
+            aria-controls="sidebar-genres-mobile"
+          >
+            <span className="flex items-center gap-2">
+              <Film className="h-3.5 w-3.5" />
+              Genres
+            </span>
+            {genreExpanded ? (
+              <ChevronUp className="h-3.5 w-3.5 transition-transform" />
+            ) : (
+              <ChevronDown className="h-3.5 w-3.5 transition-transform" />
+            )}
+          </button>
+          {genreExpanded && (
+            <div id="sidebar-genres-mobile" className="mt-2 flex flex-col gap-1 animate-in slide-in-from-top-2 duration-150">
+              {genreFilterOptions.map(genre => (
+                <button
+                  key={genre}
+                  onClick={() => {
+                    onGenreChange(genre);
+                    onClose();
+                  }}
+                  className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium transition ${
+                    activeGenre === genre
+                      ? "bg-white/10 text-white"
+                      : "text-[#8a8a8e] hover:bg-white/[0.05] hover:text-white"
+                  }`}
+                  aria-current={activeGenre === genre ? "page" : undefined}
+                >
+                  <span className="flex-1 text-left">{genre}</span>
+                  {activeGenre === genre && <Film className="h-3.5 w-3.5 text-[#d7d7d3]" />}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </aside>
 

@@ -28,6 +28,39 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
   throw new Error(`No available port found starting from ${startPort}`);
 }
 
+// Simple fetch-based proxy for Flask movie backend
+async function proxyToFlask(req: express.Request, res: express.Response) {
+  const flaskUrl = `http://127.0.0.1:5000${req.originalUrl}`;
+  console.log(`[Proxy] ${req.method} ${req.originalUrl} -> ${flaskUrl}`);
+
+  try {
+    const response = await fetch(flaskUrl, {
+      method: req.method,
+      headers: {
+        "Content-Type": "application/json",
+        ...(req.headers["content-length"] && { "Content-Length": req.headers["content-length"] }),
+      },
+      body: req.method !== "GET" && req.method !== "HEAD" ? JSON.stringify(req.body) : undefined,
+    });
+
+    const data = await response.text();
+    
+    // Copy headers properly
+    response.headers.forEach((value, key) => {
+      if (key.toLowerCase() !== "content-encoding" && key.toLowerCase() !== "transfer-encoding") {
+        res.setHeader(key, value);
+      }
+    });
+    
+    res.status(response.status).send(data);
+  } catch (err) {
+    console.error("[Proxy Error]", err);
+    if (!res.headersSent) {
+      res.status(502).json({ error: "Movie backend unreachable" });
+    }
+  }
+}
+
 async function startServer() {
   const app = express();
   const server = createServer(app);
@@ -36,6 +69,7 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   registerStorageProxy(app);
   registerOAuthRoutes(app);
+
   // tRPC API
   app.use(
     "/api/trpc",
@@ -44,6 +78,15 @@ async function startServer() {
       createContext,
     })
   );
+
+  // Proxy /api/* (except /api/trpc) to Flask movie backend on port 5000
+  app.use("/api", (req, res, next) => {
+    if (req.path.startsWith("/trpc")) {
+      return next();
+    }
+    proxyToFlask(req, res);
+  });
+
   // development mode uses Vite, production mode uses static files
   if (process.env.NODE_ENV === "development") {
     await setupVite(app, server);

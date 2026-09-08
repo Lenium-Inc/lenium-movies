@@ -1,4 +1,4 @@
-import { Film, Home as HomeIcon, List, UserRound } from "lucide-react";
+import { Film, Home as HomeIcon, List, UserRound, ChevronDown, ChevronUp } from "lucide-react";
 
 /**
  * Available catalog views. `home` maps to the landing page and every other
@@ -18,7 +18,23 @@ export interface NavItem {
   id: View;
   label: string;
   icon: typeof HomeIcon;
+  /** Optional genre filter for this nav item */
+  genre?: string;
 }
+
+export const genreFilterOptions = [
+  "All",
+  "Action",
+  "Adventure",
+  "Comedy",
+  "Crime",
+  "Drama",
+  "Family",
+  "Mystery",
+  "Romance",
+  "Sci-fi",
+  "Thriller",
+];
 
 /** The only primary destinations rendered in the sidebar. */
 export const navItems: NavItem[] = [

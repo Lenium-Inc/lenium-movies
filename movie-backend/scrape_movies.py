@@ -7,6 +7,12 @@ feed `topics` so the app can serve "featured" (curated), "recent"
 (newest-added), and "popular" (most-downloaded) shelves entirely from
 playable titles.
 
+Every written entry carries a `media_type` ("movie" or "tv") so the client can
+branch movie vs series UI. Archive.org is overwhelmingly a movie container, so
+films default to `media_type: "movie"`; any entry that also carries a
+season/episode manifest (`seasons`/`episodes`) is promoted to "tv" so the
+output JSON is able to hold both media types.
+
 Run (from this directory):
     python scrape_movies.py          # writes movies.json
 
@@ -66,6 +72,25 @@ def _tag_featured(entries: list[dict], rotate: int = 12) -> list[dict]:
     return entries
 
 
+def _tag_media_types(entries: list[dict]) -> list[dict]:
+    """Normalize `media_type` across the output catalog.
+
+    Archive.org containers are movies by default; entries that also expose a
+    season/episode manifest are promoted to "tv" so both media types are
+    represented in `movies.json`. Any entry missing the field gets "movie".
+    """
+    for entry in entries:
+        if entry.get("seasons") and entry.get("episodes_per_season") and (
+            entry["seasons"] > 1 or entry["episodes_per_season"] > 1
+        ):
+            entry["media_type"] = "tv"
+        else:
+            entry.setdefault("media_type", "movie")
+            entry.setdefault("seasons", 1)
+            entry.setdefault("episodes_per_season", 1)
+    return entries
+
+
 def main() -> int:
     lib.log("Discovering the Archive.org feature-film catalog…")
     results = lib.bulk_build(SEARCH_QUERY, rows=SEARCH_ROWS)
@@ -81,6 +106,7 @@ def main() -> int:
         results.extend(feed)
 
     results = _dedupe(results)
+    results = _tag_media_types(results)
     results = _tag_featured(results)
     with open(OUTPUT, "w", encoding="utf-8") as handle:
         json.dump(results, handle, ensure_ascii=False, indent=2)

@@ -344,6 +344,9 @@ def build_entry_by_identifier(
         "stream_url": stream_url,
         "streams": streams,
         "year": year,
+        "media_type": "movie",
+        "seasons": 1,
+        "episodes_per_season": 1,
         "topics": topics or [],
     }
     if subtitles:
@@ -515,6 +518,96 @@ def bulk_build(
             if entry:
                 results.append(entry)
     return results
+
+
+# ---------------------------------------------------------------------------
+# Watch-page / embed resolution – media_type aware payloads
+# ---------------------------------------------------------------------------
+
+VIDSRC_BASE = "https://vidsrc.xyz"
+
+
+def vidsrc_movie_url(tmdb_id) -> str:
+    return f"{VIDSRC_BASE}/embed/movie?tmdb={tmdb_id}"
+
+
+def vidsrc_tv_url(tmdb_id, season: int = 1, episode: int = 1) -> str:
+    return f"{VIDSRC_BASE}/embed/tv?tmdb={tmdb_id}&season={season}&episode={episode}"
+
+
+def parse_watch_url(url: str) -> dict:
+    """Parse a watch-page URL into `{media_type, media_id, season, episode}`.
+
+    Handles both `/watch-movie/{id}` and `/watch-series/{id}` path patterns.
+    Season/episode are pulled from the `season`/`episode` query parameters when
+    a series path is matched (defaulting to 1/1).
+    """
+    parsed = urllib.parse.urlparse(url)
+    parts = [part for part in parsed.path.split("/") if part]
+    media_type = "movie"
+    media_id = None
+    if parts:
+        slug = parts[0].lower()
+        if slug in ("watch-series", "watch-tv", "series", "tv", "show"):
+            media_type = "tv"
+        elif slug in ("watch-movie", "watch-film", "movie", "film"):
+            media_type = "movie"
+        if len(parts) >= 2:
+            media_id = parts[1] or None
+
+    query = urllib.parse.parse_qs(parsed.query)
+    try:
+        season = int(query.get("season", ["1"])[0])
+    except (TypeError, ValueError):
+        season = 1
+    try:
+        episode = int(query.get("episode", ["1"])[0])
+    except (TypeError, ValueError):
+        episode = 1
+
+    return {
+        "media_type": media_type,
+        "media_id": media_id,
+        "season": max(1, season),
+        "episode": max(1, episode),
+    }
+
+
+def build_watch_entry(
+    media_id,
+    media_type: str = "movie",
+    season: int = 1,
+    episode: int = 1,
+    title: str = "Untitled",
+    total_seasons: int = 1,
+    episodes_per_season: int = 12,
+) -> dict:
+    """Build the playable payload for a watch-page id.
+
+    Movies resolve to a VidSrc movie embed; series resolve to a season- and
+    episode-aware TV embed (the requested `season`/`episode` are encoded into
+    the stream URL). `seasons`/`episodes` describe how many rows the client's
+    episode matrix should offer and are used when the source does not publish a
+    full episode manifest.
+
+    The payload shape — `media_type`, `seasons`, `episodes`, `stream_url` — is
+    shared by both media types so the frontend can branch on `media_type`.
+    """
+    normalized_type = media_type if media_type in ("movie", "tv") else "movie"
+    is_tv = normalized_type == "tv"
+    stream_url = (
+        vidsrc_tv_url(media_id, season, episode)
+        if is_tv
+        else vidsrc_movie_url(media_id)
+    )
+    return {
+        "id": str(media_id),
+        "title": title,
+        "stream_url": stream_url,
+        "media_type": normalized_type,
+        "seasons": max(1, int(total_seasons) if is_tv else 1),
+        "episodes_per_season": max(1, int(episodes_per_season) if is_tv else 1),
+    }
 
 
 # ---------------------------------------------------------------------------
