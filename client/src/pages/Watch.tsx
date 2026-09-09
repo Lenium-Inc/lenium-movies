@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useParams } from "wouter";
-import { Bookmark, Check, ChevronDown, ChevronUp, Play, Star, X, MessageSquare, Clock, Tv, Film } from "lucide-react";
+import { Bookmark, Check, ChevronDown, ChevronUp, Play, Star, X, MessageSquare, Clock, Tv, Film, Loader2 } from "lucide-react";
 import { getRating, setRating, subscribeRatings } from "@/services/ratings";
 import {
   fetchTrailer,
@@ -35,34 +35,64 @@ function getImageUrl(path: string, size: string): string {
 
 const RATE_AFTER_SECONDS = 15 * 60;
 
-interface WatchPageProps {
-  movie: Movie;
-  onClose: () => void;
-  onSave: () => void;
-  saved: boolean;
+// Fetch full movie details from TMDB via backend resolve endpoint
+async function fetchMovieDetails(tmdbId: string): Promise<Movie | null> {
+  try {
+    // Use resolve endpoint with the TMDB ID as title to get full metadata
+    const response = await fetch(`/api/movies/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: tmdbId }),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    if (!data.movie) return null;
+    
+    const m = data.movie;
+    const mediaType = m.media_type === "tv" ? "tv" : "movie";
+    const year = m.year ? parseInt(m.year) : null;
+    
+    return {
+      id: parseInt(m.id),
+      providerId: m.id,
+      title: m.title,
+      year,
+      runtime: "",
+      rating: "Rating unavailable",
+      score: m.vote_average ?? null,
+      genre: m.genres?.length ? m.genres : [mediaType === "tv" ? "Series" : "Movie"],
+      poster: m.poster_url,
+      backdrop: m.backdrop_url || m.poster_url,
+      synopsis: m.overview || "Loading...",
+      director: null,
+      source: "tmdb",
+      mediaType,
+    };
+  } catch {
+    return null;
+  }
 }
 
-export function WatchPage({ movie, onClose, onSave, saved }: WatchPageProps) {
+export function WatchPage() {
   const [, navigate] = useLocation();
   const params = useParams();
   const location = useLocation();
   
   // Extract media info from URL: /watch/:id?season=1&episode=1&type=tv
   const tmdbId = params.id;
-  const isTV = movie.mediaType === "tv";
+  const searchParams = new URLSearchParams(location.search);
+  const urlSeason = parseInt(searchParams.get("season") || "1", 10);
+  const urlEpisode = parseInt(searchParams.get("episode") || "1", 10);
+  const urlType = searchParams.get("type") || "movie";
   
+  const [movie, setMovie] = useState<Movie | null>(null);
+  const [movieLoading, setMovieLoading] = useState(true);
   const [resolved, setResolved] = useState<ResolvedStream | null>(null);
   const [resolving, setResolving] = useState(false);
   const [playError, setPlayError] = useState<string | null>(null);
-  const [season, setSeason] = useState(() => {
-    const searchParams = new URLSearchParams(location.search);
-    return parseInt(searchParams.get("season") || "1", 10);
-  });
-  const [episode, setEpisode] = useState(() => {
-    const searchParams = new URLSearchParams(location.search);
-    return parseInt(searchParams.get("episode") || "1", 10);
-  });
-  const [myRating, setMyRating] = useState<number>(() => getRating(movie.id) ?? 0);
+  const [season, setSeason] = useState(urlSeason);
+  const [episode, setEpisode] = useState(urlEpisode);
+  const [myRating, setMyRating] = useState<number>(0);
   const [watchedSeconds, setWatchedSeconds] = useState(0);
   const [trailer, setTrailer] = useState<TrailerInfo | null>(null);
   const [detailsLoaded, setDetailsLoaded] = useState(false);
@@ -71,15 +101,31 @@ export function WatchPage({ movie, onClose, onSave, saved }: WatchPageProps) {
   const [episodeDetails, setEpisodeDetails] = useState<any>(null);
   const [currentEpisodeTitle, setCurrentEpisodeTitle] = useState("");
 
-  useEffect(
-    () =>
-      subscribeRatings(() => {
-        setMyRating(getRating(movie.id) ?? 0);
-      }),
-    [movie.id]
-  );
-
+  // Fetch movie details on mount
   useEffect(() => {
+    if (!tmdbId) return;
+    setMovieLoading(true);
+    fetchMovieDetails(tmdbId).then(m => {
+      if (m) {
+        setMovie(m);
+        // Initialize rating from localStorage
+        setMyRating(getRating(m.id) ?? 0);
+      }
+      setMovieLoading(false);
+    });
+  }, [tmdbId]);
+
+  // Subscribe to rating changes
+  useEffect(() => {
+    if (!movie) return;
+    return subscribeRatings(() => {
+      setMyRating(getRating(movie.id) ?? 0);
+    });
+  }, [movie?.id]);
+
+  // Subscribe to watch progress
+  useEffect(() => {
+    if (!movie) return;
     const refresh = () =>
       setWatchedSeconds(
         Math.max(
@@ -90,12 +136,13 @@ export function WatchPage({ movie, onClose, onSave, saved }: WatchPageProps) {
       );
     refresh();
     return subscribeStats(refresh);
-  }, [movie.id, movie.title, resolved]);
+  }, [movie?.id, movie?.title, resolved]);
 
   const canRate = watchedSeconds >= RATE_AFTER_SECONDS;
 
   // Fetch trailer
   useEffect(() => {
+    if (!movie) return;
     let active = true;
     setTrailer(null);
     void fetchTrailer(movie.title, movie.year)
@@ -108,7 +155,7 @@ export function WatchPage({ movie, onClose, onSave, saved }: WatchPageProps) {
     return () => {
       active = false;
     };
-  }, [movie.title, movie.year]);
+  }, [movie?.title, movie?.year]);
 
   // Fetch episode details when season/episode changes
   const fetchEpisodeInfo = useCallback(async (s: number, e: number) => {
@@ -128,17 +175,17 @@ export function WatchPage({ movie, onClose, onSave, saved }: WatchPageProps) {
   }, [resolved]);
 
   useEffect(() => {
-    if (isTV && resolved?.stream.id) {
+    if (movie?.mediaType === "tv" && resolved?.stream.id) {
       fetchEpisodeInfo(season, episode);
     } else {
       setEpisodeDetails(null);
-      setCurrentEpisodeTitle(movie.title);
+      setCurrentEpisodeTitle(movie?.title || "");
     }
-  }, [season, episode, isTV, resolved, fetchEpisodeInfo]);
+  }, [season, episode, movie?.mediaType, resolved, fetchEpisodeInfo]);
 
   const resolveAndPlay = useCallback(
     async (targetSeason: number, targetEpisode: number) => {
-      if (resolving) return;
+      if (resolving || !movie) return;
       if (!attemptPlay()) return;
       setResolving(true);
       setPlayError(null);
@@ -195,7 +242,8 @@ export function WatchPage({ movie, onClose, onSave, saved }: WatchPageProps) {
         prefetchForOpen(playable);
         
         // Update URL without navigation
-        const newUrl = `/watch/${movie.id}${isTV ? `?season=${targetSeason}&episode=${targetEpisode}&type=tv` : ""}`;
+        const isSeries = playable.media_type === "tv";
+        const newUrl = `/watch/${movie.providerId}${isSeries ? `?season=${targetSeason}&episode=${targetEpisode}&type=tv` : ""}`;
         navigate(newUrl, { replace: true });
       } catch (error) {
         const isNotFound = error instanceof StreamNotFoundError;
@@ -212,11 +260,11 @@ export function WatchPage({ movie, onClose, onSave, saved }: WatchPageProps) {
         setResolving(false);
       }
     },
-    [movie.title, movie.year, movie.id, resolved, resolving, isTV, navigate]
+    [movie, resolved, resolving, navigate]
   );
 
   const play = useCallback(async () => {
-    if (resolving) return;
+    if (resolving || !movie) return;
     if (!attemptPlay()) return;
     if (resolved) {
       const isSeries = resolved.stream.media_type === "tv";
@@ -224,7 +272,7 @@ export function WatchPage({ movie, onClose, onSave, saved }: WatchPageProps) {
       return;
     }
     await resolveAndPlay(1, 1);
-  }, [resolving, resolved, season, episode, resolveAndPlay]);
+  }, [resolving, resolved, season, episode, resolveAndPlay, movie]);
 
   const playEpisode = useCallback(
     (targetSeason: number, targetEpisode: number) => {
@@ -236,7 +284,7 @@ export function WatchPage({ movie, onClose, onSave, saved }: WatchPageProps) {
   // Initial warm resolve
   const opened = useRef(false);
   useEffect(() => {
-    if (opened.current) return;
+    if (opened.current || !movie) return;
     opened.current = true;
     let disposed = false;
 
@@ -247,7 +295,7 @@ export function WatchPage({ movie, onClose, onSave, saved }: WatchPageProps) {
     void (async () => {
       try {
         const stream = await resolveStream(movie.title, movie.year, 
-          isTV ? { season, episode } : undefined
+          movie.mediaType === "tv" ? { season, episode } : undefined
         );
         if (disposed) return;
         setResolved(stream);
@@ -263,27 +311,50 @@ export function WatchPage({ movie, onClose, onSave, saved }: WatchPageProps) {
       disposed = true;
       clearTimeout(loadTimer);
     };
-  }, [movie.id, movie.title, movie.year, isTV, season, episode]);
+  }, [movie?.id, movie?.title, movie?.year, movie?.mediaType, season, episode]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") navigate("/");
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
+  }, [navigate]);
 
   const handleClose = () => {
     cancelInFlightPrefetch();
-    onClose();
+    navigate("/");
   };
 
   // Determine what to show as episode title
-  const displayTitle = isTV && episodeDetails?.title 
+  const displayTitle = movie?.mediaType === "tv" && episodeDetails?.title 
     ? `${movie.title} — ${episodeDetails.title}` 
-    : isTV 
+    : movie?.mediaType === "tv" 
       ? `${movie.title} — S${season} E${episode}`
-      : movie.title;
+      : movie?.title || "Loading...";
+
+  // Show loading state
+  if (movieLoading) {
+    return (
+      <div className="min-h-screen bg-[#050505] text-white flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-12 h-12 border-4 border-white/20 border-t-white rounded-full animate-spin" />
+          <p className="text-white/80 font-medium text-sm tracking-wider">Loading movie...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!movie) {
+    return (
+      <div className="min-h-screen bg-[#050505] text-white flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-white/60">Movie not found</p>
+          <button onClick={() => navigate("/")} className="mt-4 text-white underline">Go Home</button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#050505] text-white">
@@ -358,7 +429,7 @@ export function WatchPage({ movie, onClose, onSave, saved }: WatchPageProps) {
                       {movie.score}
                     </span>
                   )}
-                  {isTV && (
+                  {movie.mediaType === "tv" && (
                     <span className="flex items-center gap-1 text-[#d7d7d3]">
                       <Tv className="h-3.5 w-3.5" />
                       {resolved?.stream.seasons || "?"} Seasons
@@ -379,15 +450,11 @@ export function WatchPage({ movie, onClose, onSave, saved }: WatchPageProps) {
                   {resolving ? "Loading Stream…" : "Play"}
                 </button>
                 <button
-                  onClick={onSave}
+                  onClick={handleClose}
                   className="flex items-center gap-2 rounded-md border border-white/15 bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/10 transition-colors"
                 >
-                  {saved ? (
-                    <Check className="h-4 w-4" />
-                  ) : (
-                    <Bookmark className="h-4 w-4" />
-                  )}
-                  <span>{saved ? "In My List" : "Add to My List"}</span>
+                  <X className="h-4 w-4" />
+                  <span>Close</span>
                 </button>
                 <button
                   className="flex items-center gap-2 rounded-md border border-white/15 bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/10 transition-colors"
@@ -479,7 +546,7 @@ export function WatchPage({ movie, onClose, onSave, saved }: WatchPageProps) {
             <aside className="lg:col-span-1 hidden lg:block">
               <div className="sticky top-24 space-y-4">
                 {/* Season Selector Panel */}
-                {isTV && resolved && (
+                {movie.mediaType === "tv" && resolved && (
                   <div className="rounded-xl border border-white/10 bg-[#121212] p-5">
                     <div className="flex items-center justify-between mb-4">
                       <h3 className="text-sm font-bold uppercase tracking-[0.18em] text-white/80 flex items-center gap-2">
@@ -564,7 +631,7 @@ export function WatchPage({ movie, onClose, onSave, saved }: WatchPageProps) {
                 )}
 
                 {/* Episode Details Panel */}
-                {isTV && episodeDetails && (
+                {movie.mediaType === "tv" && episodeDetails && (
                   <div className="rounded-xl border border-white/10 bg-[#121212] p-5">
                     <h3 className="text-sm font-bold uppercase tracking-[0.18em] text-white/80 mb-4">
                       Episode Details

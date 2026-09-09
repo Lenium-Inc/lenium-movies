@@ -1,10 +1,21 @@
 import os
-import requests
+import json
+import ssl
+import urllib.request
+import urllib.parse
+import certifi
 from typing import Optional, Dict, Any, List
 
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "100868d1fc3966ca832b3a5457e1edb9")
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p"
+
+# SSL context for macOS LibreSSL compatibility
+def _ssl_context():
+    try:
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl._create_unverified_context()
 
 def _tmdb_get(endpoint: str, params: Optional[Dict] = None) -> Optional[Dict]:
     """Generic TMDB API request with error handling."""
@@ -14,11 +25,12 @@ def _tmdb_get(endpoint: str, params: Optional[Dict] = None) -> Optional[Dict]:
         if params:
             request_params.update(params)
         
-        response = requests.get(url, params=request_params, timeout=10)
-        if response.status_code != 200:
-            print(f"[TMDB Error {response.status_code}]: {response.text}")
-            return None
-        return response.json()
+        query_string = urllib.parse.urlencode(request_params)
+        full_url = f"{url}?{query_string}"
+        
+        req = urllib.request.Request(full_url, headers={"User-Agent": "FreeStream/1.0"})
+        with urllib.request.urlopen(req, context=_ssl_context(), timeout=10) as response:
+            return json.loads(response.read().decode("utf-8"))
     except Exception as e:
         print(f"[TMDB Fetch Error]: {e}")
         return None
@@ -30,8 +42,6 @@ def fetch_media_details(media_id: int, media_type: str = "movie") -> Optional[Di
     params = {
         "append_to_response": "external_ids,credits,videos,images,keywords,recommendations"
     }
-    if media_type == "tv":
-        params["append_to_response"] += ",season/1"  # We'll fetch full seasons separately
     
     data = _tmdb_get(endpoint, params)
     if not data:
@@ -79,40 +89,14 @@ def fetch_media_details(media_id: int, media_type: str = "movie") -> Optional[Di
         "media_type": media_type,
     }
 
-    # For TV shows, fetch complete season/episode data
+    # For TV shows, fetch season/episode counts
     if media_type == "tv":
         result["number_of_seasons"] = data.get("number_of_seasons", 1)
         result["number_of_episodes"] = data.get("number_of_episodes", 0)
-        result["seasons"] = fetch_all_seasons(media_id)
-        result["episodes"] = fetch_all_episodes(media_id, result["seasons"])
+        # Don't fetch all episodes here - do it on demand
+        result["seasons"] = data.get("seasons", [])
 
     return result
-
-
-def fetch_all_seasons(tv_id: int) -> List[Dict]:
-    """Fetch all seasons for a TV show."""
-    data = _tmdb_get(f"/tv/{tv_id}", {})
-    if not data:
-        return []
-    seasons = data.get("seasons", [])
-    # Filter out season 0 (specials) unless it's the only season
-    valid_seasons = [s for s in seasons if s.get("season_number", 0) > 0]
-    return valid_seasons if valid_seasons else seasons
-
-
-def fetch_all_episodes(tv_id: int, seasons: List[Dict]) -> List[Dict]:
-    """Fetch all episodes for all seasons."""
-    all_episodes = []
-    for season in seasons:
-        season_num = season.get("season_number")
-        if not season_num:
-            continue
-        season_data = _tmdb_get(f"/tv/{tv_id}/season/{season_num}", {})
-        if season_data and "episodes" in season_data:
-            for ep in season_data["episodes"]:
-                ep["season_number"] = season_num
-                all_episodes.append(ep)
-    return all_episodes
 
 
 def fetch_season_details(tv_id: int, season_number: int) -> Optional[Dict]:
@@ -126,7 +110,7 @@ def fetch_episode_details(tv_id: int, season_number: int, episode_number: int) -
 
 
 def get_trending_catalog(time_window: str = "week", media_type: str = "all") -> List[Dict]:
-    """Fetch trending movies/TV from TMDB."""
+    """Fetch trending movies/TV from TMDB - basic info only, no per-item detail calls."""
     endpoint = f"/trending/{media_type}/{time_window}"
     data = _tmdb_get(endpoint)
     if not data:
@@ -136,15 +120,26 @@ def get_trending_catalog(time_window: str = "week", media_type: str = "all") -> 
     catalog = []
     for item in results:
         mt = item.get("media_type", "movie")
-        details = fetch_media_details(item.get("id"), mt)
-        if details:
-            details["media_type"] = mt
-            catalog.append(details)
+        catalog.append({
+            "id": item.get("id"),
+            "title": item.get("title") or item.get("name"),
+            "overview": item.get("overview", ""),
+            "release_date": item.get("release_date") or item.get("first_air_date", ""),
+            "first_air_date": item.get("first_air_date", ""),
+            "vote_average": item.get("vote_average"),
+            "poster_path": item.get("poster_path"),
+            "backdrop_path": item.get("backdrop_path"),
+            "genre_ids": item.get("genre_ids", []),
+            "popularity": item.get("popularity"),
+            "media_type": mt,
+            "number_of_seasons": item.get("number_of_seasons") if mt == "tv" else None,
+            "number_of_episodes": item.get("number_of_episodes") if mt == "tv" else None,
+        })
     return catalog
 
 
 def get_popular(media_type: str = "movie", page: int = 1) -> List[Dict]:
-    """Fetch popular movies/TV from TMDB."""
+    """Fetch popular movies/TV from TMDB - basic info only."""
     endpoint = f"/{media_type}/popular"
     data = _tmdb_get(endpoint, {"page": page})
     if not data:
@@ -153,15 +148,26 @@ def get_popular(media_type: str = "movie", page: int = 1) -> List[Dict]:
     results = data.get("results", [])
     catalog = []
     for item in results:
-        details = fetch_media_details(item.get("id"), media_type)
-        if details:
-            details["media_type"] = media_type
-            catalog.append(details)
+        catalog.append({
+            "id": item.get("id"),
+            "title": item.get("title") or item.get("name"),
+            "overview": item.get("overview", ""),
+            "release_date": item.get("release_date") or item.get("first_air_date", ""),
+            "first_air_date": item.get("first_air_date", ""),
+            "vote_average": item.get("vote_average"),
+            "poster_path": item.get("poster_path"),
+            "backdrop_path": item.get("backdrop_path"),
+            "genre_ids": item.get("genre_ids", []),
+            "popularity": item.get("popularity"),
+            "media_type": media_type,
+            "number_of_seasons": item.get("number_of_seasons") if media_type == "tv" else None,
+            "number_of_episodes": item.get("number_of_episodes") if media_type == "tv" else None,
+        })
     return catalog
 
 
 def get_now_playing(page: int = 1) -> List[Dict]:
-    """Fetch currently playing movies from TMDB."""
+    """Fetch currently playing movies from TMDB - basic info only."""
     endpoint = "/movie/now_playing"
     data = _tmdb_get(endpoint, {"page": page})
     if not data:
@@ -170,15 +176,23 @@ def get_now_playing(page: int = 1) -> List[Dict]:
     results = data.get("results", [])
     catalog = []
     for item in results:
-        details = fetch_media_details(item.get("id"), "movie")
-        if details:
-            details["media_type"] = "movie"
-            catalog.append(details)
+        catalog.append({
+            "id": item.get("id"),
+            "title": item.get("title"),
+            "overview": item.get("overview", ""),
+            "release_date": item.get("release_date", ""),
+            "vote_average": item.get("vote_average"),
+            "poster_path": item.get("poster_path"),
+            "backdrop_path": item.get("backdrop_path"),
+            "genre_ids": item.get("genre_ids", []),
+            "popularity": item.get("popularity"),
+            "media_type": "movie",
+        })
     return catalog
 
 
 def get_on_the_air(page: int = 1) -> List[Dict]:
-    """Fetch currently airing TV shows from TMDB."""
+    """Fetch currently airing TV shows from TMDB - basic info only."""
     endpoint = "/tv/on_the_air"
     data = _tmdb_get(endpoint, {"page": page})
     if not data:
@@ -187,15 +201,25 @@ def get_on_the_air(page: int = 1) -> List[Dict]:
     results = data.get("results", [])
     catalog = []
     for item in results:
-        details = fetch_media_details(item.get("id"), "tv")
-        if details:
-            details["media_type"] = "tv"
-            catalog.append(details)
+        catalog.append({
+            "id": item.get("id"),
+            "title": item.get("name"),
+            "overview": item.get("overview", ""),
+            "first_air_date": item.get("first_air_date", ""),
+            "vote_average": item.get("vote_average"),
+            "poster_path": item.get("poster_path"),
+            "backdrop_path": item.get("backdrop_path"),
+            "genre_ids": item.get("genre_ids", []),
+            "popularity": item.get("popularity"),
+            "media_type": "tv",
+            "number_of_seasons": item.get("number_of_seasons"),
+            "number_of_episodes": item.get("number_of_episodes"),
+        })
     return catalog
 
 
 def search_multi(query: str, page: int = 1) -> List[Dict]:
-    """Search movies and TV shows via TMDB multi-search."""
+    """Search movies and TV shows via TMDB multi-search - basic info only."""
     endpoint = "/search/multi"
     data = _tmdb_get(endpoint, {"query": query, "page": page})
     if not data:
@@ -207,10 +231,21 @@ def search_multi(query: str, page: int = 1) -> List[Dict]:
         media_type = item.get("media_type")
         if media_type not in ("movie", "tv"):
             continue
-        details = fetch_media_details(item.get("id"), media_type)
-        if details:
-            details["media_type"] = media_type
-            catalog.append(details)
+        catalog.append({
+            "id": item.get("id"),
+            "title": item.get("title") or item.get("name"),
+            "overview": item.get("overview", ""),
+            "release_date": item.get("release_date") or item.get("first_air_date", ""),
+            "first_air_date": item.get("first_air_date", ""),
+            "vote_average": item.get("vote_average"),
+            "poster_path": item.get("poster_path"),
+            "backdrop_path": item.get("backdrop_path"),
+            "genre_ids": item.get("genre_ids", []),
+            "popularity": item.get("popularity"),
+            "media_type": media_type,
+            "number_of_seasons": item.get("number_of_seasons") if media_type == "tv" else None,
+            "number_of_episodes": item.get("number_of_episodes") if media_type == "tv" else None,
+        })
     return catalog
 
 
@@ -255,7 +290,6 @@ def normalize_tmdb_item(item: Dict, media_type: str) -> Optional[Dict]:
     year = release_date.split("-")[0] if release_date else ""
 
     if media_type == "tv":
-        # For TV, we'll get full season data on demand
         seasons_count = item.get("number_of_seasons") or 1
         episodes_count = item.get("number_of_episodes") or 1
         stream_url = f"https://vidsrc.me/embed/tv?tmdb={tmdb_id}&season=1&episode=1"
@@ -276,7 +310,7 @@ def normalize_tmdb_item(item: Dict, media_type: str) -> Optional[Dict]:
         "backdrop_url": f"{TMDB_IMAGE_BASE}/w1280{backdrop_path}" if backdrop_path else "",
         "stream_url": stream_url,
         "year": year,
-        "runtime": f"{item.get('runtime')}m" if item.get("runtime") else "",
+        "runtime": "",
         "media_type": media_type,
         "seasons": seasons_count,
         "episodes_per_season": episodes_count,
