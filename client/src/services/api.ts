@@ -126,43 +126,8 @@ function isStreamMovie(value: unknown): value is StreamMovie {
 }
 
 /**
- * Fetch the movie catalog from the Python backend and normalize it to
- * `StreamMovie` objects. Throws on network or HTTP errors so callers can
- * surface a meaningful "backend unreachable" state instead of an empty grid.
- */
-export async function fetchMovies(): Promise<StreamMovie[]> {
-  const response = await fetch(`${MOVIE_API_BASE_URL}/api/movies`);
-  if (!response.ok) {
-    throw new Error(`Movie backend responded with status ${response.status}`);
-  }
-  const data: unknown = await response.json();
-  if (!Array.isArray(data)) {
-    throw new Error("Movie backend returned an unexpected payload shape");
-  }
-  return data.filter(isStreamMovie);
-}
-
-/**
- * Session-scoped catalog cache. The catalog is fetched once and reused for
- * subsequent play requests so the Play button resolves streams without an
- * extra network call per movie.
- */
-let moviesCache: Promise<StreamMovie[]> | null = null;
-
-export async function getStreamCatalog(force = false): Promise<StreamMovie[]> {
-  if (force || !moviesCache) {
-    moviesCache = fetchMovies().catch(error => {
-      moviesCache = null;
-      throw error;
-    });
-  }
-  return moviesCache;
-}
-
-/**
- * Live search against the movie backend's updated search endpoint (`/api/search`).
- * The backend merges local playable-catalog matches with TMDB results, so every
- * returned title already carries a baked `stream_url` (embeds for TV wire the
+ * Live search against the movie backend's TMDB search endpoint (`/api/search`).
+ * Returns TMDB results with baked `stream_url` (embeds for TV wire the
  * default S1E1) and — for TV entries — `seasons`/`episodes_per_season` that
  * drive the episode matrix in the details view.
  *
@@ -232,6 +197,7 @@ function normalizeResolvedMovie(
     id: String(value.id),
     title: String(value.title),
     poster_url: typeof value.poster_url === "string" ? value.poster_url : "",
+    backdrop_url: typeof value.backdrop_url === "string" ? value.backdrop_url : "",
     stream_url: String(value.stream_url),
     year: toStreamYear(value.year),
     media_type: mediaType,
@@ -251,6 +217,13 @@ function normalizeResolvedMovie(
       typeof value.episodes_per_season === "number"
         ? value.episodes_per_season
         : Number(value.episodes_per_season) || 1,
+    overview: typeof value.overview === "string" ? value.overview : "",
+    vote_average: typeof value.vote_average === "number" ? value.vote_average : undefined,
+    popularity: typeof value.popularity === "number" ? value.popularity : undefined,
+    genres: Array.isArray(value.genres) ? value.genres : [],
+    ...(value.episodes && Array.isArray(value.episodes)
+      ? { episodes: value.episodes }
+      : {}),
     ...(value.mirrors && Array.isArray(value.mirrors)
       ? {
           mirrors: value.mirrors.filter(
@@ -624,15 +597,58 @@ export async function fetchPopular(params: PopularParams = {}): Promise<StreamMo
   return result;
 }
 
-/** Today's deterministic "Movie of the Day", or null when unavailable. */
-export async function fetchTodaysPick(): Promise<StreamMovie | null> {
-  const response = await fetch(`${MOVIE_API_BASE_URL}/api/movies/todays-pick`);
-  if (response.status === 404) return null;
+/**
+ * Fetch currently playing movies from TMDB via backend.
+ * Cached for 5 minutes to avoid redundant requests.
+ */
+export interface NowPlayingParams {
+  page?: number;
+}
+
+export async function fetchNowPlaying(params: NowPlayingParams = {}): Promise<StreamMovie[]> {
+  const cacheKey = `now_playing:${params.page || 1}`;
+  const cached = getCached<StreamMovie[]>(cacheKey);
+  if (cached) return cached;
+
+  const query = new URLSearchParams();
+  if (params.page) query.set("page", String(params.page));
+  const response = await fetch(`/api/movies/now_playing?${query.toString()}`);
   if (!response.ok) {
     throw new Error(`Movie backend responded with status ${response.status}`);
   }
-  const payload: unknown = await response.json();
-  const record = payload as { movie?: unknown } | null;
-  if (!record || !isStreamMovie(record.movie)) return null;
-  return record.movie;
+  const data: unknown = await response.json();
+  if (!Array.isArray(data)) {
+    throw new Error("Movie backend returned an unexpected now_playing payload shape");
+  }
+  const result = data.filter(isStreamMovie);
+  setCache(cacheKey, result);
+  return result;
+}
+
+/**
+ * Fetch currently airing TV shows from TMDB via backend.
+ * Cached for 5 minutes to avoid redundant requests.
+ */
+export interface OnTheAirParams {
+  page?: number;
+}
+
+export async function fetchOnTheAir(params: OnTheAirParams = {}): Promise<StreamMovie[]> {
+  const cacheKey = `on_the_air:${params.page || 1}`;
+  const cached = getCached<StreamMovie[]>(cacheKey);
+  if (cached) return cached;
+
+  const query = new URLSearchParams();
+  if (params.page) query.set("page", String(params.page));
+  const response = await fetch(`/api/movies/on_the_air?${query.toString()}`);
+  if (!response.ok) {
+    throw new Error(`Movie backend responded with status ${response.status}`);
+  }
+  const data: unknown = await response.json();
+  if (!Array.isArray(data)) {
+    throw new Error("Movie backend returned an unexpected on_the_air payload shape");
+  }
+  const result = data.filter(isStreamMovie);
+  setCache(cacheKey, result);
+  return result;
 }

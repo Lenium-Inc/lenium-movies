@@ -45,6 +45,20 @@ function getBackdropUrl(backdrop: string | null | undefined): string | null {
   return `${TMDB_IMAGE_BASE_URL}/original${backdrop}`;
 }
 
+function formatRuntime(minutes: string | number | undefined): string {
+  if (!minutes) return "";
+  const mins = typeof minutes === "string" ? parseInt(minutes.replace("m", "")) : minutes;
+  if (isNaN(mins)) return "";
+  const hours = Math.floor(mins / 60);
+  const remainingMins = mins % 60;
+  return hours > 0 ? `${hours}h ${remainingMins}m` : `${remainingMins}m`;
+}
+
+function formatRating(score: number | null): string {
+  if (score === null || score === undefined) return "";
+  return score.toFixed(1);
+}
+
 const PrimaryActionButton = ({
   icon: Icon,
   label,
@@ -209,61 +223,69 @@ export function Spotlight({
                   {current.title}
                 </h1>
 
-                <div className="mt-4 flex flex-wrap items-center gap-2">
+                {/* Inline Metadata Row - Netflix Grade */}
+                <div className="mt-4 flex flex-wrap items-center gap-2.5">
                   {current.year ? (
-                    <span className={chip(true)}>{current.year}</span>
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/5 px-3 py-1 text-xs font-semibold text-white backdrop-blur-sm">
+                      {current.year}
+                    </span>
                   ) : null}
-                  {current.runtime ? (
+                  {current.runtime && (
                     <>
                       <span className="text-[10px] text-white/40">·</span>
-                      <span className={chip(false)}>{current.runtime}</span>
+                      <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/5 px-3 py-1 text-xs font-semibold text-zinc-300 backdrop-blur-sm">
+                        <Clock className="h-3 w-3" />
+                        {formatRuntime(current.runtime)}
+                      </span>
                     </>
-                  ) : null}
-                  {current.genre.slice(0, 3).map((genre, index) => (
-                    <span
-                      key={genre}
-                      className="flex items-center gap-2"
-                    >
-                      {index > 0 && (
-                        <span className="text-[10px] text-white/40">·</span>
-                      )}
-                      <span className={chip(false)}>{genre}</span>
-                    </span>
-                  ))}
-                  {current.score !== null && (
-                    <span className="flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.08] px-2.5 py-1 text-xs font-bold text-white backdrop-blur-sm">
-                      <Star className="h-3 w-3 fill-white" />
-                      {current.score}
-                      <span className="text-white/50">TMDB</span>
-                    </span>
+                  )}
+                  {current.vote_average && current.vote_average > 0 && (
+                    <>
+                      <span className="text-[10px] text-white/40">·</span>
+                      <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-400/10 px-2.5 py-1 text-xs font-bold text-amber-400 backdrop-blur-sm">
+                        <Star className="h-3 w-3 fill-current" />
+                        {formatRating(current.vote_average)}
+                        <span className="text-white/50">TMDB</span>
+                      </span>
+                    </>
+                  )}
+                  {current.genres?.length && (
+                    <>
+                      <span className="text-[10px] text-white/40">·</span>
+                      <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/5 px-3 py-1 text-xs font-semibold text-zinc-300 backdrop-blur-sm">
+                        <span className="text-[10px] font-medium text-zinc-500 uppercase">Genres:</span>
+                        <span className="font-medium text-zinc-300">{current.genres.slice(0, 4).join(", ")}</span>
+                      </span>
+                    </>
                   )}
                 </div>
 
+                {/* Plot Overview / Synopsis */}
                 {current.synopsis ? (
-                  <p className="mt-4 line-clamp-4 max-w-2xl text-base leading-7 text-zinc-300">
+                  <p className="mt-4 line-clamp-3 max-w-2xl text-base leading-7 text-zinc-300">
                     {current.synopsis}
                   </p>
                 ) : null}
 
-                {/* Expanded metadata row - cast, rating, genres */}
-                <div className="mt-6 flex flex-wrap items-center gap-4 text-sm text-zinc-400">
+                {/* Expanded metadata row - rating, runtime, genres */}
+                <div className="mt-6 flex flex-wrap items-center gap-3 text-sm text-zinc-400">
                   {current.vote_average && current.vote_average > 0 && (
-                    <span className="flex items-center gap-1.5 bg-white/5 px-3 py-1.5 rounded-full backdrop-blur-sm">
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-white/5 px-3 py-1.5 backdrop-blur-sm border border-white/10">
                       <Award className="h-4 w-4 text-amber-400" />
                       <span className="font-semibold text-white">{current.vote_average.toFixed(1)}</span>
                       <span className="text-zinc-500">/10</span>
                     </span>
                   )}
                   {current.runtime && (
-                    <span className="flex items-center gap-1.5 bg-white/5 px-3 py-1.5 rounded-full backdrop-blur-sm">
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-white/5 px-3 py-1.5 backdrop-blur-sm border border-white/10">
                       <Clock className="h-4 w-4" />
-                      <span className="font-medium text-zinc-300">{current.runtime}</span>
+                      <span className="font-medium text-zinc-300">{formatRuntime(current.runtime)}</span>
                     </span>
                   )}
-                  {(current as any).genres?.length && (
-                    <span className="flex items-center gap-1.5 bg-white/5 px-3 py-1.5 rounded-full backdrop-blur-sm">
+                  {current.genres?.length && (
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-white/5 px-3 py-1.5 backdrop-blur-sm border border-white/10">
                       <span className="text-[10px] font-medium text-zinc-500 uppercase">Genres:</span>
-                      <span className="font-medium text-zinc-300">{(current as any).genres.slice(0, 4).join(", ")}</span>
+                      <span className="font-medium text-zinc-300">{current.genres.slice(0, 5).join(", ")}</span>
                     </span>
                   )}
                 </div>
@@ -290,6 +312,14 @@ export function Spotlight({
                     onClick={() => onSave?.(current)}
                     className="border-2 border-white/20 bg-black/30 text-white backdrop-blur-md hover:border-white/40 hover:bg-white/10 hover:text-white active:scale-[0.97] active:border-white/50"
                   />
+                  {onDetails && (
+                    <SecondaryActionButton
+                      icon={CirclePlay}
+                      label="More Info"
+                      onClick={() => onDetails?.(current)}
+                      className="border-2 border-white/20 bg-black/30 text-white backdrop-blur-md hover:border-white/40 hover:bg-white/10 hover:text-white active:scale-[0.97] active:border-white/50"
+                    />
+                  )}
                 </div>
               </motion.div>
             </AnimatePresence>

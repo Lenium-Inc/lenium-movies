@@ -61,21 +61,29 @@ function toCatalogMovie(item: StreamMovie): Movie {
   const mediaType: "movie" | "tv" =
     item.media_type === "tv" ? "tv" : "movie";
   const year = typeof item.year === "number" ? item.year : Number(item.year) || null;
+  const runtime = item.runtime || (item.runtime ? `${item.runtime}m` : "");
   return {
     id: stableId(item.id),
     providerId: item.id,
     title: item.title,
     year: Number.isFinite(year) ? year : null,
-    runtime: "",
+    runtime: runtime || "",
     rating: "Rating unavailable",
-    score: null,
-    genre: [mediaType === "tv" ? "Series" : "Movie"],
+    score: item.vote_average ?? null,
+    genre: item.genres?.length ? item.genres : [mediaType === "tv" ? "Series" : "Movie"],
     poster: item.poster_url || null,
     backdrop: item.backdrop_url || null,
-    synopsis: "Playable right now — pick it to start watching.",
+    synopsis: item.overview || "Playable right now — pick it to start watching.",
     director: null,
     source: "tmdb",
     mediaType,
+    vote_average: item.vote_average,
+    genres: item.genres,
+    seasons: item.seasons,
+    episodes_per_season: item.episodes_per_season,
+    backdrop_url: item.backdrop_url,
+    overview: item.overview,
+    popularity: item.popularity,
   };
 }
 

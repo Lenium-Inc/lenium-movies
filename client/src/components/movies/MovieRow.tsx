@@ -120,11 +120,11 @@ export function MovieRow({
   };
 
   return (
-    <section ref={ref} className="mb-8">
-      <div className="mb-3 flex items-end justify-between">
+    <section ref={ref} className="mb-10 lg:mb-12">
+      <div className="mb-4 flex items-end justify-between px-2 sm:px-0">
         <div>
           {eyebrow && (
-            <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em] text-[#8b8b90]">
+            <p className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.18em] text-[#8b8b90]">
               {eyebrow}
             </p>
           )}

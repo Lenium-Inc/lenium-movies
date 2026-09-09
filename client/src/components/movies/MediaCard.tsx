@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { Play, Star } from "lucide-react";
 import type { TrailerInfo } from "@/services/api";
 
@@ -45,7 +45,7 @@ export function TrailerEmbed({ provider, id, onLoad }: TrailerInfo & { onLoad?: 
       ? `https://www.dailymotion.com/embed/video/${id}?autoplay=1&muted=1&loop=1&controls=0`
       : `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&mute=1&controls=0&loop=1&playlist=${id}&playsinline=1&iv_load_policy=3&modestbranding=1&rel=0`;
   return (
-    <div className="pointer-events-none absolute left-1/2 top-1/2 aspect-video w-[266%] -translate-x-1/2 -translate-y-1/2">
+    <div className="pointer-events-auto absolute left-1/2 top-1/2 aspect-video w-[266%] -translate-x-1/2 -translate-y-1/2">
       <iframe
         src={src}
         title="Preview trailer"
@@ -63,13 +63,11 @@ export function TrailerEmbed({ provider, id, onLoad }: TrailerInfo & { onLoad?: 
  * High-end media card for a streaming grid. Fixed 2:3 ratio, `rounded-xl`,
  * 1px `border-white/10` on a `#121212` charcoal surface.
  *
- * Hover interactions are staged with a 300ms timer: the static poster cross-
- * fades (opacity 300ms, transformed-only — zero reflow) into the title's
- * official looping trailer — a preview, never the film itself. When no trailer
- * exists the card falls back to a muted native clip, then a high-res backdrop
- * at a subtle `scale(1.05)`, then a quiet zoom on the poster — so every tile
- * answers hover identically. Missing posters / metadata degrade to a polished
- * typographic skeleton card instead of dead space.
+ * Hover interactions are INSTANT (no 300ms delay): the static poster cross-
+ * fades into the title's official looping trailer — a preview, never the film itself.
+ * Trailers are PRE-LOADED in background when card enters viewport for instant playback.
+ * When no trailer exists the card falls back to a muted native clip, then a high-res backdrop
+ * at a subtle `scale(1.05)`, then a quiet zoom on the poster.
  *
  * Image Persistence: The poster remains visible until the trailer/hover video
  * has buffered enough data to begin playback, preventing black/blank flashes.
@@ -94,34 +92,100 @@ export function MediaCard({
   const [posterFailed, setPosterFailed] = useState(false);
   const [trailer, setTrailer] = useState<TrailerInfo | null>(null);
   const [trailerReady, setTrailerReady] = useState(false);
+  const [trailerPreloaded, setTrailerPreloaded] = useState(false);
+  const [isInViewport, setIsInViewport] = useState(false);
+  
   const timer = useRef<number | null>(null);
   const trailerRequested = useRef(false);
+  const trailerPreloadTriggered = useRef(false);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
 
+  // Reset state when key props change
   useEffect(() => {
     setPeeked(false);
     setVideoFailed(false);
     setPosterFailed(false);
     setTrailer(null);
     setTrailerReady(false);
+    setTrailerPreloaded(false);
     trailerRequested.current = false;
-  }, [posterUrl, previewUrl, backdropUrl, trailerResolver]);
+    trailerPreloadTriggered.current = false;
+  }, [posterUrl, previewUrl, backdropUrl, trailerResolver, id]);
 
-  // Resolve the trailer at most once, when the user is actually hovering.
+  // Intersection Observer for viewport detection - trigger preload when card is near viewport
   useEffect(() => {
-    if (!peeked || trailerRequested.current || trailer) return;
-    trailerRequested.current = true;
+    const cardElement = document.getElementById(`media-card-${id}`);
+    if (!cardElement) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting || entry.intersectionRatio > 0.1) {
+            setIsInViewport(true);
+          } else {
+            setIsInViewport(false);
+          }
+        });
+      },
+      { rootMargin: '200px', threshold: 0.1 }
+    );
+
+    observer.observe(cardElement);
+    return () => observer.disconnect();
+  }, [id]);
+
+  // Preload trailer when card enters viewport (background, non-blocking)
+  useEffect(() => {
+    if (!isInViewport || trailerPreloadTriggered.current || !trailerResolver || trailer) return;
+    
+    trailerPreloadTriggered.current = true;
     let alive = true;
-    trailerResolver?.()
+    
+    // Preload in background - don't await, just fire and forget
+    trailerResolver()
       .then(info => {
-        if (alive) setTrailer(info);
+        if (alive && info) {
+          setTrailer(info);
+          setTrailerPreloaded(true);
+        }
       })
       .catch(() => {
-        /* keep the poster/backdrop fallback */
+        // Silently fail - keep poster/backdrop fallback
       });
+    
     return () => {
       alive = false;
     };
-  }, [peeked, trailer, trailerResolver]);
+  }, [isInViewport, trailerResolver, trailer, id]);
+
+  // When user hovers, ensure trailer is loaded and ready
+  useEffect(() => {
+    if (!peeked || trailerRequested.current) return;
+    trailerRequested.current = true;
+    
+    // If already preloaded, just mark as ready
+    if (trailerPreloaded && trailer) {
+      setTrailerReady(true);
+      return;
+    }
+    
+    // Otherwise fetch now (should be fast if preloaded)
+    let alive = true;
+    trailerResolver?.()
+      .then(info => {
+        if (alive) {
+          setTrailer(info);
+          setTrailerPreloaded(true);
+        }
+      })
+      .catch(() => {
+        // Keep poster/backdrop fallback
+      });
+    
+    return () => {
+      alive = false;
+    };
+  }, [peeked, trailerResolver, trailer, trailerPreloaded]);
 
   useEffect(() => {
     return () => {
@@ -129,16 +193,18 @@ export function MediaCard({
     };
   }, []);
 
-  const handleEnter = () => {
+  // INSTANT hover - no 300ms delay for modern feel
+  const handleEnter = useCallback(() => {
     if (timer.current !== null) return;
+    // Near-instant response (50ms for perceived instant feel)
     timer.current = window.setTimeout(() => {
       timer.current = null;
       setPeeked(true);
-      setTrailerReady(false); // Reset ready state on new hover
-    }, 300);
-  };
+      setTrailerReady(trailerPreloaded); // Instant if preloaded
+    }, 50);
+  }, [trailerPreloaded]);
 
-  const handleLeave = () => {
+  const handleLeave = useCallback(() => {
     if (timer.current !== null) {
       window.clearTimeout(timer.current);
       timer.current = null;
@@ -146,11 +212,11 @@ export function MediaCard({
     setPeeked(false);
     setVideoFailed(false);
     setTrailerReady(false);
-  };
+  }, []);
 
-  const handleTrailerLoad = () => {
+  const handleTrailerLoad = useCallback(() => {
     setTrailerReady(true);
-  };
+  }, []);
 
   const showSkeleton = !posterUrl || posterFailed;
   const showTrailer = peeked && trailer && trailerReady;
@@ -160,6 +226,7 @@ export function MediaCard({
 
   return (
     <article
+      id={`media-card-${id}`}
       className="group relative"
       onMouseEnter={handleEnter}
       onMouseLeave={handleLeave}
@@ -188,7 +255,7 @@ export function MediaCard({
               src={posterUrl}
               alt={title}
               onError={() => setPosterFailed(true)}
-              className={`absolute inset-0 h-full w-full object-cover transition-[opacity,transform] duration-300 group-hover:scale-[1.05] ${
+              className={`absolute inset-0 h-full w-full object-cover transition-[opacity,transform] duration-200 group-hover:scale-[1.05] ${
                 showTrailer ? "opacity-0" : "opacity-100"
               }`}
             />
@@ -197,7 +264,7 @@ export function MediaCard({
           {/* Preview layer: official trailer → muted native clip → backdrop */}
           {showTrailer && trailer ? (
             <div className="absolute inset-0 flex items-center justify-center z-10">
-              <TrailerEmbed provider={trailer.provider} id={trailer.id} onLoad={handleTrailerLoad} />
+              <TrailerEmbed provider={trailer.provider} id={trailer.id} onLoad={handleTrailerLoad} ref={iframeRef} />
             </div>
           ) : null}
           {showVideo && (
@@ -211,7 +278,7 @@ export function MediaCard({
               disablePictureInPicture
               preload="auto"
               onError={() => setVideoFailed(true)}
-              className="absolute inset-0 h-full w-full scale-[1.02] object-cover object-center transition-opacity duration-300"
+              className="absolute inset-0 h-full w-full scale-[1.02] object-cover object-center transition-opacity duration-200"
             />
           )}
           {showBackdrop && (
@@ -220,30 +287,30 @@ export function MediaCard({
               alt=""
               loading="lazy"
               decoding="async"
-              className="absolute inset-0 h-full w-full scale-[1.05] object-cover object-center opacity-100 transition-opacity duration-300"
+              className="absolute inset-0 h-full w-full scale-[1.05] object-cover object-center opacity-100 transition-opacity duration-200"
             />
           )}
 
           {/* Bottom scrim */}
-          <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent opacity-80 transition-opacity duration-300 group-hover:opacity-100" />
+          <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent opacity-80 transition-opacity duration-200 group-hover:opacity-100" />
 
           {/* Hover inner glow (monochrome) */}
           <div
             aria-hidden
-            className="pointer-events-none absolute inset-0 bg-[radial-gradient(120%_90%_at_50%_0%,rgba(255,255,255,0.12),transparent_55%)] opacity-0 transition-opacity duration-300 group-hover:opacity-100"
+            className="pointer-events-none absolute inset-0 bg-[radial-gradient(120%_90%_at_50%_0%,rgba(255,255,255,0.12),transparent_55%)] opacity-0 transition-opacity duration-200 group-hover:opacity-100"
           />
 
           {/* TMDB rating tag */}
           {!showSkeleton && rating !== null && rating !== undefined && (
-            <span className="absolute left-2.5 top-2.5 flex translate-y-1 items-center gap-1 rounded-md border border-white/10 bg-black/60 px-1.5 py-0.5 text-[10px] font-bold text-white opacity-0 backdrop-blur-sm transition duration-200 group-hover:translate-y-0 group-hover:opacity-100">
+            <span className="absolute left-2.5 top-2.5 flex translate-y-1 items-center gap-1 rounded-md border border-white/10 bg-black/60 px-1.5 py-0.5 text-[10px] font-bold text-white opacity-0 backdrop-blur-sm transition duration-150 group-hover:translate-y-0 group-hover:opacity-100">
               <Star className="h-3 w-3 fill-white" />
               {typeof rating === "number" ? rating.toFixed(1) : rating}
             </span>
           )}
 
           {/* Quick-action play button */}
-          <div className="absolute inset-0 grid place-items-center opacity-0 transition-opacity duration-300 group-hover:opacity-100">
-            <span className="grid h-12 w-12 scale-75 place-items-center rounded-full bg-white text-black shadow-[0_10px_28px_rgba(255,255,255,0.18)] ring-1 ring-white/40 transition-transform duration-300 group-hover:scale-100">
+          <div className="absolute inset-0 grid place-items-center opacity-0 transition-opacity duration-200 group-hover:opacity-100">
+            <span className="grid h-12 w-12 scale-75 place-items-center rounded-full bg-white text-black shadow-[0_10px_28px_rgba(255,255,255,0.18)] ring-1 ring-white/40 transition-transform duration-200 group-hover:scale-100">
               <Play className="h-5 w-5 fill-current" />
             </span>
           </div>

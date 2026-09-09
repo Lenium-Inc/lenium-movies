@@ -7,6 +7,7 @@ import { MindfulCapModal } from "./components/player/MindfulCapModal";
 import Home from "./pages/Home";
 import HeroPreview from "./pages/HeroPreview";
 import Profile from "./pages/Profile";
+import { WatchPage } from "./pages/Watch";
 
 function Router() {
   return (
@@ -14,6 +15,7 @@ function Router() {
       <Route path="/" component={Home} />
       <Route path="/hero" component={HeroPreview} />
       <Route path="/profile" component={Profile} />
+      <Route path="/watch/:id" component={WatchPage} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>

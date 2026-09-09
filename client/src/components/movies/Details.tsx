@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Bookmark, Check, Play, Star, X, MessageSquare, Clock } from "lucide-react";
+import { useLocation } from "wouter";
 import { getRating, setRating, subscribeRatings } from "@/services/ratings";
 import {
   fetchTrailer,
-  getStreamCatalog,
   getStreamSource,
   resolveStream,
   StreamNotFoundError,
@@ -11,7 +11,6 @@ import {
   type StreamMovie,
   type TrailerInfo,
 } from "@/services/api";
-import { VideoPlayer } from "@/components/stream/VideoPlayer";
 import { EpisodeMatrix } from "@/components/movies/EpisodeMatrix";
 import {
   cancelInFlightPrefetch,
@@ -33,27 +32,7 @@ function getImageUrl(path: string, size: string): string {
   return `${TMDB_IMAGE_BASE_URL}/${size}${path}`;
 }
 
-const WORDS = /[a-z0-9]+/g;
-
 const RATE_AFTER_SECONDS = 15 * 60;
-
-/** Title similarity used to rank fallback suggestions (0..1, 1 = identical). */
-function titleOverlap(a: string, b: string): number {
-  const wa = a.toLowerCase().match(WORDS) ?? [];
-  const wb = b.toLowerCase().match(WORDS) ?? [];
-  if (!wa.length || !wb.length) return 0;
-  const sa = new Set(wa);
-  const sb = new Set(wb);
-  let overlap = 0;
-  for (const word of Array.from(sa)) if (sb.has(word)) overlap += 1;
-  return overlap / Math.max(sa.size, sb.size);
-}
-
-let catalogPromise: Promise<StreamMovie[]> | null = null;
-const loadCatalog = () => {
-  catalogPromise ??= getStreamCatalog();
-  return catalogPromise;
-};
 
 interface DetailsProps {
   movie: Movie;
@@ -67,14 +46,12 @@ interface DetailsProps {
  * Loads full metadata and stream resolution in the background.
  */
 export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
+  const [, navigate] = useLocation();
   const [resolved, setResolved] = useState<ResolvedStream | null>(null);
-  const [playerOpen, setPlayerOpen] = useState(false);
   const [resolving, setResolving] = useState(false);
   const [playError, setPlayError] = useState<string | null>(null);
   const [season, setSeason] = useState(1);
   const [episode, setEpisode] = useState(1);
-  const [suggestions, setSuggestions] = useState<StreamMovie[]>([]);
-  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [myRating, setMyRating] = useState<number>(() => getRating(movie.id) ?? 0);
   const [watchedSeconds, setWatchedSeconds] = useState(0);
   const [trailer, setTrailer] = useState<TrailerInfo | null>(null);
@@ -118,26 +95,6 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
       active = false;
     };
   }, [movie.title, movie.year]);
-
-  // When a title has no playable stream, offer sibling films from the archive
-  const suggestFor = useCallback(async (title: string) => {
-    setSuggestionsLoading(true);
-    try {
-      const catalog = await loadCatalog();
-      setSuggestions(
-        [...catalog]
-          .map(item => ({ item, score: titleOverlap(item.title, title) }))
-          .filter(entry => entry.score > 0)
-          .sort((a, b) => b.score - a.score)
-          .slice(0, 3)
-          .map(entry => entry.item)
-      );
-    } catch {
-      setSuggestions([]);
-    } finally {
-      setSuggestionsLoading(false);
-    }
-  }, []);
 
   /**
    * Build the playable stream for the selected title/episode and open the player.
@@ -201,7 +158,7 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
 
       setResolved({ stream: playable, exact: true });
       prefetchForOpen(playable);
-      setPlayerOpen(true);
+      navigate(`/watch/${movie.providerId}${movie.mediaType === "tv" ? `?season=${targetSeason}&episode=${targetEpisode}&type=tv` : ""}`);
     } catch (error) {
       const isNotFound = error instanceof StreamNotFoundError;
       console.error(
@@ -213,7 +170,6 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
           ? `"${movie.title}" isn't available to stream yet.`
           : "We couldn't find a stream for this title just yet."
       );
-      if (isNotFound) void suggestFor(movie.title);
     } finally {
       setResolving(false);
     }
@@ -225,26 +181,17 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
     if (resolved) {
       const isSeries = resolved.stream.media_type === "tv";
       await resolveAndPlay(isSeries ? season : 1, isSeries ? episode : 1);
+      navigate(`/watch/${movie.providerId}${isSeries ? `?season=${season}&episode=${episode}&type=tv` : ""}`);
       return;
     }
     await resolveAndPlay(1, 1);
+    navigate(`/watch/${movie.providerId}`);
   };
 
   const showMainPlayButton = !resolved?.stream.media_type || resolved.stream.media_type !== "tv";
 
   const playEpisode = (targetSeason: number, targetEpisode: number) => {
     void resolveAndPlay(targetSeason, targetEpisode);
-  };
-
-  const pickSuggestion = (item: StreamMovie) => {
-    if (!attemptPlay()) return;
-    cancelInFlightPrefetch();
-    prefetchForOpen(item);
-    setResolved({ stream: item, exact: true });
-    setSeason(1);
-    setEpisode(1);
-    setPlayerOpen(true);
-    setPlayError(null);
   };
 
   // Pre-cache engine: the moment the sheet opens, silently resolve the title
@@ -261,7 +208,9 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
 
     void (async () => {
       try {
-        const stream = await resolveStream(movie.title, movie.year);
+        const stream = await resolveStream(movie.title, movie.year,
+          movie.mediaType === "tv" ? { season: 1, episode: 1 } : undefined
+        );
         if (disposed) return;
         setResolved(stream);
         prefetchForOpen(stream.stream);
@@ -452,33 +401,6 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
           {playError && detailsLoaded && (
             <div className="mt-4 rounded-md border border-white/10 bg-white/[0.03] px-3 py-2.5 text-xs leading-5 text-[#c5c5c1]">
               <p>{playError}</p>
-              {suggestionsLoading && (
-                <p className="mt-2 text-[#8E8E93]">
-                  Finding similar films that do stream…
-                </p>
-              )}
-              {!suggestionsLoading && suggestions.length > 0 && (
-                <>
-                  <p className="mt-2 text-white/60">
-                    Sibling films from the playable archive:
-                  </p>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {suggestions.map(item => (
-                      <button
-                        key={item.id}
-                        onClick={() => pickSuggestion(item)}
-                        className="flex items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.06] px-2.5 py-1.5 text-white hover:bg-white/10"
-                      >
-                        <Play className="h-3 w-3 fill-current" />
-                        {item.title}
-                        {item.year ? (
-                          <span className="text-white/50">{item.year}</span>
-                        ) : null}
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
             </div>
           )}
           
@@ -494,20 +416,16 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
           {resolved && resolved.stream.media_type === "tv" ? (
             <EpisodeMatrix
               movie={resolved.stream}
-              onPlay={ep => playEpisode(ep.season, ep.number)}
+              onPlay={(ep) => {
+                playEpisode(ep.season, ep.number);
+                navigate(`/watch/${movie.id}`);
+              }}
             />
           ) : detailsLoaded ? null : (
             <SkeletonEpisodes />
           )}
         </div>
       </div>
-      {playerOpen && resolved && (
-        <VideoPlayer
-          title={resolved.stream.title}
-          movie={resolved.stream}
-          onClose={() => setPlayerOpen(false)}
-        />
-      )}
     </div>
   );
 }
