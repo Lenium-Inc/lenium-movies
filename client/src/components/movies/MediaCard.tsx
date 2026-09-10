@@ -1,20 +1,14 @@
-import { useEffect, useRef, useState, useCallback } from "react";
-import { Play, Star } from "lucide-react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
+import { Play, Star, Film, Tv } from "lucide-react";
+import { Link } from "wouter";
 import type { TrailerInfo } from "@/services/api";
 
 interface MediaCardProps {
   id: string;
   title: string;
   posterUrl?: string | null;
-  /** Muted looping native clip cross-faded over the poster after 300ms. */
   previewUrl?: string | null;
-  /** High-res backdrop used when neither a trailer nor a clip is available. */
   backdropUrl?: string | null;
-  /**
-   * Lazy trailer lookup for the hover preview. Only invoked once per card —
-   * when it resolves, the official trailer embeds in the poster frame (a
-   * preview, never the film itself). Resolve to null to keep the backdrop.
-   */
   trailerResolver?: () => Promise<TrailerInfo | null>;
   year?: number | null;
   runtime?: string | null;
@@ -23,23 +17,13 @@ interface MediaCardProps {
   onPlay?: (id: string) => void;
 }
 
-function chip(title: string): string {
-  return title.trim().length > 3
-    ? title
-        .split(/\s+/)
-        .slice(0, 2)
-        .map(word => word[0])
-        .join("")
-    : title.slice(0, 1);
-}
-
 function genresText(genres: readonly string[] | string | null | undefined) {
   if (!genres) return null;
   return Array.isArray(genres) ? genres.join(" · ") : genres;
 }
 
 /** Cover-cropped 16:9 trailer embed pinned inside the 2:3 poster frame. */
-export function TrailerEmbed({ provider, id, onLoad }: TrailerInfo & { onLoad?: () => void }) {
+export const TrailerEmbed = React.forwardRef<HTMLIFrameElement, TrailerInfo & { onLoad?: () => void }>(({ provider, id, onLoad }, ref) => {
   const src =
     provider === "dailymotion"
       ? `https://www.dailymotion.com/embed/video/${id}?autoplay=1&muted=1&loop=1&controls=0`
@@ -47,6 +31,7 @@ export function TrailerEmbed({ provider, id, onLoad }: TrailerInfo & { onLoad?: 
   return (
     <div className="pointer-events-auto absolute left-1/2 top-1/2 aspect-video w-[266%] -translate-x-1/2 -translate-y-1/2">
       <iframe
+        ref={ref}
         src={src}
         title="Preview trailer"
         allow="autoplay; encrypted-media"
@@ -57,7 +42,8 @@ export function TrailerEmbed({ provider, id, onLoad }: TrailerInfo & { onLoad?: 
       />
     </div>
   );
-}
+});
+TrailerEmbed.displayName = "TrailerEmbed";
 
 /**
  * High-end media card for a streaming grid. Fixed 2:3 ratio, `rounded-xl`,
@@ -245,7 +231,7 @@ export function MediaCard({
                 aria-hidden
                 className="font-display text-4xl font-black text-[#FFFFFF]/85 drop-shadow-[0_2px_14px_rgba(0,0,0,0.8)]"
               >
-                {chip(title)}
+                {title.slice(0, 1).toUpperCase()}
               </span>
             </div>
           ) : (

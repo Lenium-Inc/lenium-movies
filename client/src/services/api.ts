@@ -74,6 +74,14 @@ export interface StreamMovie {
   mirrors?: StreamMirror[];
   /** Backdrop image URL from TMDB (original size). */
   backdrop_url?: string;
+  /** TMDB overview/synopsis. */
+  overview?: string;
+  /** TMDB vote average (0-10). */
+  vote_average?: number;
+  /** TMDB popularity score. */
+  popularity?: number;
+  /** TMDB genre names. */
+  genres?: string[];
 }
 
 /** Order of quality tiers, best -> worst. */

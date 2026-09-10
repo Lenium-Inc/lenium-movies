@@ -4,40 +4,25 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
-  CirclePlay,
   Play,
   Star,
-  Users,
   Clock,
-  Award,
   type LucideIcon,
 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
+import { useLocation } from "wouter";
 import type { Movie } from "./types";
 
 const TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p";
 
 interface SpotlightProps {
-  /** Rotation pool. Filter changes that alter this list are picked up instantly. */
   items: readonly Movie[];
   savedIds?: ReadonlyArray<Movie["id"]>;
-  onDetails?: (movie: Movie) => void;
-  onPlay?: (movie: Movie) => void;
   onSave?: (movie: Movie) => void;
-  /** Seconds per auto-rotation; 0 disables rotation. Defaults to 8. */
   rotateSeconds?: number;
 }
 
 const EASE = [0.32, 0.72, 0, 1] as const;
-
-function chip(primary: boolean): string {
-  return [
-    "rounded-full border px-3 py-1 text-xs font-semibold backdrop-blur-sm transition",
-    primary
-      ? "border-white/30 bg-white/10 text-white"
-      : "border-white/10 text-[#D6D6DA]",
-  ].join(" ");
-}
 
 function getBackdropUrl(backdrop: string | null | undefined): string | null {
   if (!backdrop) return null;
@@ -110,34 +95,25 @@ const SecondaryActionButton = ({
 /**
  * Dynamic featured "Movie-of-the-Day" / Spotlight. Renders the full-bleed hero
  * media (Ken Burns backdrop dissolved into void black `#050505`), the title
- * block, metadata chips, and the high-contrast monochrome Details / My List
- * CTA cluster.
- *
- * The spotlight is filter-responsive and self-rotating: when the surrounding
- * filter engine changes the item pool — or an item is clicked / the rotation
- * advances — `AnimatePresence` cross-fades the backdrop, typography, tags and
- * synopsis in real time. The frosted-glass navigation lives outside this
- * component (GlassHeader) so it never re-renders between state switches.
+ * block, consolidated metadata row, and the high-contrast monochrome
+ * Play / My List CTA cluster.
  */
 export function Spotlight({
   items,
   savedIds = [],
-  onDetails,
-  onPlay,
   onSave,
   rotateSeconds = 8,
 }: SpotlightProps) {
+  const [, navigate] = useLocation();
   const count = items.length;
   const [index, setIndex] = useState(0);
   const [paused, setPaused] = useState(false);
 
-  // Keep the index valid whenever the pool shrinks (e.g. a filter narrows it).
   useEffect(() => {
     if (count === 0) return;
     if (index >= count) setIndex(0);
   }, [count, index]);
 
-  // Auto-rotate with crossfade, paused while the pointer is inside the hero.
   useEffect(() => {
     if (count < 2 || paused || rotateSeconds <= 0) return;
     const timer = window.setInterval(() => {
@@ -150,6 +126,19 @@ export function Spotlight({
   const saved = current ? savedIds.includes(current.id) : false;
 
   const backdropUrl = getBackdropUrl(current?.backdrop);
+
+  const handlePlay = (movie: Movie) => {
+    if (!movie.providerId) {
+      console.warn('[Spotlight] No providerId for movie:', movie.title);
+      return;
+    }
+    const tmdbId = parseInt(movie.providerId, 10);
+    if (isNaN(tmdbId)) {
+      console.warn('[Spotlight] Invalid TMDB ID:', movie.providerId);
+      return;
+    }
+    navigate(`/watch/${tmdbId}`);
+  };
 
   return (
     <section
@@ -214,16 +203,12 @@ export function Spotlight({
                 exit={{ opacity: 0, y: -12 }}
                 transition={{ duration: 0.5, ease: EASE }}
               >
-                <p className="flex items-center gap-2.5 text-[11px] font-bold uppercase tracking-[0.3em] text-white/70 mb-2">
-                  <span className="h-1.5 w-1.5 rounded-full bg-white shadow-[0_0_10px_rgba(255,255,255,0.9)]" />
-                  FreeStream · Now streaming
-                </p>
-
-                <h1 className="mt-2 text-4xl font-black leading-[0.95] tracking-[-0.03em] text-[#FFFFFF] drop-shadow-[0_4px_24px_rgba(0,0,0,0.8)] sm:text-5xl lg:text-6xl xl:text-7xl">
+                {/* Title */}
+                <h1 className="text-4xl font-black leading-[0.95] tracking-[-0.03em] text-[#FFFFFF] drop-shadow-[0_4px_24px_rgba(0,0,0,0.8)] sm:text-5xl lg:text-6xl xl:text-7xl">
                   {current.title}
                 </h1>
 
-                {/* Inline Metadata Row - Netflix Grade */}
+                {/* Consolidated Inline Metadata Row */}
                 <div className="mt-4 flex flex-wrap items-center gap-2.5">
                   {current.year ? (
                     <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/5 px-3 py-1 text-xs font-semibold text-white backdrop-blur-sm">
@@ -253,8 +238,7 @@ export function Spotlight({
                     <>
                       <span className="text-[10px] text-white/40">·</span>
                       <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/5 px-3 py-1 text-xs font-semibold text-zinc-300 backdrop-blur-sm">
-                        <span className="text-[10px] font-medium text-zinc-500 uppercase">Genres:</span>
-                        <span className="font-medium text-zinc-300">{current.genres.slice(0, 4).join(", ")}</span>
+                        {current.genres.slice(0, 3).join(", ")}
                       </span>
                     </>
                   )}
@@ -267,43 +251,12 @@ export function Spotlight({
                   </p>
                 ) : null}
 
-                {/* Expanded metadata row - rating, runtime, genres */}
-                <div className="mt-6 flex flex-wrap items-center gap-3 text-sm text-zinc-400">
-                  {current.vote_average && current.vote_average > 0 && (
-                    <span className="inline-flex items-center gap-1.5 rounded-full bg-white/5 px-3 py-1.5 backdrop-blur-sm border border-white/10">
-                      <Award className="h-4 w-4 text-amber-400" />
-                      <span className="font-semibold text-white">{current.vote_average.toFixed(1)}</span>
-                      <span className="text-zinc-500">/10</span>
-                    </span>
-                  )}
-                  {current.runtime && (
-                    <span className="inline-flex items-center gap-1.5 rounded-full bg-white/5 px-3 py-1.5 backdrop-blur-sm border border-white/10">
-                      <Clock className="h-4 w-4" />
-                      <span className="font-medium text-zinc-300">{formatRuntime(current.runtime)}</span>
-                    </span>
-                  )}
-                  {current.genres?.length && (
-                    <span className="inline-flex items-center gap-1.5 rounded-full bg-white/5 px-3 py-1.5 backdrop-blur-sm border border-white/10">
-                      <span className="text-[10px] font-medium text-zinc-500 uppercase">Genres:</span>
-                      <span className="font-medium text-zinc-300">{current.genres.slice(0, 5).join(", ")}</span>
-                    </span>
-                  )}
-                </div>
-
-                {/* Cast/Director info if available */}
-                {(current as any).director && (
-                  <div className="mt-4 flex items-center gap-2 text-sm text-zinc-400">
-                    <Users className="h-4 w-4" />
-                    <span className="text-zinc-500">Director:</span>
-                    <span className="font-medium text-zinc-300">{(current as any).director}</span>
-                  </div>
-                )}
-
+                {/* Action Buttons - Only Play and My List */}
                 <div className="mt-8 flex flex-wrap items-center gap-4">
                   <PrimaryActionButton
                     icon={Play}
                     label="Play"
-                    onClick={() => onPlay?.(current)}
+                    onClick={() => handlePlay(current)}
                     className="bg-white font-black text-black ring-1 ring-inset ring-white/40 shadow-[0_16px_40px_rgba(0,0,0,0.6)] hover:bg-white/95 hover:shadow-[0_20px_48px_rgba(0,0,0,0.7)] active:scale-[0.97] active:shadow-[0_8px_24px_rgba(0,0,0,0.5)]"
                   />
                   <SecondaryActionButton
@@ -312,14 +265,6 @@ export function Spotlight({
                     onClick={() => onSave?.(current)}
                     className="border-2 border-white/20 bg-black/30 text-white backdrop-blur-md hover:border-white/40 hover:bg-white/10 hover:text-white active:scale-[0.97] active:border-white/50"
                   />
-                  {onDetails && (
-                    <SecondaryActionButton
-                      icon={CirclePlay}
-                      label="More Info"
-                      onClick={() => onDetails?.(current)}
-                      className="border-2 border-white/20 bg-black/30 text-white backdrop-blur-md hover:border-white/40 hover:bg-white/10 hover:text-white active:scale-[0.97] active:border-white/50"
-                    />
-                  )}
                 </div>
               </motion.div>
             </AnimatePresence>
@@ -348,12 +293,12 @@ export function Spotlight({
           </button>
         </>
       )}
+
       {/* Rotation indicators */}
       {count > 1 && (
         <div className="absolute bottom-5 right-5 z-10 flex items-center gap-1.5">
           {Array.from({ length: Math.min(count, 8) }, (_, dot) => {
-            const active =
-              count > 8 ? index % 8 === dot : index === dot;
+            const active = count > 8 ? index % 8 === dot : index === dot;
             return (
               <button
                 key={dot}
@@ -375,7 +320,7 @@ export function Spotlight({
         </div>
       )}
 
-      {/* Per-slide rotation progress, ticking down until the next crossfade */}
+      {/* Per-slide rotation progress */}
       {count > 1 && rotateSeconds > 0 && (
         <div
           aria-hidden

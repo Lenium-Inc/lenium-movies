@@ -120,7 +120,6 @@ export default function Home() {
                 <Spotlight
                   items={filtered}
                   savedIds={savedIds}
-                  onDetails={setSelected}
                   onSave={toggleSave}
                 />
               ) : !isClientSearch ? (

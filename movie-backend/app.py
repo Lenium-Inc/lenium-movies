@@ -448,5 +448,100 @@ def extract_year(date_str: str | None) -> str:
     return match.group(1) if match else ""
 
 
+@app.route("/api/media/<id>", methods=["GET", "OPTIONS"])
+def get_media_by_id(id: str):
+    """Get media details by TMDB ID. Tries movie first, then TV as fallback."""
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    tmdb_id = id
+    try:
+        tmdb_id = int(tmdb_id)
+    except (ValueError, TypeError):
+        return jsonify({"error": "Invalid TMDB ID"}), 400
+
+    # Try movie first
+    movie_details = _tmdb_get(f"/movie/{tmdb_id}", {"append_to_response": "external_ids,credits,videos,images,keywords"})
+    
+    if movie_details:
+        media_type = "movie"
+        details = movie_details
+    else:
+        # Fallback to TV
+        tv_details = _tmdb_get(f"/tv/{tmdb_id}", {"append_to_response": "external_ids,credits,videos,images,keywords"})
+        if not tv_details:
+            return jsonify({"error": f"Media not found for ID {tmdb_id}"}), 404
+        media_type = "tv"
+        details = tv_details
+
+    release_date = details.get("release_date") or details.get("first_air_date", "")
+    release_year = extract_year(release_date)
+
+    # Extract YouTube trailer key
+    trailer_key = None
+    videos = details.get("videos", {}).get("results", [])
+    for v in videos:
+        if v.get("type") == "Trailer" and v.get("site") == "YouTube":
+            trailer_key = v.get("key")
+            break
+    if not trailer_key:
+        for v in videos:
+            if v.get("site") == "YouTube":
+                trailer_key = v.get("key")
+                break
+
+    # Genres
+    genres = [genre["name"] for genre in details.get("genres", [])]
+
+    # Poster/backdrop
+    poster_path = details.get("poster_path")
+    backdrop_path = details.get("backdrop_path")
+
+    result = {
+        "id": str(tmdb_id),
+        "title": details.get("title") or details.get("name"),
+        "overview": details.get("overview") or "",
+        "release_year": release_year,
+        "release_date": release_date,
+        "vote_average": details.get("vote_average"),
+        "imdb_id": details.get("external_ids", {}).get("imdb_id"),
+        "genres": genres,
+        "poster_path": poster_path,
+        "poster_url": f"https://image.tmdb.org/t/p/w500{poster_path}" if poster_path else "",
+        "backdrop_path": backdrop_path,
+        "backdrop_url": f"https://image.tmdb.org/t/p/w1280{backdrop_path}" if backdrop_path else "",
+        "trailer_key": trailer_key,
+        "popularity": details.get("popularity"),
+        "runtime": details.get("runtime"),
+        "media_type": media_type,
+    }
+
+    # For TV shows, add season/episode info
+    if media_type == "tv":
+        seasons = details.get("seasons", [])
+        valid_seasons = [s for s in seasons if s.get("season_number", 0) > 0]
+        result["number_of_seasons"] = details.get("number_of_seasons") or len(valid_seasons) or 1
+        result["number_of_episodes"] = details.get("number_of_episodes") or 0
+        result["seasons"] = valid_seasons if valid_seasons else seasons
+
+    # Build embed URLs with multiple providers
+    if media_type == "tv":
+        result["embed_urls"] = {
+            "vidsrc": f"https://vidsrc.me/embed/tv?tmdb={tmdb_id}&season=1&episode=1",
+            "vidsrc_cc": f"https://vidsrc.cc/v2/embed/tv/{tmdb_id}/1/1",
+            "embed_su": f"https://embed.su/embed/tv/{tmdb_id}/1/1",
+        }
+        result["default_embed"] = result["embed_urls"]["vidsrc"]
+    else:
+        result["embed_urls"] = {
+            "vidsrc": f"https://vidsrc.me/embed/movie?tmdb={tmdb_id}",
+            "vidsrc_cc": f"https://vidsrc.cc/v2/embed/movie/{tmdb_id}",
+            "embed_su": f"https://embed.su/embed/movie/{tmdb_id}",
+        }
+        result["default_embed"] = result["embed_urls"]["vidsrc"]
+
+    return jsonify(result)
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)

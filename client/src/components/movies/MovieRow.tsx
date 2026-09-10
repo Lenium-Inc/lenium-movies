@@ -23,12 +23,12 @@ interface MovieRowProps {
 function MovieCardWrapper({
   movie,
   saved,
-  onSelect,
+  onPlay,
   onSave,
 }: {
   movie: Movie;
   saved: boolean;
-  onSelect: () => void;
+  onPlay: () => void;
   onSave: () => void;
 }) {
   const [retryKey, setRetryKey] = useState(0);
@@ -38,7 +38,7 @@ function MovieCardWrapper({
       key={retryKey}
       fallback={<ErrorFallback retry={() => setRetryKey(k => k + 1)} />}
     >
-      <MovieCard movie={movie} saved={saved} onSelect={onSelect} onSave={onSave} />
+      <MovieCard movie={movie} saved={saved} onPlay={onPlay} onSave={onSave} />
     </ErrorBoundary>
   );
 }
@@ -76,7 +76,7 @@ export function MovieRow({
               key={`${title}-${movie.id}-${index}`}
               movie={movie}
               saved={savedIds?.includes(movie.id) ?? false}
-              onSelect={() => onSelect(movie)}
+              onPlay={() => onSelect(movie)}
               onSave={() => onSave(movie)}
             />
           ))}
@@ -91,7 +91,7 @@ export function MovieRow({
             key={`${title}-${movie.id}-${index}`}
             movie={movie}
             saved={savedIds?.includes(movie.id) ?? false}
-            onSelect={() => onSelect(movie)}
+            onPlay={() => onSelect(movie)}
             onSave={() => onSave(movie)}
           />
         ))}

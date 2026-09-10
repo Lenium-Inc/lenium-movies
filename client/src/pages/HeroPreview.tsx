@@ -256,7 +256,6 @@ export default function HeroPreview() {
       <GlassHeader profile={<ProfileMenu />} /><Spotlight
         items={spotlightItems}
         savedIds={savedIds}
-        onDetails={showDetails}
         onSave={film =>
           toggleSave(film.id)
         }

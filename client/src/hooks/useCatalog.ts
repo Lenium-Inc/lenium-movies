@@ -44,6 +44,8 @@ interface UseCatalog {
   toggleSave: (movie: Movie) => void;
 }
 
+const VIEWS_WITH_TV_FILTER: View[] = ["tv", "trending", "popular", "new", "my-list", "home"];
+
 /** Stable numeric fallback for non-TMDB (archive.org) ids in the backend search. */
 function stableId(id: string): number {
   const parsed = Number(id);
@@ -61,13 +63,12 @@ function toCatalogMovie(item: StreamMovie): Movie {
   const mediaType: "movie" | "tv" =
     item.media_type === "tv" ? "tv" : "movie";
   const year = typeof item.year === "number" ? item.year : Number(item.year) || null;
-  const runtime = item.runtime || (item.runtime ? `${item.runtime}m` : "");
   return {
     id: stableId(item.id),
     providerId: item.id,
     title: item.title,
     year: Number.isFinite(year) ? year : null,
-    runtime: runtime || "",
+    runtime: "",
     rating: "Rating unavailable",
     score: item.vote_average ?? null,
     genre: item.genres?.length ? item.genres : [mediaType === "tv" ? "Series" : "Movie"],
@@ -218,10 +219,20 @@ export function useCatalog(): UseCatalog {
 
   const filtered = useMemo(() => {
     if (searching) return movies;
-    return genre === "All"
-      ? movies
-      : movies.filter(movie => movie.genre.includes(genre));
-  }, [genre, movies, searching]);
+    let base = genre === "All" ? movies : movies.filter(movie => movie.genre.includes(genre));
+    
+    // Filter by media type for TV-specific views
+    if (VIEWS_WITH_TV_FILTER.includes(view)) {
+      if (view === "tv") {
+        base = base.filter(movie => movie.mediaType === "tv");
+      } else if (view === "trending") {
+        // Trending shows both but prioritizes TV
+        base = base.filter(movie => movie.mediaType === "tv" || movie.popularity && movie.popularity > 50);
+      }
+    }
+    
+    return base;
+  }, [genre, movies, searching, view]);
 
   const rows: CatalogRows[] = useMemo(() => {
     const byYearDesc = [...filtered].sort(
@@ -236,12 +247,24 @@ export function useCatalog(): UseCatalog {
         return [
           { title: "Popular on FreeStream", items: filtered.slice(0, cap) },
         ];
+      case "trending":
+        return [
+          { title: "Trending Now", items: filtered.slice(0, cap) },
+        ];
+      case "tv":
+        return [
+          { title: "TV Series", items: filtered.slice(0, cap) },
+        ];
       case "my-list":
         return [
           {
-            title: "My List",
+            title: "My Library",
             items: filtered.filter(movie => savedIds.includes(movie.id)),
           },
+        ];
+      case "downloads":
+        return [
+          { title: "Downloads", items: filtered.slice(0, cap) },
         ];
       default:
         return [
