@@ -11,6 +11,8 @@ interface SidebarProps {
   onClose: () => void;
   activeGenre: string;
   onGenreChange: (genre: string) => void;
+  /** Hide the sidebar (e.g., on watch pages for full-width viewport) */
+  hidden?: boolean;
 }
 
 function RailButton({
@@ -80,11 +82,13 @@ function RailButton({
  * Clean icon-only navigation with tooltip labels on hover.
  * Positioned as a floating vertical panel on the left edge of the screen.
  */
-export function Sidebar({ view, onNavigate, open, onClose, activeGenre, onGenreChange }: SidebarProps) {
+export function Sidebar({ view, onNavigate, open, onClose, activeGenre, onGenreChange, hidden = false }: SidebarProps) {
   const navigate = (next: View) => {
     onNavigate(next);
     onClose();
   };
+
+  if (hidden) return null;
 
   return (
     <>

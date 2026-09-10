@@ -46,4 +46,12 @@ export type Movie = {
   overview?: string;
   /** Popularity score from TMDB */
   popularity?: number;
+  /** Cast members (up to 3 for display) */
+  cast?: string[];
+  /** Country of origin */
+  country?: string;
+  /** Primary language */
+  language?: string;
+  /** Release date string */
+  releaseDate?: string;
 };

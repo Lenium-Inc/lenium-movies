@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import { useLocation, useParams } from "wouter";
-import { Bookmark, Check, ChevronDown, ChevronUp, Play, Star, X, MessageSquare, Clock, Tv, Film, Loader2, AlertCircle, RefreshCw, WifiOff, Server, Monitor, Zap, Wifi, Settings, ChevronDown as ChevronDownIcon, ArrowLeft, Share2, Heart, Download, Volume2 } from "lucide-react";
+import { Bookmark, Check, ChevronDown, ChevronUp, Play, Star, X, MessageSquare, Clock, Tv, Film, Loader2, AlertCircle, RefreshCw, WifiOff, Server, Monitor, Zap, Wifi, Settings, ChevronDown as ChevronDownIcon, ArrowLeft, Share2, Heart, Download, Volume2, Plus, User, MapPin, Globe, Calendar } from "lucide-react";
 import { getRating, setRating, subscribeRatings } from "@/services/ratings";
 import {
   fetchTrailer,
@@ -960,19 +960,11 @@ export function WatchPage() {
                 {/* Action Buttons */}
                 <div className="flex flex-wrap items-center gap-2">
                   <Button
-                    onClick={play}
-                    disabled={resolving}
-                    className="flex-1 sm:flex-none flex items-center justify-center gap-2 rounded-md bg-[#d7d7d3] px-4 py-3 text-sm font-black text-[#0b0b0e] hover:bg-white disabled:opacity-60 transition-all active:scale-[0.98] shadow-lg shadow-[#d7d7d3]/20"
-                  >
-                    <Play className="h-5 w-5 fill-current" />
-                    {resolving ? "Loading Stream…" : "Play"}
-                  </Button>
-                  <Button
                     variant="outline"
                     className="flex items-center gap-2 px-4 py-3"
                     onClick={() => { /* Add to library */ }}
                   >
-                    <Bookmark className="h-5 w-5" />
+                    <Plus className="h-5 w-5" />
                     <span className="hidden sm:inline">My Library</span>
                   </Button>
                   <Button
@@ -981,13 +973,6 @@ export function WatchPage() {
                   >
                     <Download className="h-5 w-5" />
                     <span className="hidden sm:inline">Download</span>
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="flex items-center gap-2 px-4 py-3"
-                  >
-                    <Volume2 className="h-5 w-5" />
-                    <span className="hidden sm:inline">Audio</span>
                   </Button>
                 </div>
               </div>
@@ -1067,24 +1052,81 @@ export function WatchPage() {
               ) : (
                 // Movie: Show details in sidebar
                 <div className="space-y-6">
+                  {/* Details & Unavailable Info */}
                   <div className="space-y-4">
                     <h2 className="text-sm font-semibold text-white/80 uppercase tracking-wide">Details</h2>
                     <div className="grid grid-cols-2 gap-3 text-sm">
                       <div>
                         <p className="text-white/50">Director</p>
-                        <p className="text-white font-medium">{movie.director || "Unknown"}</p>
+                        <p className="text-white font-medium flex items-center gap-1">
+                          {movie.director || (
+                            <>
+                              <span className="text-white/40">Unknown</span>
+                              <User className="h-3 w-3 text-white/30" />
+                            </>
+                          )}
+                        </p>
                       </div>
                       <div>
                         <p className="text-white/50">Cast</p>
-                        <p className="text-white font-medium line-clamp-1">Cast info unavailable</p>
+                        <p className="text-white font-medium line-clamp-1 flex items-center gap-1">
+                          {movie.cast && movie.cast.length > 0 ? (
+                            movie.cast.slice(0, 3).join(", ")
+                          ) : (
+                            <>
+                              <span className="text-white/40">Unavailable</span>
+                              <User className="h-3 w-3 text-white/30" />
+                            </>
+                          )}
+                        </p>
                       </div>
                       <div>
                         <p className="text-white/50">Country</p>
-                        <p className="text-white font-medium">US</p>
+                        <p className="text-white font-medium flex items-center gap-1">
+                          {movie.country || (
+                            <>
+                              <span className="text-white/40">Unknown</span>
+                              <MapPin className="h-3 w-3 text-white/30" />
+                            </>
+                          )}
+                        </p>
                       </div>
                       <div>
                         <p className="text-white/50">Language</p>
-                        <p className="text-white font-medium">English</p>
+                        <p className="text-white font-medium flex items-center gap-1">
+                          {movie.language || (
+                            <>
+                              <span className="text-white/40">Unknown</span>
+                              <Globe className="h-3 w-3 text-white/30" />
+                            </>
+                          )}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-white/50">Release Date</p>
+                        <p className="text-white font-medium flex items-center gap-1">
+                          {movie.releaseDate ? (
+                            movie.releaseDate
+                          ) : (
+                            <>
+                              <span className="text-white/40">Unknown</span>
+                              <Calendar className="h-3 w-3 text-white/30" />
+                            </>
+                          )}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-white/50">Runtime</p>
+                        <p className="text-white font-medium flex items-center gap-1">
+                          {movie.runtime ? (
+                            `${movie.runtime}m`
+                          ) : (
+                            <>
+                              <span className="text-white/40">Unknown</span>
+                              <Calendar className="h-3 w-3 text-white/30" />
+                            </>
+                          )}
+                        </p>
                       </div>
                     </div>
                   </div>
