@@ -4,6 +4,7 @@ import { useLocation } from "wouter";
 import { getRating, setRating, subscribeRatings } from "@/services/ratings";
 import {
   fetchTrailer,
+  fetchTrailerByTmdbId,
   getStreamSource,
   resolveStream,
   StreamNotFoundError,
@@ -80,7 +81,7 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
 
   const canRate = watchedSeconds >= RATE_AFTER_SECONDS;
 
-  // Fetch trailer in background
+  // Fetch trailer in background (by title/year)
   useEffect(() => {
     let active = true;
     setTrailer(null);
@@ -95,6 +96,22 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
       active = false;
     };
   }, [movie.title, movie.year]);
+
+  // Fetch YouTube trailer by TMDB ID for autoplaying background
+  useEffect(() => {
+    if (!movie.providerId) return;
+    let active = true;
+    void fetchTrailerByTmdbId(movie.providerId)
+      .then(info => {
+        if (active && info) setTrailer(info);
+      })
+      .catch(() => {
+        // Silently fail - keep existing trailer or fallback to backdrop
+      });
+    return () => {
+      active = false;
+    };
+  }, [movie.providerId]);
 
   /**
    * Build the playable stream for the selected title/episode and open the player.
@@ -284,15 +301,33 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
         className="max-h-[94vh] w-full max-w-2xl overflow-y-auto rounded-t-xl border border-white/10 bg-[#151519] shadow-2xl sm:rounded-xl"
       >
         <div className="relative h-44 overflow-hidden sm:h-56">
-          {trailer ? (
-            <TrailerEmbed provider={trailer.provider} id={trailer.id} />
-          ) : movie.backdrop ? (
-            <img
-              src={getImageUrl(movie.backdrop, "original")}
-              alt=""
-              className="h-full w-full object-cover"
-            />
-          ) : null}
+          {(() => {
+            if (trailer && trailer.provider === "youtube") {
+              return (
+                <iframe
+                  key="youtube-trailer"
+                  src={`https://www.youtube-nocookie.com/embed/${trailer.id}?autoplay=1&mute=1&controls=0&loop=1&playlist=${trailer.id}&enablejsapi=1`}
+                  className="w-full h-64 md:h-80 object-cover pointer-events-none rounded-t-xl"
+                  allow="autoplay; encrypted-media"
+                  title={`${movie.title} trailer`}
+                />
+              );
+            }
+            if (trailer) {
+              return <TrailerEmbed key="trailer-embed" provider={trailer.provider} id={trailer.id} />;
+            }
+            if (movie.backdrop) {
+              return (
+                <img
+                  key="backdrop"
+                  src={getImageUrl(movie.backdrop, "original")}
+                  alt=""
+                  className="h-full w-full object-cover"
+                />
+              );
+            }
+            return null;
+          })()}
           <div className="absolute inset-0 bg-black/45" />
           <div className="absolute inset-0 bg-gradient-to-t from-[#151519] to-transparent" />
           <button

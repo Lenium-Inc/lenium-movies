@@ -5,6 +5,7 @@ import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
 import {
   getMovieById,
+  getMovieTrailer,
   getPopularMovies,
   isTmdbConfigured,
   searchMovies,
@@ -46,6 +47,9 @@ export const appRouter = router({
     movieById: publicProcedure
       .input(z.object({ id: z.number().int().positive() }))
       .query(({ input }) => getMovieById(input.id)),
+    movieTrailer: publicProcedure
+      .input(z.object({ id: z.number().int().positive() }))
+      .query(({ input }) => getMovieTrailer(input.id)),
   }),
 });
 

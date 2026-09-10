@@ -221,3 +221,37 @@ export async function getMovieById(id: number) {
   const movie = await tmdbFetch<TmdbMovie>(`/movie/${id}`);
   return normalizeMovie(movie);
 }
+
+/**
+ * Fetch trailer videos for a movie from TMDB with append_to_response=videos.
+ * Returns the YouTube trailer key if available.
+ */
+export async function getMovieTrailer(id: number): Promise<string | null> {
+  type TmdbVideo = {
+    id: string;
+    key: string;
+    name: string;
+    site: string;
+    type: string;
+    official: boolean;
+  };
+  type TmdbVideoResponse = { results?: TmdbVideo[] };
+  
+  const payload = await tmdbFetch<TmdbVideoResponse>(`/movie/${id}/videos`);
+  const videos = payload.results ?? [];
+  
+  // Find official YouTube trailer
+  const trailer = videos.find(
+    v => v.site === "YouTube" && v.type === "Trailer" && v.official
+  );
+  
+  // Fallback: any YouTube trailer/teaser
+  if (!trailer) {
+    const anyTrailer = videos.find(
+      v => v.site === "YouTube" && (v.type === "Trailer" || v.type === "Teaser")
+    );
+    return anyTrailer?.key ?? null;
+  }
+  
+  return trailer.key;
+}

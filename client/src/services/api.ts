@@ -433,7 +433,7 @@ function isTrailerPayload(value: unknown): value is { trailer?: TrailerInfo } {
 }
 
 /**
- * Resolve the official preview trailer for a title through the movie backend.
+ * Fetch the official preview trailer for a title through the movie backend.
  * The backend consults TMDB (year-qualified) so the preview always belongs to
  * the requested film. Returns null when no trailer exists — the caller then
  * falls back to backdrop artwork on hover.
@@ -455,6 +455,25 @@ export async function fetchTrailer(
     throw new Error("Movie backend returned an unexpected trailer shape");
   }
   return payload.trailer ?? null;
+}
+
+/**
+ * Fetch trailer by TMDB ID directly from TMDB via backend.
+ * Uses append_to_response=videos to get YouTube trailer key.
+ */
+export async function fetchTrailerByTmdbId(
+  tmdbId: string | number
+): Promise<TrailerInfo | null> {
+  const response = await fetch(`/api/catalog/movieTrailer?id=${tmdbId}`);
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    throw new Error(`Movie backend responded with status ${response.status}`);
+  }
+  const data = await response.json();
+  if (data && typeof data === "string") {
+    return { provider: "youtube", id: data };
+  }
+  return null;
 }
 
 /**

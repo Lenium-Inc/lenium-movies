@@ -849,7 +849,12 @@ export function WatchPage() {
           <div className="grid lg:grid-cols-[2fr_1fr] gap-6">
             {/* LEFT PANEL: Video Player - Theater Mode */}
             <div className="relative">
-              <div className="relative w-full aspect-video sm:aspect-[16/9] rounded-2xl overflow-hidden bg-black shadow-2xl">
+              {/* Ambient Canvas Glow Effect - Netflix-style backdrop glow behind player */}
+              <div
+                aria-hidden
+                className="absolute -inset-4 bg-gradient-to-r from-purple-600/30 via-pink-600/20 to-amber-500/30 rounded-3xl blur-3xl opacity-60 -z-10 pointer-events-none transition-all duration-700"
+              />
+              <div className="relative w-full max-w-6xl mx-auto aspect-video rounded-2xl overflow-hidden bg-black shadow-[0_20px_80px_rgba(0,0,0,0.8)] border border-white/10 group">
                 {resolved && (
                   <>
                     {/* Top-left overlay: Back button */}

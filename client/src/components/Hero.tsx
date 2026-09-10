@@ -146,13 +146,20 @@ export function Hero({
               className="absolute inset-0 animate-[kenburns_20s_ease-in-out_infinite]"
             >
               {backdropUrl ? (
-                <img
-                  src={backdropUrl}
-                  alt=""
-                  loading="eager"
-                  fetchPriority="high"
-                  className="h-full w-full object-cover object-[center_22%]"
-                />
+                <>
+                  {/* Ambient Canvas Glow Effect - Netflix-style backdrop glow */}
+                  <div
+                    aria-hidden
+                    className="absolute -inset-4 bg-gradient-to-r from-purple-600/30 via-pink-600/20 to-amber-500/30 rounded-3xl blur-3xl opacity-60 -z-10 pointer-events-none transition-all duration-700"
+                  />
+                  <img
+                    src={backdropUrl}
+                    alt=""
+                    loading="eager"
+                    fetchPriority="high"
+                    className="h-full w-full object-cover object-[center_22%]"
+                  />
+                </>
               ) : (
                 <div className="h-full w-full bg-[linear-gradient(160deg,#1B1B20_0%,#0A0A0A_55%,#050505_100%)]" />
               )}
