@@ -120,7 +120,7 @@ export function proxiedStreamUrl(url: string): string {
 
 /** Base URL of the movie backend. In dev, Vite proxies /api to Flask. */
 export const MOVIE_API_BASE_URL =
-  import.meta.env.VITE_MOVIE_API_BASE_URL ?? "";
+  import.meta.env.VITE_MOVIE_API_BASE_URL ?? "https://vy-e721.onrender.com";
 
 function isStreamMovie(value: unknown): value is StreamMovie {
   if (typeof value !== "object" || value === null) return false;
