@@ -440,6 +440,31 @@ def get_trailer():
     return jsonify({"trailer": {"provider": "youtube", "id": trailer_key}})
 
 
+@app.route("/api/catalog/movieTrailer", methods=["GET", "OPTIONS"])
+def get_movie_trailer_by_id():
+    """Fetch trailer by TMDB ID directly (used by frontend fetchTrailerByTmdbId)."""
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    tmdb_id = request.args.get("id")
+    media_type = request.args.get("media_type", "movie")
+
+    if not tmdb_id:
+        return jsonify({"trailer": None}), 400
+
+    try:
+        tmdb_id = int(tmdb_id)
+    except (ValueError, TypeError):
+        return jsonify({"trailer": None}), 400
+
+    trailer_key = tmdb.get_trailer_key(tmdb_id, media_type)
+
+    if not trailer_key:
+        return jsonify({"trailer": None})
+
+    return jsonify({"trailer": {"provider": "youtube", "id": trailer_key}})
+
+
 def extract_year(date_str: str | None) -> str:
     """Extract 4-digit year from various date formats (YYYY-MM-DD, YYYY, etc.)."""
     if not date_str:
