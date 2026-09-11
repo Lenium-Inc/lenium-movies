@@ -497,7 +497,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           className="w-full h-full rounded-xl border-0 bg-black shadow-2xl"
           allowFullScreen
           allow="autoplay; encrypted-media; fullscreen; picture-in-picture; display-capture"
-          sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
+          sandbox="allow-scripts allow-same-origin allow-forms allow-presentation allow-popups allow-modals allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation"
           referrerPolicy="origin"
           onLoad={() => {
             setIframeLoaded(true);

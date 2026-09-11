@@ -145,7 +145,7 @@ function isStreamMovie(value: unknown): value is StreamMovie {
 export async function searchCatalog(query: string): Promise<StreamMovie[]> {
   const trimmed = query.trim();
   if (!trimmed) return [];
-  const response = await fetch(`/api/search?q=${encodeURIComponent(trimmed)}`);
+  const response = await fetch(`${MOVIE_API_BASE_URL}/api/search?q=${encodeURIComponent(trimmed)}`);
   if (!response.ok) {
     throw new Error(`Movie backend responded with status ${response.status}`);
   }
@@ -360,7 +360,7 @@ export async function getStreamSource(
     params.set("season", String(input.season ?? 1));
     params.set("episode", String(input.episode ?? 1));
   }
-  const response = await fetch(`/api/get-stream?${params.toString()}`);
+  const response = await fetch(`${MOVIE_API_BASE_URL}/api/get-stream?${params.toString()}`);
   if (!response.ok) {
     throw new Error(`Movie backend responded with status ${response.status}`);
   }
@@ -435,7 +435,7 @@ export async function fetchTrailer(
   const params = new URLSearchParams();
   params.set("title", title);
   if (year) params.set("year", String(year));
-  const response = await fetch(`/api/movies/trailer?${params.toString()}`);
+  const response = await fetch(`${MOVIE_API_BASE_URL}/api/movies/trailer?${params.toString()}`);
   if (response.status === 404) return null;
   if (!response.ok) {
     throw new Error(`Movie backend responded with status ${response.status}`);
@@ -454,7 +454,7 @@ export async function fetchTrailer(
 export async function fetchTrailerByTmdbId(
   tmdbId: string | number
 ): Promise<TrailerInfo | null> {
-  const response = await fetch(`/api/catalog/movieTrailer?id=${tmdbId}`);
+  const response = await fetch(`${MOVIE_API_BASE_URL}/api/catalog/movieTrailer?id=${tmdbId}`);
   if (response.status === 404) return null;
   if (!response.ok) {
     throw new Error(`Movie backend responded with status ${response.status}`);
@@ -479,7 +479,7 @@ export async function fetchEpisodeDetails(
   params.set("tmdb_id", tmdbId);
   params.set("season", String(season));
   params.set("episode", String(episode));
-  const response = await fetch(`/api/episodes?${params.toString()}`);
+  const response = await fetch(`${MOVIE_API_BASE_URL}/api/episodes?${params.toString()}`);
   if (response.status === 404) return null;
   if (!response.ok) {
     throw new Error(`Movie backend responded with status ${response.status}`);
@@ -509,7 +509,7 @@ export interface SearchSuggestion {
 export async function searchSuggest(query: string): Promise<SearchSuggestion[]> {
   const trimmed = query.trim();
   if (!trimmed || trimmed.length < 2) return [];
-  const response = await fetch(`/api/search/suggest?q=${encodeURIComponent(trimmed)}`);
+  const response = await fetch(`${MOVIE_API_BASE_URL}/api/search/suggest?q=${encodeURIComponent(trimmed)}`);
   if (!response.ok) {
     throw new Error(`Movie backend responded with status ${response.status}`);
   }
@@ -571,7 +571,7 @@ export async function fetchTrending(params: TrendingParams = {}): Promise<Stream
   const query = new URLSearchParams();
   if (params.time_window) query.set("time_window", params.time_window);
   if (params.media_type) query.set("media_type", params.media_type);
-  const response = await fetch(`/api/movies/trending?${query.toString()}`);
+  const response = await fetch(`${MOVIE_API_BASE_URL}/api/movies/trending?${query.toString()}`);
   if (!response.ok) {
     throw new Error(`Movie backend responded with status ${response.status}`);
   }
@@ -601,7 +601,7 @@ export async function fetchPopular(params: PopularParams = {}): Promise<StreamMo
   const query = new URLSearchParams();
   if (params.media_type) query.set("media_type", params.media_type);
   if (params.page) query.set("page", String(params.page));
-  const response = await fetch(`/api/movies/popular?${query.toString()}`);
+  const response = await fetch(`${MOVIE_API_BASE_URL}/api/movies/popular?${query.toString()}`);
   if (!response.ok) {
     throw new Error(`Movie backend responded with status ${response.status}`);
   }
@@ -629,7 +629,7 @@ export async function fetchNowPlaying(params: NowPlayingParams = {}): Promise<St
 
   const query = new URLSearchParams();
   if (params.page) query.set("page", String(params.page));
-  const response = await fetch(`/api/movies/now_playing?${query.toString()}`);
+  const response = await fetch(`${MOVIE_API_BASE_URL}/api/movies/now_playing?${query.toString()}`);
   if (!response.ok) {
     throw new Error(`Movie backend responded with status ${response.status}`);
   }
@@ -657,7 +657,7 @@ export async function fetchOnTheAir(params: OnTheAirParams = {}): Promise<Stream
 
   const query = new URLSearchParams();
   if (params.page) query.set("page", String(params.page));
-  const response = await fetch(`/api/movies/on_the_air?${query.toString()}`);
+  const response = await fetch(`${MOVIE_API_BASE_URL}/api/movies/on_the_air?${query.toString()}`);
   if (!response.ok) {
     throw new Error(`Movie backend responded with status ${response.status}`);
   }
