@@ -261,6 +261,8 @@ function isResolvePayload(value: unknown): value is {
 
 /** Optional media targeting for stream resolution (TV series playback). */
 export interface StreamResolveOptions {
+  /** TMDB ID for direct resolution (preferred over title/year search). */
+  tmdbId?: string;
   /** Season of a series to resolve (ignored for movies). */
   season?: number;
   /** Episode of a series to resolve (ignored for movies). */
@@ -277,9 +279,12 @@ export interface StreamResolveOptions {
  * For TV series pass `options.season`/`options.episode` so the backend bakes
  * the exact episode into the returned embed URL.
  *
+ * Pass `options.tmdbId` for direct resolution by TMDB ID (more reliable than
+ * title/year search).
+ *
  * @param title metadata title from the catalog
  * @param year release year, used to reject same-name-but-different-film matches
- * @param options episode targeting, used for series playback
+ * @param options episode targeting and optional TMDB ID, used for series playback
  * @throws `StreamNotFoundError` when no playable title exists, or an `Error`
  * when the backend is unreachable.
  */
@@ -290,6 +295,7 @@ export async function resolveStream(
 ): Promise<ResolvedStream> {
   const body: Record<string, unknown> = year ? { title, year } : { title };
   if (options) {
+    if (options.tmdbId) body.id = options.tmdbId;
     if (options.season) body.season = options.season;
     if (options.episode) body.episode = options.episode;
   }

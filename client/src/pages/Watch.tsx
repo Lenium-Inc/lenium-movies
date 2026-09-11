@@ -391,7 +391,7 @@ export function WatchPage() {
     async (
       title: string,
       year?: number | null,
-      options?: { season?: number; episode?: number },
+      options?: { season?: number; episode?: number; tmdbId?: string },
       attempt = 1
     ): Promise<ResolvedStream> => {
       try {
@@ -434,7 +434,7 @@ export function WatchPage() {
       try {
         let base = resolved?.stream ?? null;
         if (!base) {
-          const stream = await resolveWithRetry(movie.title, movie.year);
+          const stream = await resolveWithRetry(movie.title, movie.year, { tmdbId: movie.providerId });
           setResolved(stream);
           base = stream.stream;
         }
@@ -718,9 +718,10 @@ export function WatchPage() {
 
     void (async () => {
       try {
-        const stream = await resolveStream(movie.title, movie.year, 
-          movie.mediaType === "tv" ? { season, episode } : undefined
-        );
+        const stream = await resolveStream(movie.title, movie.year, { 
+          tmdbId: movie.providerId,
+          ...(movie.mediaType === "tv" ? { season, episode } : {})
+        });
         if (disposed) return;
         setResolved(stream);
         prefetchForOpen(stream.stream);
