@@ -80,6 +80,26 @@ def add_cors_headers(response):
     return response
 
 
+@app.route("/", methods=["GET"])
+def root():
+    return jsonify({
+        "status": "online",
+        "service": "Lenium Movies API",
+        "version": "1.0.0",
+        "endpoints": {
+            "search": "/api/search?q=<query>",
+            "resolve": "POST /api/movies/resolve",
+            "stream": "/api/get-stream",
+            "trailer": "/api/catalog/movieTrailer?id=<tmdb_id>",
+            "feeds": "/api/movies/feeds",
+            "trending": "/api/movies/trending",
+            "popular": "/api/movies/popular",
+            "now_playing": "/api/movies/now_playing",
+            "on_the_air": "/api/movies/on_the_air"
+        }
+    })
+
+
 @app.route("/api/search", methods=["GET", "OPTIONS"])
 def search_catalog():
     if request.method == "OPTIONS":
