@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronRight, Clock3, Lock, UserRound } from "lucide-react";
+import { ChevronRight, Clock3, Lock, UserRound, LogOut, Bookmark, User } from "lucide-react";
 import { Link } from "wouter";
+import { useAuth } from "@/context/AuthContext";
 import { useStatsRevision } from "@/hooks/useStats";
 import {
   capLimit,
@@ -18,11 +19,12 @@ const RADIUS = 30;
 const CIRC = 2 * Math.PI * RADIUS;
 
 /**
- * Compact circular profile control with a monochrome dropdown: hours-watched
- * ring toward the next milestone, today's viewing cap, and the earned
- * achievement badges. Locked badges render dimmed with their unlock hint.
+ * Compact circular profile control with a monochrome dropdown.
+ * Guest mode: shows "Sign In" button.
+ * Authenticated mode: shows avatar with dropdown containing Profile, My List, Sign Out, and stats.
  */
 export function ProfileMenu() {
+  const { user, isLoading, login, logout } = useAuth();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   useStatsRevision();
@@ -41,13 +43,21 @@ export function ProfileMenu() {
     };
   }, [open]);
 
-  if (!open) {
+  if (isLoading) {
+    return (
+      <div className="grid h-9 w-9 place-items-center rounded-full border border-white/15 bg-white/[0.08] text-white/50">
+        <div className="h-4 w-4 animate-pulse rounded-full bg-white/30" />
+      </div>
+    );
+  }
+
+  if (!user) {
     return (
       <button
         type="button"
-        onClick={() => setOpen(true)}
-        aria-label="Profile"
-        className="grid h-9 w-9 place-items-center rounded-full border border-white/15 bg-white/[0.08] text-white transition hover:bg-white/20"
+        onClick={() => login()}
+        aria-label="Sign In"
+        className="grid h-9 w-9 place-items-center rounded-full border border-white/15 bg-white/[0.08] text-white transition hover:bg-white/20 hover:border-white/30"
       >
         <UserRound className="h-4 w-4" />
       </button>
@@ -62,6 +72,11 @@ export function ProfileMenu() {
   const earned = earnedAchievements();
   const learned = new Set(earned.map(a => a.id));
 
+  const handleSignOut = () => {
+    logout();
+    setOpen(false);
+  };
+
   return (
     <div ref={rootRef} className="relative">
       <button
@@ -70,11 +85,41 @@ export function ProfileMenu() {
         aria-label="Profile"
         className="grid h-9 w-9 place-items-center rounded-full border border-white/15 bg-white/[0.08] text-white transition hover:bg-white/20"
       >
-        <UserRound className="h-4 w-4" />
+        {user.avatar_url ? (
+          <img
+            src={user.avatar_url}
+            alt=""
+            className="h-9 w-9 rounded-full object-cover"
+          />
+        ) : (
+          <span className="grid h-9 w-9 place-items-center rounded-full bg-indigo-600 text-white font-bold text-sm">
+            {user.name.charAt(0).toUpperCase()}
+          </span>
+        )}
       </button>
 
       {open && (
         <div className="absolute right-0 top-full z-50 mt-2 w-[19rem] overflow-hidden rounded-xl border border-white/10 bg-[#121212] shadow-2xl">
+          <div className="border-b border-white/10 px-4 py-3">
+            <div className="flex items-center gap-3">
+              {user.avatar_url ? (
+                <img
+                  src={user.avatar_url}
+                  alt=""
+                  className="h-10 w-10 rounded-full object-cover"
+                />
+              ) : (
+                <span className="grid h-10 w-10 place-items-center rounded-full bg-indigo-600 text-white font-bold">
+                  {user.name.charAt(0).toUpperCase()}
+                </span>
+              )}
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-white truncate">{user.name}</p>
+                <p className="text-[11px] text-white/50 truncate">{user.email}</p>
+              </div>
+            </div>
+          </div>
+
           <div className="border-b border-white/10 px-4 py-3">
             <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/50">
               Mindful viewer
@@ -171,13 +216,35 @@ export function ProfileMenu() {
             </div>
           </div>
 
-          <Link
-            href="/profile"
-            className="flex items-center justify-between border-t border-white/10 px-4 py-3 text-[11px] font-bold uppercase tracking-[0.15em] text-white/60 transition hover:bg-white/[0.04] hover:text-white"
-          >
-            View full profile
-            <ChevronRight className="h-3.5 w-3.5" />
-          </Link>
+          <nav className="px-2 py-1 space-y-1">
+            <Link
+              href="/profile"
+              onClick={() => setOpen(false)}
+              className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-white/80 transition hover:bg-white/10 hover:text-white"
+            >
+              <User className="h-4 w-4" />
+              Profile
+            </Link>
+            <Link
+              href="/my-list"
+              onClick={() => setOpen(false)}
+              className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-white/80 transition hover:bg-white/10 hover:text-white"
+            >
+              <Bookmark className="h-4 w-4" />
+              My List
+            </Link>
+          </nav>
+
+          <div className="border-t border-white/10 px-4 py-3">
+            <button
+              type="button"
+              onClick={handleSignOut}
+              className="flex items-center gap-3 w-full rounded-lg px-3 py-2 text-sm font-medium text-red-400 transition hover:bg-red-500/10 hover:text-red-300"
+            >
+              <LogOut className="h-4 w-4" />
+              Sign Out
+            </button>
+          </div>
         </div>
       )}
     </div>
