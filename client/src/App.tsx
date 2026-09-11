@@ -8,6 +8,7 @@ import Home from "./pages/Home";
 import HeroPreview from "./pages/HeroPreview";
 import Profile from "./pages/Profile";
 import { WatchPage } from "./pages/Watch";
+import MyList from "./pages/MyList";
 
 function Router() {
   return (
@@ -15,6 +16,7 @@ function Router() {
       <Route path="/" component={Home} />
       <Route path="/hero" component={HeroPreview} />
       <Route path="/profile" component={Profile} />
+      <Route path="/my-list" component={MyList} />
       <Route path="/watch/:id" component={WatchPage} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
