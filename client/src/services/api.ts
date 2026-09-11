@@ -337,16 +337,6 @@ function isGetStreamPayload(value: unknown): value is {
 } {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
-  const mirrors = Array.isArray(record.mirrors)
-    ? record.mirrors.filter(
-        (mirror): mirror is StreamMirror =>
-          Boolean(
-            mirror &&
-              typeof (mirror as StreamMirror).name === "string" &&
-              typeof (mirror as StreamMirror).url === "string"
-          )
-      )
-    : [];
   return record.success === true && typeof record.activeSource === "string";
 }
 
