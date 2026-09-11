@@ -494,16 +494,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           ref={iframeRef}
           src={currentMirrorUrl}
           title={title}
-          className="w-full h-full rounded-xl border-0 bg-black shadow-2xl"
+          className="w-full h-full border-0"
           allowFullScreen
-          allow="autoplay; encrypted-media; fullscreen; picture-in-picture; display-capture"
-          sandbox="allow-scripts allow-same-origin allow-forms allow-presentation allow-popups allow-modals allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation"
-          referrerPolicy="origin"
+          allow="fullscreen; autoplay; encrypted-media; picture-in-picture; accelerometer; clipboard-write"
           onLoad={() => {
             setIframeLoaded(true);
             onIframeLoad?.();
           }}
-          style={{ pointerEvents: 'auto' }}
         />
       )}
 
