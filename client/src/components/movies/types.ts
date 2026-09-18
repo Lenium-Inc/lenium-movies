@@ -12,10 +12,10 @@ export type Movie = {
   title: string;
   /** Release year (null if unknown) */
   year: number | null;
-  /** Runtime string (e.g., "120m", "2h 30m") */
-  runtime: string;
+  /** Runtime in minutes (null if unknown) */
+  runtime: number | null;
   /** Rating label (e.g., "PG-13", "TV-MA") */
-  rating: string;
+  rating: string | null;
   /** TMDB vote average 0-10 (null if unavailable) */
   score: number | null;
   /** Genres array (e.g., ["Action", "Sci-Fi"]) */
@@ -28,6 +28,14 @@ export type Movie = {
   synopsis: string;
   /** Director name if available */
   director: string | null;
+  /** Cast members */
+  cast: string[];
+  /** Country of origin */
+  country: string | null;
+  /** Primary language */
+  language: string | null;
+  /** Release date string (YYYY-MM-DD) */
+  releaseDate: string | null;
   /** Source identifier */
   source: "tmdb";
   /** Whether the entry is a feature film or a TV series */
@@ -46,12 +54,26 @@ export type Movie = {
   overview?: string;
   /** Popularity score from TMDB */
   popularity?: number;
-  /** Cast members (up to 3 for display) */
-  cast?: string[];
-  /** Country of origin */
-  country?: string;
-  /** Primary language */
-  language?: string;
-  /** Release date string */
-  releaseDate?: string;
+};
+
+/** A verified direct quality variant from the backend */
+export type StreamVariant = {
+  quality: string | null;
+  url: string;
+  type: "hls" | "dash" | "mp4" | "embed";
+};
+
+/** Resolved stream response from backend */
+export type ResolvedStream = {
+  id: string;
+  title: string;
+  media_type: "movie" | "tv";
+  stream_url: string | null;
+  streams?: StreamVariant[];
+  mirrors?: Array<{
+    name: string;
+    url: string;
+  }>;
+  source_type?: "hls" | "dash" | "mp4" | "embed";
+  is_embed?: boolean;
 };

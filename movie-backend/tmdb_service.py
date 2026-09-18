@@ -36,6 +36,50 @@ def _tmdb_get(endpoint: str, params: Optional[Dict] = None) -> Optional[Dict]:
         return None
 
 
+def extract_director_and_cast(credits: Dict) -> tuple[Optional[str], List[str]]:
+    """Extract director name and top cast members from credits."""
+    director = None
+    cast = []
+    
+    if credits.get("crew"):
+        for person in credits["crew"]:
+            if person.get("job") == "Director" and person.get("name"):
+                director = person["name"]
+                break
+    
+    if credits.get("cast"):
+        cast = [person["name"] for person in credits["cast"][:10] if person.get("name")]
+    
+    return director, cast
+
+
+def extract_country_and_language(data: Dict) -> tuple[Optional[str], Optional[str]]:
+    """Extract country and language from TMDB details."""
+    country = None
+    language = None
+    
+    # Country from production_countries
+    production_countries = data.get("production_countries", [])
+    if production_countries:
+        country_names = [
+            c.get("name") for c in production_countries if c.get("name")
+        ]
+        if country_names:
+            country = ", ".join(country_names)
+    
+    # Language from spoken_languages
+    spoken_languages = data.get("spoken_languages", [])
+    if spoken_languages:
+        language_names = [
+            lang.get("english_name") or lang.get("name") 
+            for lang in spoken_languages if lang.get("english_name") or lang.get("name")
+        ]
+        if language_names:
+            language = ", ".join(language_names)
+    
+    return country, language
+
+
 def fetch_media_details(media_id: int, media_type: str = "movie") -> Optional[Dict]:
     """Fetch complete media details including external IDs, credits, videos, and for TV: seasons/episodes."""
     endpoint = f"/{media_type}/{media_id}"
@@ -70,6 +114,12 @@ def fetch_media_details(media_id: int, media_type: str = "movie") -> Optional[Di
     poster_path = data.get("poster_path")
     backdrop_path = data.get("backdrop_path")
 
+    # Extract director and cast
+    director, cast = extract_director_and_cast(data.get("credits", {}))
+
+    # Extract country and language
+    country, language = extract_country_and_language(data)
+
     result = {
         "id": data.get("id"),
         "title": data.get("title") or data.get("name"),
@@ -87,6 +137,10 @@ def fetch_media_details(media_id: int, media_type: str = "movie") -> Optional[Di
         "popularity": data.get("popularity"),
         "runtime": data.get("runtime"),
         "media_type": media_type,
+        "director": director,
+        "cast": cast,
+        "country": country,
+        "language": language,
     }
 
     # For TV shows, fetch season/episode counts

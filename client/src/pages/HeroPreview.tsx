@@ -208,14 +208,18 @@ function toMovie(film: PreviewFilm): Movie {
     mediaType: "movie",
     title: film.title,
     year: film.year,
-    runtime: fmtRuntime(film.runtimeMin) ?? "",
-    rating: "TBD",
+    runtime: film.runtimeMin ?? null,
+    rating: null,
     score: film.score,
     genre: film.genre,
     poster: film.poster,
     backdrop: film.backdrop,
     synopsis: film.overview ?? "",
     director: null,
+    cast: [],
+    country: null,
+    language: null,
+    releaseDate: null,
   };
 }
 

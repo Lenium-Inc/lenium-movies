@@ -204,6 +204,14 @@ def resolve_movie():
             year = details["release_date"][:4]
         stream_url = f"https://vidsrc.me/embed/movie?tmdb={tmdb_id}"
 
+    # Extract runtime as number
+    runtime = details.get("runtime")
+    if runtime is not None:
+        try:
+            runtime = int(runtime)
+        except (ValueError, TypeError):
+            runtime = None
+
     movie_data = {
         "id": str(tmdb_id),
         "title": details.get("title") or title,
@@ -223,6 +231,12 @@ def resolve_movie():
         "vote_average": details.get("vote_average"),
         "popularity": details.get("popularity"),
         "genres": details.get("genres", []),
+        "runtime": runtime,
+        "director": details.get("director"),
+        "cast": details.get("cast", []),
+        "country": details.get("country"),
+        "language": details.get("language"),
+        "release_date": details.get("release_date"),
     }
 
     # Include full episode list for TV shows

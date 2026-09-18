@@ -76,8 +76,8 @@ function toCatalogMovie(item: StreamMovie): Movie {
     providerId: item.id,
     title: item.title,
     year: Number.isFinite(year) ? year : null,
-    runtime: "",
-    rating: "Rating unavailable",
+    runtime: null,
+    rating: null,
     score: item.vote_average ?? null,
     genre: item.genres?.length
       ? item.genres
@@ -87,6 +87,10 @@ function toCatalogMovie(item: StreamMovie): Movie {
     synopsis:
       item.overview || "Playable right now — pick it to start watching.",
     director: null,
+    cast: [],
+    country: null,
+    language: null,
+    releaseDate: null,
     source: "tmdb",
     mediaType,
     vote_average: item.vote_average,

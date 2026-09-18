@@ -25,8 +25,6 @@ import {
   ArrowLeft,
   Share2,
   Heart,
-  Download,
-  Volume2,
   Plus,
   User,
   MapPin,
@@ -44,14 +42,8 @@ import {
   type StreamMovie,
   type TrailerInfo,
 } from "@/services/api";
-import {
-  VideoPlayer,
-  type PlaybackError,
-  type EmbedProvider,
-  type StreamMirror,
-  type QualityOption,
-  QUALITY_ORDER,
-} from "@/components/stream/VideoPlayer";
+import { ExternalEmbedPlayer } from "@/components/stream/ExternalEmbedPlayer";
+import { AuthorizedVideoPlayer, type StreamVariant } from "@/components/stream/AuthorizedVideoPlayer";
 import { EpisodeMatrix } from "@/components/movies/EpisodeMatrix";
 import { cancelInFlightPrefetch, prefetchForOpen } from "@/services/prefetch";
 import { attemptPlay } from "@/services/capGate";
@@ -60,7 +52,7 @@ import {
   progressForTitle,
   subscribeStats,
 } from "@/services/stats";
-import type { Movie } from "@/components/movies/types";
+import type { Movie, ResolvedStream as ResolvedStreamType, StreamVariant as StreamVariantType } from "@/components/movies/types";
 import { TrailerEmbed } from "@/components/movies/MediaCard";
 import {
   Select,
@@ -72,6 +64,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { isExternalEmbedUrl, getStreamType, getEmbedHostName } from "@/lib/streamUtils";
 
 const TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p";
 
@@ -83,186 +76,8 @@ function getImageUrl(path: string, size: string): string {
 const RATE_AFTER_SECONDS = 15 * 60;
 const MAX_RETRY_ATTEMPTS = 3;
 const RETRY_BASE_DELAY_MS = 1000;
-const EMBED_LOAD_TIMEOUT_MS = 8000;
 
-interface ProviderConfig {
-  name: string;
-  supportsQuality: boolean;
-  qualityParam: string;
-  supportsMirrors: boolean;
-  defaultQuality: string;
-  buildUrl: (
-    tmdbId: string,
-    mediaType: "movie" | "tv",
-    season?: number,
-    episode?: number
-  ) => string;
-}
-
-const PROVIDER_CONFIGS: Record<EmbedProvider, ProviderConfig> = {
-  vidsrc: {
-    name: "VidSrc",
-    supportsQuality: true,
-    qualityParam: "quality",
-    supportsMirrors: true,
-    defaultQuality: "480p",
-    buildUrl: (tmdbId, mediaType, season, episode) =>
-      mediaType === "movie"
-        ? `https://vidsrc.cc/v2/embed/movie/${tmdbId}`
-        : `https://vidsrc.cc/v2/embed/tv/${tmdbId}/${season || 1}/${episode || 1}`,
-  },
-  "embed.su": {
-    name: "Embed.su",
-    supportsQuality: true,
-    qualityParam: "quality",
-    supportsMirrors: true,
-    defaultQuality: "480p",
-    buildUrl: (tmdbId, mediaType, season, episode) =>
-      mediaType === "movie"
-        ? `https://embed.su/embed/movie/${tmdbId}`
-        : `https://embed.su/embed/tv/${tmdbId}/${season || 1}/${episode || 1}`,
-  },
-  autoembed: {
-    name: "AutoEmbed",
-    supportsQuality: true,
-    qualityParam: "quality",
-    supportsMirrors: true,
-    defaultQuality: "480p",
-    buildUrl: (tmdbId, mediaType, season, episode) =>
-      mediaType === "movie"
-        ? `https://autoembed.cc/embed/movie/${tmdbId}`
-        : `https://autoembed.cc/embed/tv/${tmdbId}/${season || 1}/${episode || 1}`,
-  },
-  "2embed": {
-    name: "2Embed",
-    supportsQuality: true,
-    qualityParam: "q",
-    supportsMirrors: false,
-    defaultQuality: "480p",
-    buildUrl: (tmdbId, mediaType, season, episode) =>
-      mediaType === "movie"
-        ? `https://2embed.cc/embed/movie/${tmdbId}`
-        : `https://2embed.cc/embed/tv/${tmdbId}/${season || 1}/${episode || 1}`,
-  },
-  multiembed: {
-    name: "MultiEmbed",
-    supportsQuality: true,
-    qualityParam: "qual",
-    supportsMirrors: false,
-    defaultQuality: "480p",
-    buildUrl: (tmdbId, mediaType, season, episode) =>
-      mediaType === "movie"
-        ? `https://multiembed.mov/directstream.php?video_id=${tmdbId}&tmdb=1`
-        : `https://multiembed.mov/directstream.php?video_id=${tmdbId}&tmdb=1&s=${season || 1}&e=${episode || 1}`,
-  },
-  goojara: {
-    name: "Goojara",
-    supportsQuality: false,
-    qualityParam: "",
-    supportsMirrors: false,
-    defaultQuality: "auto",
-    buildUrl: (tmdbId, mediaType, season, episode) =>
-      mediaType === "movie"
-        ? `https://goojara.to/embed/movie/${tmdbId}`
-        : `https://goojara.to/embed/tv/${tmdbId}/${season || 1}/${episode || 1}`,
-  },
-  vidlink: {
-    name: "VidLink",
-    supportsQuality: true,
-    qualityParam: "quality",
-    supportsMirrors: true,
-    defaultQuality: "480p",
-    buildUrl: (tmdbId, mediaType, season, episode) =>
-      mediaType === "movie"
-        ? `https://vidlink.org/embed/movie/${tmdbId}`
-        : `https://vidlink.org/embed/tv/${tmdbId}/${season || 1}/${episode || 1}`,
-  },
-  vidstream: {
-    name: "VidStream",
-    supportsQuality: true,
-    qualityParam: "quality",
-    supportsMirrors: true,
-    defaultQuality: "480p",
-    buildUrl: (tmdbId, mediaType, season, episode) =>
-      mediaType === "movie"
-        ? `https://vidstream.pro/embed/movie/${tmdbId}`
-        : `https://vidstream.pro/embed/tv/${tmdbId}/${season || 1}/${episode || 1}`,
-  },
-  unknown: {
-    name: "Unknown",
-    supportsQuality: false,
-    qualityParam: "",
-    supportsMirrors: false,
-    defaultQuality: "auto",
-    buildUrl: () => "",
-  },
-};
-
-const FALLBACK_PROVIDER_ORDER: EmbedProvider[] = [
-  "vidsrc",
-  "embed.su",
-  "autoembed",
-  "vidlink",
-  "vidstream",
-  "2embed",
-  "multiembed",
-];
-
-function detectEmbedProvider(url: string): EmbedProvider {
-  try {
-    const hostname = new URL(url).hostname.toLowerCase();
-    if (hostname.includes("vidsrc")) return "vidsrc";
-    if (hostname.includes("embed.su")) return "embed.su";
-    if (hostname.includes("autoembed")) return "autoembed";
-    if (hostname.includes("2embed")) return "2embed";
-    if (hostname.includes("multiembed")) return "multiembed";
-    if (hostname.includes("goojara")) return "goojara";
-    if (hostname.includes("vidlink")) return "vidlink";
-    if (hostname.includes("vidstream")) return "vidstream";
-  } catch {
-    // Invalid URL
-  }
-  return "unknown";
-}
-
-function applyQualityToUrl(
-  url: string,
-  quality: string,
-  provider: EmbedProvider
-): string {
-  if (provider === "unknown" || !PROVIDER_CONFIGS[provider]?.supportsQuality)
-    return url;
-  try {
-    const urlObj = new URL(url);
-    const config = PROVIDER_CONFIGS[provider];
-    urlObj.searchParams.set(config.qualityParam, quality);
-    return urlObj.toString();
-  } catch {
-    return url;
-  }
-}
-
-function buildFallbackUrls(
-  tmdbId: string,
-  mediaType: "movie" | "tv",
-  season?: number,
-  episode?: number
-): { provider: EmbedProvider; url: string }[] {
-  return FALLBACK_PROVIDER_ORDER.map(provider => ({
-    provider,
-    url: PROVIDER_CONFIGS[provider].buildUrl(
-      tmdbId,
-      mediaType,
-      season,
-      episode
-    ),
-  })).filter(item => item.url);
-}
-
-function classifyError(
-  error: unknown,
-  provider?: EmbedProvider
-): PlaybackError {
+function classifyError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   const lowerMessage = message.toLowerCase();
 
@@ -271,7 +86,6 @@ function classifyError(
       type: "not_found",
       message: `"${error.message.replace('No playable stream found for "', "").replace('"', "")}" isn't available to stream yet.`,
       recoverable: false,
-      provider,
       retryCount: 0,
     };
   }
@@ -281,7 +95,6 @@ function classifyError(
       type: "not_found",
       message: "This title isn't available to stream.",
       recoverable: false,
-      provider,
       retryCount: 0,
     };
   }
@@ -296,7 +109,6 @@ function classifyError(
       type: "geo_blocked",
       message: "This content is not available in your region.",
       recoverable: false,
-      provider,
       retryCount: 0,
     };
   }
@@ -310,7 +122,6 @@ function classifyError(
       type: "rate_limited",
       message: "Too many requests. Please wait a moment and try again.",
       recoverable: true,
-      provider,
       retryCount: 0,
     };
   }
@@ -325,7 +136,6 @@ function classifyError(
       type: "network",
       message: "Network error. Please check your connection and try again.",
       recoverable: true,
-      provider,
       retryCount: 0,
     };
   }
@@ -337,10 +147,8 @@ function classifyError(
   ) {
     return {
       type: "provider_unavailable",
-      message:
-        "The streaming provider is currently unavailable. Trying alternative sources...",
+      message: "The streaming provider is currently unavailable. Trying alternative sources...",
       recoverable: true,
-      provider,
       retryCount: 0,
     };
   }
@@ -349,7 +157,6 @@ function classifyError(
     type: "unknown",
     message: "We couldn't load this stream. Please try again.",
     recoverable: true,
-    provider,
     retryCount: 0,
   };
 }
@@ -357,7 +164,6 @@ function classifyError(
 // Fetch full movie details from TMDB via backend resolve endpoint
 async function fetchMovieDetails(tmdbId: string): Promise<Movie | null> {
   try {
-    // Use resolve endpoint with the TMDB ID as title to get full metadata
     const response = await fetch(apiUrl("/api/movies/resolve"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -370,24 +176,35 @@ async function fetchMovieDetails(tmdbId: string): Promise<Movie | null> {
     const m = data.movie;
     const mediaType = m.media_type === "tv" ? "tv" : "movie";
     const year = m.year ? parseInt(m.year) : null;
+    const runtime = typeof m.runtime === "number" ? m.runtime : null;
+    const rating = m.rating ?? null;
+    const score = typeof m.vote_average === "number" ? m.vote_average : null;
+    const genre = Array.isArray(m.genres) ? m.genres : [];
+    const director = m.director ?? null;
+    const cast = Array.isArray(m.cast) ? m.cast : [];
+    const country = m.country ?? null;
+    const language = m.language ?? null;
+    const releaseDate = m.release_date ?? null;
 
     return {
       id: parseInt(m.id),
       providerId: m.id,
       title: m.title,
       year,
-      runtime: "",
-      rating: "Rating unavailable",
-      score: m.vote_average ?? null,
-      genre: m.genres?.length
-        ? m.genres
-        : [mediaType === "tv" ? "Series" : "Movie"],
+      runtime,
+      rating,
+      score,
+      genre,
       poster: m.poster_url,
       backdrop: m.backdrop_url || m.poster_url,
-      synopsis: m.overview || "Loading...",
-      director: null,
+      synopsis: m.overview || "",
+      director,
       source: "tmdb",
       mediaType,
+      cast,
+      country,
+      language,
+      releaseDate,
     };
   } catch {
     return null;
@@ -398,7 +215,6 @@ export function WatchPage() {
   const [location, navigate] = useLocation();
   const params = useParams();
 
-  // Extract media info from URL: /watch/:id?season=1&episode=1&type=tv
   const tmdbId = params.id;
   const searchParams = new URLSearchParams(
     typeof window !== "undefined" ? window.location.search : ""
@@ -411,7 +227,7 @@ export function WatchPage() {
   const [movieLoading, setMovieLoading] = useState(true);
   const [resolved, setResolved] = useState<ResolvedStream | null>(null);
   const [resolving, setResolving] = useState(false);
-  const [playError, setPlayError] = useState<PlaybackError | null>(null);
+  const [playError, setPlayError] = useState<ReturnType<typeof classifyError> | null>(null);
   const [season, setSeason] = useState(urlSeason);
   const [episode, setEpisode] = useState(urlEpisode);
   const [myRating, setMyRating] = useState<number>(0);
@@ -423,30 +239,8 @@ export function WatchPage() {
   const [episodeDetails, setEpisodeDetails] = useState<any>(null);
   const [currentEpisodeTitle, setCurrentEpisodeTitle] = useState("");
 
-  // Multi-provider embed state
-  const [currentProvider, setCurrentProvider] =
-    useState<EmbedProvider>("vidsrc");
-  const [availableMirrors, setAvailableMirrors] = useState<StreamMirror[]>([]);
-  const [currentMirrorIndex, setCurrentMirrorIndex] = useState(0);
-  const [selectedQuality, setSelectedQuality] = useState<QualityOption>("480p");
-  const [isRetrying, setIsRetrying] = useState(false);
-  const [retryCount, setRetryCount] = useState(0);
-
-  // Fallback provider system
-  const [fallbackProviders, setFallbackProviders] = useState<
-    { provider: EmbedProvider; url: string }[]
-  >([]);
-  const [currentFallbackIndex, setCurrentFallbackIndex] = useState(0);
-  const [embedLoadFailed, setEmbedLoadFailed] = useState(false);
-  const [showProviderSelector, setShowProviderSelector] = useState(false);
-
   // Refs for retry logic
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
-  const embedLoadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
-    null
-  );
-  const iframeLoadRef = useRef<boolean>(false);
 
   // Fetch movie details on mount
   useEffect(() => {
@@ -455,7 +249,6 @@ export function WatchPage() {
     fetchMovieDetails(tmdbId).then(m => {
       if (m) {
         setMovie(m);
-        // Initialize rating from localStorage
         setMyRating(getRating(m.id) ?? 0);
       }
       setMovieLoading(false);
@@ -510,9 +303,7 @@ export function WatchPage() {
       if (!resolved?.stream.id || !/^\d+$/.test(resolved.stream.id)) return;
       try {
         const details = await fetch(
-          apiUrl(
-            `/api/episodes?tmdb_id=${resolved.stream.id}&season=${s}&episode=${e}`
-          )
+          apiUrl(`/api/episodes?tmdb_id=${resolved.stream.id}&season=${s}&episode=${e}`)
         );
         if (details.ok) {
           const data = await details.json();
@@ -549,22 +340,19 @@ export function WatchPage() {
         const stream = await resolveStream(title, year, options);
         return stream;
       } catch (error) {
-        const playbackError = classifyError(error, currentProvider);
+        const playbackError = classifyError(error);
 
-        // Don't retry non-recoverable errors
         if (!playbackError.recoverable || attempt >= MAX_RETRY_ATTEMPTS) {
           throw error;
         }
 
-        // Wait before retry with exponential backoff
         const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
         await new Promise(resolve => setTimeout(resolve, delay));
 
-        // Retry
         return resolveWithRetry(title, year, options, attempt + 1);
       }
     },
-    [currentProvider]
+    []
   );
 
   const resolveAndPlay = useCallback(
@@ -573,10 +361,7 @@ export function WatchPage() {
       if (!attemptPlay()) return;
       setResolving(true);
       setPlayError(null);
-      setRetryCount(0);
-      setIsRetrying(false);
 
-      // Cancel any pending retry
       if (retryTimeoutRef.current) {
         clearTimeout(retryTimeoutRef.current);
         retryTimeoutRef.current = null;
@@ -600,65 +385,7 @@ export function WatchPage() {
             ? base.media_type
             : null;
 
-        // Initialize fallback providers if we have a valid TMDB ID
-        if (mediaType && /^\d+$/.test(base.id)) {
-          initializeFallbackProviders(
-            base.id,
-            mediaType,
-            mediaType === "tv" ? targetSeason : undefined,
-            mediaType === "tv" ? targetEpisode : undefined
-          );
-
-          // Use the first fallback provider as the primary stream URL
-          // This ensures we always have a working embed URL even if the resolved stream fails
-          if (fallbackProviders.length > 0) {
-            const primaryFallback = fallbackProviders[0];
-            setCurrentProvider(primaryFallback.provider);
-            playable = {
-              ...base,
-              stream_url: primaryFallback.url,
-              mirrors: [
-                {
-                  name: `${PROVIDER_CONFIGS[primaryFallback.provider]?.name || primaryFallback.provider} Server`,
-                  url: primaryFallback.url,
-                },
-                ...(base.mirrors || []),
-              ],
-              season: targetSeason,
-              episode: targetEpisode,
-            };
-            setAvailableMirrors(playable.mirrors || []);
-            setCurrentMirrorIndex(0);
-
-            const config = PROVIDER_CONFIGS[primaryFallback.provider];
-            if (config?.supportsQuality) {
-              setSelectedQuality(config.defaultQuality as QualityOption);
-            }
-          }
-        } else {
-          // Detect provider from stream URL for non-TMDB content
-          const provider = detectEmbedProvider(base.stream_url);
-          setCurrentProvider(provider);
-
-          // Collect all mirrors
-          const allMirrors: StreamMirror[] = [
-            {
-              name: `${PROVIDER_CONFIGS[provider]?.name || "Primary"} Server`,
-              url: base.stream_url,
-            },
-            ...(base.mirrors || []),
-          ];
-          setAvailableMirrors(allMirrors);
-          setCurrentMirrorIndex(0);
-
-          // Set default quality based on provider
-          const config = PROVIDER_CONFIGS[provider];
-          if (config?.supportsQuality) {
-            setSelectedQuality(config.defaultQuality as QualityOption);
-          }
-        }
-
-        // Try to get stream source from backend as enhancement
+        // Try to get stream source from backend
         if (mediaType && /^\d+$/.test(base.id)) {
           try {
             const source = await getStreamSource({
@@ -668,25 +395,6 @@ export function WatchPage() {
               episode: mediaType === "tv" ? targetEpisode : undefined,
             });
 
-            // Update provider detection with the actual stream URL
-            const actualProvider = detectEmbedProvider(source.url);
-            setCurrentProvider(actualProvider);
-
-            const updatedMirrors: StreamMirror[] = [
-              {
-                name: `${PROVIDER_CONFIGS[actualProvider]?.name || "Primary"} Server`,
-                url: source.url,
-              },
-              ...(source.mirrors || []),
-            ];
-            setAvailableMirrors(updatedMirrors);
-            setCurrentMirrorIndex(0);
-
-            const actualConfig = PROVIDER_CONFIGS[actualProvider];
-            if (actualConfig?.supportsQuality) {
-              setSelectedQuality(actualConfig.defaultQuality as QualityOption);
-            }
-
             playable = {
               ...base,
               stream_url: source.url,
@@ -694,36 +402,13 @@ export function WatchPage() {
               season: targetSeason,
               episode: targetEpisode,
             };
-
-            // Re-initialize fallbacks with the actual provider as first option
-            if (fallbackProviders.length > 0) {
-              const reorderedFallbacks = [
-                { provider: actualProvider, url: source.url },
-                ...fallbackProviders.filter(f => f.provider !== actualProvider),
-              ];
-              setFallbackProviders(reorderedFallbacks);
-              setCurrentFallbackIndex(0);
-            }
           } catch (error) {
             console.warn(
-              `[WatchPage] get-stream failed for "${base.title}" (S${targetSeason}E${targetEpisode}), using fallback embed`,
+              `[WatchPage] get-stream failed for "${base.title}" (S${targetSeason}E${targetEpisode}), using resolved stream`,
               error
             );
-            // Fallback providers are already initialized above
           }
         }
-
-        // Start the 8-second embed load timeout
-        iframeLoadRef.current = false;
-        if (embedLoadTimeoutRef.current) {
-          clearTimeout(embedLoadTimeoutRef.current);
-        }
-        embedLoadTimeoutRef.current = setTimeout(() => {
-          if (!iframeLoadRef.current && !embedLoadFailed) {
-            setEmbedLoadFailed(true);
-            switchToNextFallback();
-          }
-        }, EMBED_LOAD_TIMEOUT_MS);
 
         setResolved({ stream: playable, exact: true });
         prefetchForOpen(playable);
@@ -733,19 +418,16 @@ export function WatchPage() {
         const newUrl = `/watch/${movie.providerId}${isSeries ? `?season=${targetSeason}&episode=${targetEpisode}&type=tv` : ""}`;
         navigate(newUrl, { replace: true });
       } catch (error) {
-        const playbackError = classifyError(error, currentProvider);
+        const playbackError = classifyError(error);
         console.error(
           `[WatchPage] could not resolve "${movie.title}" (${movie.year ?? "unknown year"})`,
           error
         );
-        setPlayError({ ...playbackError, retryCount });
+        setPlayError(playbackError);
 
-        // Auto-retry for recoverable errors
-        if (playbackError.recoverable && retryCount < MAX_RETRY_ATTEMPTS) {
-          setIsRetrying(true);
-          const delay = RETRY_BASE_DELAY_MS * Math.pow(2, retryCount);
+        if (playbackError.recoverable) {
+          const delay = RETRY_BASE_DELAY_MS;
           retryTimeoutRef.current = setTimeout(() => {
-            setRetryCount(prev => prev + 1);
             resolveAndPlay(targetSeason, targetEpisode);
           }, delay);
         }
@@ -753,15 +435,7 @@ export function WatchPage() {
         setResolving(false);
       }
     },
-    [
-      movie,
-      resolved,
-      resolving,
-      navigate,
-      resolveWithRetry,
-      currentProvider,
-      retryCount,
-    ]
+    [movie, resolved, resolving, navigate, resolveWithRetry]
   );
 
   const play = useCallback(async () => {
@@ -785,7 +459,6 @@ export function WatchPage() {
   // Retry handler for playback errors
   const handleRetry = useCallback(() => {
     if (playError?.recoverable) {
-      setRetryCount(0);
       setPlayError(null);
       if (resolved?.stream.media_type === "tv") {
         resolveAndPlay(season, episode);
@@ -795,102 +468,11 @@ export function WatchPage() {
     }
   }, [playError, resolved, season, episode, resolveAndPlay]);
 
-  // Switch to next fallback provider
-  const switchToNextFallback = useCallback(() => {
-    if (currentFallbackIndex >= fallbackProviders.length - 1) return;
-    const nextIndex = currentFallbackIndex + 1;
-    const nextProvider = fallbackProviders[nextIndex];
-    setCurrentFallbackIndex(nextIndex);
-    setCurrentProvider(nextProvider.provider);
-    setEmbedLoadFailed(false);
-    iframeLoadRef.current = false;
-
-    // Update the resolved stream with the new fallback URL
-    if (resolved) {
-      setResolved({
-        ...resolved,
-        stream: {
-          ...resolved.stream,
-          stream_url: nextProvider.url,
-          mirrors: [
-            {
-              name: `${PROVIDER_CONFIGS[nextProvider.provider]?.name || nextProvider.provider} Server`,
-              url: nextProvider.url,
-            },
-            ...(resolved.stream.mirrors || []),
-          ],
-        },
-      });
-    }
-
-    // Reset the 8-second timeout for the new provider
-    if (embedLoadTimeoutRef.current) {
-      clearTimeout(embedLoadTimeoutRef.current);
-    }
-    embedLoadTimeoutRef.current = setTimeout(() => {
-      if (!iframeLoadRef.current && !embedLoadFailed) {
-        setEmbedLoadFailed(true);
-        switchToNextFallback();
-      }
-    }, EMBED_LOAD_TIMEOUT_MS);
-  }, [currentFallbackIndex, fallbackProviders, resolved, embedLoadFailed]);
-
-  // Handle iframe load success
-  const handleIframeLoad = useCallback(() => {
-    iframeLoadRef.current = true;
-    setEmbedLoadFailed(false);
-    if (embedLoadTimeoutRef.current) {
-      clearTimeout(embedLoadTimeoutRef.current);
-    }
-  }, []);
-
-  // Initialize fallback providers for a given TMDB ID and media type
-  const initializeFallbackProviders = useCallback(
-    (
-      tmdbId: string,
-      mediaType: "movie" | "tv",
-      season?: number,
-      episode?: number
-    ) => {
-      const fallbacks = buildFallbackUrls(tmdbId, mediaType, season, episode);
-      setFallbackProviders(fallbacks);
-      setCurrentFallbackIndex(0);
-      if (fallbacks.length > 0) {
-        setCurrentProvider(fallbacks[0].provider);
-      }
-    },
-    []
-  );
-
-  // Switch mirror/server
-  const switchMirror = useCallback(
-    (index: number) => {
-      if (index === currentMirrorIndex || index >= availableMirrors.length)
-        return;
-      setCurrentMirrorIndex(index);
-      setPlayError(null);
-    },
-    [currentMirrorIndex, availableMirrors.length]
-  );
-
-  // Change quality
-  const changeQuality = useCallback(
-    (quality: QualityOption) => {
-      if (quality === selectedQuality) return;
-      setSelectedQuality(quality);
-      setPlayError(null);
-    },
-    [selectedQuality]
-  );
-
   // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (retryTimeoutRef.current) {
         clearTimeout(retryTimeoutRef.current);
-      }
-      if (embedLoadTimeoutRef.current) {
-        clearTimeout(embedLoadTimeoutRef.current);
       }
     };
   }, []);
@@ -941,6 +523,20 @@ export function WatchPage() {
     navigate("/");
   };
 
+  const handleBackToDetails = () => {
+    if (movie) navigate(`/details/${movie.providerId}`);
+  };
+
+  const handleShare = async () => {
+    if (!movie) return;
+    const shareUrl = `${window.location.origin}/watch/${movie.providerId}`;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+    } catch {
+      prompt("Copy link:", shareUrl);
+    }
+  };
+
   // Determine what to show as episode title
   const displayTitle =
     movie?.mediaType === "tv" && episodeDetails?.title
@@ -949,11 +545,40 @@ export function WatchPage() {
         ? `${movie.title} — S${season} E${episode}`
         : movie?.title || "Loading...";
 
+  // Determine if stream is external embed
+  const streamUrl = resolved?.stream?.stream_url ?? "";
+  const isEmbed = isExternalEmbedUrl(streamUrl);
+  const streamType = getStreamType(streamUrl);
+  const embedHostName = getEmbedHostName(streamUrl);
+
+  // Determine quality variants for direct streams
+  const qualityVariants: StreamVariant[] = useMemo(() => {
+    if (!resolved?.stream?.streams || isEmbed) return [];
+    return resolved.stream.streams
+      .filter((s) => s.url)
+      .map((s) => {
+        let streamType: "hls" | "dash" | "mp4" = "hls";
+        try {
+          const pathname = new URL(s.url).pathname.toLowerCase();
+          if (pathname.endsWith(".mpd")) streamType = "dash";
+          else if (pathname.endsWith(".mp4")) streamType = "mp4";
+        } catch {
+          // ignore
+        }
+        return {
+          quality: s.quality ?? null,
+          url: s.url,
+          type: streamType,
+        };
+      });
+  }, [resolved, isEmbed]);
+
+  const canChangeQuality = !isEmbed && qualityVariants.length > 1;
+
   // Show loading state with skeleton
   if (movieLoading) {
     return (
       <div className="min-h-screen bg-[#050505] text-white">
-        {/* Top Bar Skeleton */}
         <div className="fixed top-0 left-0 right-0 z-40 h-16 bg-black/90 backdrop-blur-md border-b border-white/10 flex items-center justify-between px-4 sm:px-6">
           <div className="w-10 h-10 rounded-full bg-white/5 animate-pulse" />
           <div className="flex-1 flex items-center justify-center">
@@ -964,7 +589,6 @@ export function WatchPage() {
 
         <main className="pt-16 pb-12 px-4 sm:px-6 lg:px-8">
           <div className="mx-auto max-w-6xl">
-            {/* Video Player Skeleton - Theater Mode */}
             <div className="relative w-full h-[70vh] sm:h-[75vh] max-h-[800px] rounded-2xl overflow-hidden bg-black animate-pulse">
               <div className="absolute inset-0 bg-gradient-to-r from-white/5 via-white/10 to-white/5 bg-[length:200%_100%] animate-shimmer" />
               <div className="absolute inset-0 flex items-center justify-center">
@@ -977,17 +601,14 @@ export function WatchPage() {
               </div>
             </div>
 
-            {/* Title Skeleton */}
             <div className="mt-6 text-center animate-pulse">
               <div className="h-8 w-64 bg-white/10 rounded mx-auto" />
             </div>
 
-            {/* Stream Provider Skeleton */}
             <div className="mt-4 flex items-center justify-center gap-3 animate-pulse">
               <div className="w-48 md:w-64 h-10 bg-white/10 rounded" />
             </div>
 
-            {/* About Section Skeleton */}
             <div className="mt-8 space-y-4 text-center max-w-3xl mx-auto animate-pulse">
               <div className="flex flex-wrap items-center justify-center gap-2">
                 <div className="h-4 w-20 bg-white/10 rounded" />
@@ -999,7 +620,6 @@ export function WatchPage() {
               <div className="h-4 w-1/2 bg-white/10 rounded" />
             </div>
 
-            {/* Action Buttons Skeleton */}
             <div className="mt-8 flex flex-wrap items-center justify-center gap-3 animate-pulse">
               <div className="flex-1 sm:flex-none h-12 bg-white/10 rounded-md" />
             </div>
@@ -1024,21 +644,6 @@ export function WatchPage() {
       </div>
     );
   }
-
-  // Handle back navigation to details page
-  const handleBackToDetails = () => {
-    navigate(`/details/${movie.providerId}`);
-  };
-
-  // Handle share link
-  const handleShare = async () => {
-    const shareUrl = `${window.location.origin}/watch/${movie.providerId}`;
-    try {
-      await navigator.clipboard.writeText(shareUrl);
-    } catch {
-      prompt("Copy link:", shareUrl);
-    }
-  };
 
   return (
     <div className="min-h-screen bg-[#050505] text-white">
@@ -1078,41 +683,53 @@ export function WatchPage() {
                       </button>
                     </div>
 
-<VideoPlayer
-                      title={displayTitle}
-                      movie={resolved.stream}
-                      onClose={handleClose}
-                      streamUrl={resolved.stream.stream_url}
-                      poster={
-                        movie.backdrop
-                          ? getImageUrl(movie.backdrop, "original")
-                          : movie.poster
-                          ? getImageUrl(movie.poster, "w780")
-                          : ""
-                      }
-                      mirrors={resolved.stream.mirrors}
-                      season={resolved.stream.season}
-                      episode={resolved.stream.episode}
-                      mediaType={resolved.stream.media_type}
-                      onPlayEpisode={playEpisode}
-                      // Multi-provider support
-                      currentProvider={currentProvider}
-                      availableMirrors={availableMirrors}
-                      currentMirrorIndex={currentMirrorIndex}
-                      onMirrorChange={switchMirror}
-                      selectedQuality={selectedQuality}
-                      onQualityChange={changeQuality}
-                      availableQualities={
-                        PROVIDER_CONFIGS[currentProvider]?.supportsQuality
-                          ? QUALITY_ORDER
-                          : undefined
-                      }
-                      isLoading={resolving}
-                      playbackError={playError}
-                      onRetry={handleRetry}
-                      onIframeLoad={handleIframeLoad}
-                      hideCloseButton
-                    />
+                    {isEmbed ? (
+                      <ExternalEmbedPlayer
+                        streamUrl={streamUrl!}
+                        title={displayTitle}
+                        poster={
+                          movie.backdrop
+                            ? getImageUrl(movie.backdrop, "original")
+                            : movie.poster
+                            ? getImageUrl(movie.poster, "w780")
+                            : ""
+                        }
+                        onClose={handleClose}
+                        movie={{
+                          id: resolved.stream.id,
+                          title: movie.title,
+                          media_type: resolved.stream.media_type,
+                          season: resolved.stream.season,
+                          episode: resolved.stream.episode,
+                        }}
+                        mediaType={resolved.stream.media_type}
+                        season={resolved.stream.season}
+                        episode={resolved.stream.episode}
+                        isLoading={resolving}
+                        playbackError={playError?.message || null}
+                        onRetry={handleRetry}
+                      />
+                    ) : (
+                      <AuthorizedVideoPlayer
+                        streamUrl={streamUrl!}
+                        title={displayTitle}
+                        poster={
+                          movie.backdrop
+                            ? getImageUrl(movie.backdrop, "original")
+                            : movie.poster
+                            ? getImageUrl(movie.poster, "w780")
+                            : ""
+                        }
+                        onClose={handleClose}
+                        variants={qualityVariants}
+                        currentQuality={qualityVariants.find(v => v.quality)?.quality || "Auto"}
+                        onQualityChange={(q) => {}}
+                        isLoading={resolving}
+                        playbackError={playError?.message || null}
+                        onRetry={handleRetry}
+                        hideCloseButton
+                      />
+                    )}
                   </>
                 )}
                 {!resolved && (
@@ -1123,8 +740,8 @@ export function WatchPage() {
                           movie.backdrop
                             ? getImageUrl(movie.backdrop, "original")
                             : movie.poster
-                              ? getImageUrl(movie.poster, "w780")
-                              : ""
+                            ? getImageUrl(movie.poster, "w780")
+                            : ""
                         }
                         alt={movie.title}
                         className="absolute inset-0 w-full h-full object-cover opacity-40 blur-sm"
@@ -1161,11 +778,11 @@ export function WatchPage() {
                       {movie.year}
                     </span>
                   )}
-                  {movie.runtime && (
+                  {movie.runtime != null && (
                     <>
                       <span>·</span>
                       <span className="px-2 py-1 bg-white/5 border border-white/10 rounded">
-                        {movie.runtime}
+                        {movie.runtime} min
                       </span>
                     </>
                   )}
@@ -1183,6 +800,12 @@ export function WatchPage() {
                     <span className="px-2 py-1 bg-blue-500/20 border border-blue-500/30 rounded text-blue-400 flex items-center gap-1">
                       <Tv className="h-3.5 w-3.5" />
                       {resolved.stream.seasons || "?"} Seasons
+                    </span>
+                  )}
+                  {isEmbed && (
+                    <span className="px-2 py-1 bg-blue-500/20 border border-blue-500/30 rounded text-blue-400 flex items-center gap-1">
+                      <Monitor className="h-3.5 w-3.5" />
+                      {embedHostName} (External)
                     </span>
                   )}
                 </div>
@@ -1203,13 +826,6 @@ export function WatchPage() {
                   >
                     <Plus className="h-5 w-5" />
                     <span className="hidden sm:inline">My Library</span>
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="flex items-center gap-2 px-4 py-3"
-                  >
-                    <Download className="h-5 w-5" />
-                    <span className="hidden sm:inline">Download</span>
                   </Button>
                 </div>
               </div>
@@ -1298,264 +914,52 @@ export function WatchPage() {
               ) : (
                 // Movie: Show details in sidebar
                 <div className="space-y-6">
-                  {/* Details & Unavailable Info */}
+                  {/* Details - only show rows with data */}
                   <div className="space-y-4">
                     <h2 className="text-sm font-semibold text-white/80 uppercase tracking-wide">
                       Details
                     </h2>
                     <div className="grid grid-cols-2 gap-3 text-sm">
-                      <div>
-                        <p className="text-white/50">Director</p>
-                        <p className="text-white font-medium flex items-center gap-1">
-                          {movie.director || (
-                            <>
-                              <span className="text-white/40">Unknown</span>
-                              <User className="h-3 w-3 text-white/30" />
-                            </>
-                          )}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-white/50">Cast</p>
-                        <p className="text-white font-medium line-clamp-1 flex items-center gap-1">
-                          {movie.cast && movie.cast.length > 0 ? (
-                            movie.cast.slice(0, 3).join(", ")
-                          ) : (
-                            <>
-                              <span className="text-white/40">Unavailable</span>
-                              <User className="h-3 w-3 text-white/30" />
-                            </>
-                          )}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-white/50">Country</p>
-                        <p className="text-white font-medium flex items-center gap-1">
-                          {movie.country || (
-                            <>
-                              <span className="text-white/40">Unknown</span>
-                              <MapPin className="h-3 w-3 text-white/30" />
-                            </>
-                          )}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-white/50">Language</p>
-                        <p className="text-white font-medium flex items-center gap-1">
-                          {movie.language || (
-                            <>
-                              <span className="text-white/40">Unknown</span>
-                              <Globe className="h-3 w-3 text-white/30" />
-                            </>
-                          )}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-white/50">Release Date</p>
-                        <p className="text-white font-medium flex items-center gap-1">
-                          {movie.releaseDate ? (
-                            movie.releaseDate
-                          ) : (
-                            <>
-                              <span className="text-white/40">Unknown</span>
-                              <Calendar className="h-3 w-3 text-white/30" />
-                            </>
-                          )}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-white/50">Runtime</p>
-                        <p className="text-white font-medium flex items-center gap-1">
-                          {movie.runtime ? (
-                            `${movie.runtime}m`
-                          ) : (
-                            <>
-                              <span className="text-white/40">Unknown</span>
-                              <Calendar className="h-3 w-3 text-white/30" />
-                            </>
-                          )}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Stream Provider Selector */}
-                  {resolved && fallbackProviders.length > 1 && (
-                    <div className="space-y-2">
-                      <h2 className="text-sm font-semibold text-white/80 uppercase tracking-wide">
-                        Stream Source
-                      </h2>
-                      <Select
-                        value={
-                          fallbackProviders[currentFallbackIndex]?.provider ||
-                          currentProvider
-                        }
-                        onValueChange={(value: string) => {
-                          const providerValue = value as EmbedProvider;
-                          const index = fallbackProviders.findIndex(
-                            f => f.provider === providerValue
-                          );
-                          if (index !== -1 && index !== currentFallbackIndex) {
-                            setCurrentFallbackIndex(index);
-                            setCurrentProvider(providerValue);
-                            setEmbedLoadFailed(false);
-                            iframeLoadRef.current = false;
-                            if (resolved) {
-                              const nextProvider = fallbackProviders[index];
-                              setResolved({
-                                ...resolved,
-                                stream: {
-                                  ...resolved.stream,
-                                  stream_url: nextProvider.url,
-                                  mirrors: [
-                                    {
-                                      name: `${PROVIDER_CONFIGS[nextProvider.provider]?.name || nextProvider.provider} Server`,
-                                      url: nextProvider.url,
-                                    },
-                                    ...(resolved.stream.mirrors || []),
-                                  ],
-                                },
-                              });
-                            }
-                            if (embedLoadTimeoutRef.current) {
-                              clearTimeout(embedLoadTimeoutRef.current);
-                            }
-                            embedLoadTimeoutRef.current = setTimeout(() => {
-                              if (!iframeLoadRef.current && !embedLoadFailed) {
-                                setEmbedLoadFailed(true);
-                                switchToNextFallback();
-                              }
-                            }, EMBED_LOAD_TIMEOUT_MS);
-                          }
-                        }}
-                      >
-                        <SelectTrigger className="w-full bg-white/5 border border-white/10 text-white/80 text-xs">
-                          <SelectValue placeholder="Select provider" />
-                        </SelectTrigger>
-                        <SelectContent className="bg-zinc-900 border border-white/10 text-white">
-                          {fallbackProviders.map((fp, idx) => (
-                            <SelectItem
-                              key={fp.provider}
-                              value={fp.provider}
-                              className="flex items-center justify-between"
-                            >
-                              <span className="capitalize">
-                                {PROVIDER_CONFIGS[fp.provider]?.name ||
-                                  fp.provider}
-                              </span>
-                              {idx === currentFallbackIndex && (
-                                <span className="text-green-400 text-xs font-medium">
-                                  Active
-                                </span>
-                              )}
-                              {embedLoadFailed &&
-                                idx === currentFallbackIndex && (
-                                  <span className="text-amber-400 text-xs font-medium">
-                                    Loading failed
-                                  </span>
-                                )}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      {embedLoadFailed &&
-                        currentFallbackIndex < fallbackProviders.length - 1 && (
-                          <p className="text-xs text-amber-400 flex items-center gap-1 animate-pulse">
-                            <Loader2 className="w-3 h-3 animate-spin" />
-                            Auto-switching to next provider...
+                      {movie.director && (
+                        <div>
+                          <p className="text-white/50">Director</p>
+                          <p className="text-white font-medium">{movie.director}</p>
+                        </div>
+                      )}
+                      {movie.cast.length > 0 && (
+                        <div>
+                          <p className="text-white/50">Cast</p>
+                          <p className="text-white font-medium line-clamp-1">
+                            {movie.cast.slice(0, 3).join(", ")}
                           </p>
-                        )}
-                    </div>
-                  )}
-
-                  {/* Rating */}
-                  {canRate && detailsLoaded && (
-                    <div className="space-y-2">
-                      <h2 className="text-sm font-semibold text-white/80 uppercase tracking-wide">
-                        Your Rating
-                      </h2>
-                      <div className="flex items-center justify-center gap-1">
-                        {[1, 2, 3, 4, 5].map(star => (
-                          <button
-                            key={star}
-                            type="button"
-                            aria-label={`Rate ${star} out of 5`}
-                            disabled={!canRate}
-                            onClick={() => {
-                              setRating(movie, star === myRating ? 0 : star);
-                              setMyRating(star === myRating ? 0 : star);
-                            }}
-                            className="p-1 text-white transition hover:scale-110"
-                          >
-                            <Star
-                              className={`h-5 w-5 ${
-                                star <= myRating
-                                  ? "fill-[#d7d7d3] text-[#d7d7d3]"
-                                  : "text-white/30"
-                              }`}
-                            />
-                          </button>
-                        ))}
-                      </div>
-                      {myRating > 0 && (
-                        <p className="text-xs text-center text-white/50">
-                          {myRating}/5
-                        </p>
+                        </div>
+                      )}
+                      {movie.country && (
+                        <div>
+                          <p className="text-white/50">Country</p>
+                          <p className="text-white font-medium">{movie.country}</p>
+                        </div>
+                      )}
+                      {movie.language && (
+                        <div>
+                          <p className="text-white/50">Language</p>
+                          <p className="text-white font-medium">{movie.language}</p>
+                        </div>
+                      )}
+                      {movie.releaseDate && (
+                        <div>
+                          <p className="text-white/50">Release Date</p>
+                          <p className="text-white font-medium">{movie.releaseDate}</p>
+                        </div>
+                      )}
+                      {movie.runtime != null && (
+                        <div>
+                          <p className="text-white/50">Runtime</p>
+                          <p className="text-white font-medium">{movie.runtime} min</p>
+                        </div>
                       )}
                     </div>
-                  )}
-
-                  {/* Error Messages */}
-                  {playError && detailsLoaded && (
-                    <div className="rounded-md border border-white/10 bg-white/[0.03] px-3 py-3">
-                      <div className="flex items-start gap-3">
-                        <div className="flex-shrink-0 mt-0.5">
-                          {playError.type === "not_found" && (
-                            <AlertCircle className="w-5 h-5 text-amber-400" />
-                          )}
-                          {playError.type === "geo_blocked" && (
-                            <WifiOff className="w-5 h-5 text-red-400" />
-                          )}
-                          {playError.type === "network" && (
-                            <Wifi className="w-5 h-5 text-blue-400" />
-                          )}
-                          {playError.type === "rate_limited" && (
-                            <Zap className="w-5 h-5 text-amber-400" />
-                          )}
-                          {playError.type === "provider_unavailable" && (
-                            <Server className="w-5 h-5 text-orange-400" />
-                          )}
-                          {playError.type === "unknown" && (
-                            <AlertCircle className="w-5 h-5 text-white/60" />
-                          )}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm leading-5 text-[#c5c5c1]">
-                            {playError.message}
-                          </p>
-                          {playError.provider &&
-                            playError.provider !== "unknown" && (
-                              <p className="mt-1 text-xs text-white/50">
-                                Provider:{" "}
-                                {PROVIDER_CONFIGS[playError.provider]?.name ||
-                                  playError.provider}
-                              </p>
-                            )}
-                          {playError.recoverable && (
-                            <button
-                              onClick={handleRetry}
-                              className="mt-2 flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white/80 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded transition-colors"
-                            >
-                              <RefreshCw className="w-3 h-3" />
-                              {isRetrying
-                                ? "Retrying..."
-                                : `Retry (attempt ${retryCount + 1}/${MAX_RETRY_ATTEMPTS})`}
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  )}
+                  </div>
                 </div>
               )}
             </aside>
