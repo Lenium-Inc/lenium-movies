@@ -18,23 +18,12 @@ import {
   Star,
   Subtitles,
   Trash2,
+  UserRound,
   X,
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
-import { useAuth } from "@/_core/hooks/useAuth";
-import {
-  exportUserData,
-  getAccount,
-  setPlan,
-  signOutSession,
-  subscribeAccount,
-  toggleTwoFactor,
-  updatePassword,
-  wipeLocalData,
-  type DeviceSession,
-  type PlanTier,
-} from "@/services/account";
+import { useLocalSession } from "@/context/LocalSessionContext";
 import {
   getSettings,
   setSettings,
@@ -44,9 +33,6 @@ import {
   type ThemeMode,
 } from "@/services/settings";
 import {
-  LIST_TAGS,
-  removeFromList,
-  setEntryTag,
   sortedEntries,
   subscribeList,
   type ListTag,
@@ -70,30 +56,23 @@ import {
   subscribeStats,
 } from "@/services/stats";
 import { capLimit, dayCount, dayLocked } from "@/services/capGate";
+import { getMovieKey, removeFromMyList } from "@/lib/localSession";
 
 const RADIUS = 30;
 const CIRC = 2 * Math.PI * RADIUS;
 
-type TabId = "account" | "privacy" | "lists" | "activity" | "appearance";
+type TabId = "overview" | "preferences" | "data";
 
-const TABS: { id: TabId; step: string; label: string; icon: LucideIcon }[] = [
-  { id: "account", step: "01", label: "Account & Security", icon: Shield },
-  { id: "privacy", step: "02", label: "Viewing & Privacy", icon: Eye },
-  { id: "lists", step: "03", label: "My Lists & Ratings", icon: Bookmark },
-  { id: "activity", step: "04", label: "Activity & Milestones", icon: Award },
-  {
-    id: "appearance",
-    step: "05",
-    label: "Appearance & Playback",
-    icon: SlidersHorizontal,
-  },
+const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
+  { id: "overview", label: "Overview", icon: Bookmark },
+  { id: "preferences", label: "Preferences", icon: SlidersHorizontal },
+  { id: "data", label: "Data & Privacy", icon: Eye },
 ];
 
 function useRevision(): void {
   const [, setRev] = useState(0);
   useEffect(() => {
     const unsubs: Array<() => void> = [
-      subscribeAccount(() => setRev(r => r + 1)),
       subscribeSettings(() => setRev(r => r + 1)),
       subscribeList(() => setRev(r => r + 1)),
       subscribeRatings(() => setRev(r => r + 1)),
@@ -103,15 +82,12 @@ function useRevision(): void {
   }, []);
 }
 
-/** dd/mm/yyyy — shown in the subscription card. */
 function formatRenewal(iso: string): string {
   const date = new Date(iso);
   const mm = String(date.getMonth() + 1).padStart(2, "0");
   const dd = String(date.getDate()).padStart(2, "0");
   return `${dd}/${mm}/${date.getFullYear()}`;
 }
-
-/* ---------------------------------- atoms --------------------------------- */
 
 function Card({
   children,
@@ -223,7 +199,7 @@ function Segmented<T extends string>({
           type="button"
           onClick={() => onChange(option.value)}
           aria-pressed={option.value === value}
-          className={`rounded-full px-3 py-1.5 text-[11px] font-semibold transition ${
+          className={`rounded-full px-3 py-1.5 text-[11px] font-semibold tracking-wider transition ${
             option.value === value
               ? "bg-indigo-600 text-white shadow-[0_0_0_1px_rgba(255,255,255,0.12)]"
               : "border border-zinc-700/60 text-zinc-300 hover:border-zinc-500 hover:bg-white/5"
@@ -236,58 +212,6 @@ function Segmented<T extends string>({
   );
 }
 
-function Field({
-  label,
-  type = "text",
-  value,
-  onChange,
-  placeholder,
-}: {
-  label: string;
-  type?: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder?: string;
-}) {
-  return (
-    <label className="block">
-      <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-zinc-500">
-        {label}
-      </span>
-      <input
-        type={type}
-        value={value}
-        placeholder={placeholder}
-        onChange={event => onChange(event.target.value)}
-        className="mt-1.5 w-full rounded-md border border-zinc-700/60 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-600/30"
-      />
-    </label>
-  );
-}
-
-function Stars({
-  value,
-  size = "h-3.5 w-3.5",
-}: {
-  value: number;
-  size?: string;
-}) {
-  return (
-    <span className="flex items-center gap-0.5">
-      {[1, 2, 3, 4, 5].map(star => (
-        <Star
-          key={star}
-          className={`${size} ${
-            star <= Math.round(value)
-              ? "fill-indigo-400 text-indigo-400"
-              : "text-zinc-700"
-          }`}
-        />
-      ))}
-    </span>
-  );
-}
-
 function Poster({ src, title }: { src: string | null; title: string }) {
   return src ? (
     <img src={src} alt="" className="h-14 w-10 shrink-0 rounded object-cover" />
@@ -297,8 +221,6 @@ function Poster({ src, title }: { src: string | null; title: string }) {
     </span>
   );
 }
-
-/* --------------------------------- options -------------------------------- */
 
 const THEMES: { value: ThemeMode; label: string; swatch: string }[] = [
   { value: "void", label: "Void Black", swatch: "#050505" },
@@ -321,14 +243,11 @@ const SUBTITLE_OPTIONS: { value: SubtitlePref; label: string }[] = [
   { value: "off", label: "Off" },
 ];
 
-/* ---------------------------------- page ---------------------------------- */
-
 export default function Profile() {
   useRevision();
-  const { user, logout } = useAuth();
-  const account = getAccount();
+  const { user, isAuthenticated, signOut: logout, getMyList, getHistory } = useLocalSession();
   const settings = getSettings();
-  const [tab, setTab] = useState<TabId>("account");
+  const [tab, setTab] = useState<TabId>("overview");
   const [listFilter, setListFilter] = useState<ListTag | "all">("all");
   const list = sortedEntries(listFilter);
   const ratings = ratingLog();
@@ -342,50 +261,20 @@ export default function Profile() {
   const earned = earnedAchievements();
   const earnedIds = new Set(earned.map(a => a.id));
 
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [twoFactorPassword, setTwoFactorPassword] = useState("");
-  const [savingPassword, setSavingPassword] = useState(false);
-
-  const displayName = (user?.name ?? account.displayName) || "Viewer";
-  const email = user?.email ?? account.email;
-
-  const submitPassword = async () => {
-    if (newPassword !== confirmPassword) {
-      toast.error("The two new-password fields don't match.");
-      return;
-    }
-    setSavingPassword(true);
-    const result = await updatePassword(currentPassword, newPassword);
-    setSavingPassword(false);
-    if (!result.ok) {
-      toast.error(result.error ?? "Couldn't update your password.");
-      return;
-    }
-    setCurrentPassword("");
-    setNewPassword("");
-    setConfirmPassword("");
-    toast.success("Password updated.");
-  };
-
-  const toggle2FA = async () => {
-    if (account.twoFactor) {
-      await toggleTwoFactor(false, "");
-      toast.success("Two-factor authentication disabled.");
-      return;
-    }
-    const result = await toggleTwoFactor(true, twoFactorPassword);
-    if (!result.ok) {
-      toast.error(result.error ?? "Couldn't enable two-factor.");
-      return;
-    }
-    setTwoFactorPassword("");
-    toast.success("Two-factor authentication enabled.");
-  };
+  const displayName = user?.displayName ?? "Viewer";
+  const email = user?.email ?? "viewer@freestream.app";
 
   const download = () => {
-    const payload = exportUserData();
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      settings: getSettings(),
+      hoursWatched: hoursWatched(),
+      playsToday: (count as number),
+      achievements: earnedAchievements().map(a => a.id),
+      myList: getMyList().map(m => getMovieKey(m)),
+      ratings: ratingLog(),
+      historyEnabled: getSettings().historyEnabled,
+    };
     const blob = new Blob([JSON.stringify(payload, null, 2)], {
       type: "application/json",
     });
@@ -398,18 +287,24 @@ export default function Profile() {
     toast.success("Your data is downloading.");
   };
 
-  const deleteAccount = async () => {
+  const clearAllData = async () => {
     const ok = window.confirm(
-      "Permanently delete your FreeStream profile, viewing history, and ratings on this device? This can't be undone."
+      "Permanently delete your FreeStream profile, viewing history, ratings, and saved list on this device? This can't be undone."
     );
     if (!ok) return;
-    wipeLocalData();
-    await logout();
+    clearHistory();
+    localStorage.removeItem("freestream-list-v1");
+    localStorage.removeItem("freestream-ratings-v1");
+    localStorage.removeItem("freestream-stats-v1");
+    localStorage.removeItem("freestream-prefs-v1");
+    localStorage.removeItem("freestream-session-v1");
+    window.dispatchEvent(new CustomEvent("freestream:data-wiped"));
     window.location.href = "/";
   };
 
-  const primaryBtn =
-    "inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white transition hover:bg-indigo-500 disabled:opacity-50";
+  const myListCount = getMyList().length;
+  const historyCount = getHistory().length;
+
   const outlineBtn =
     "inline-flex items-center gap-2 rounded-lg border border-zinc-700/60 px-3.5 py-2 text-xs font-semibold text-zinc-200 transition hover:border-zinc-500 hover:bg-white/5";
   const dangerBtn =
@@ -434,42 +329,83 @@ export default function Profile() {
       >
         <t.icon className="h-3.5 w-3.5" />
       </span>
-      <span className="min-w-0">
-        <span className="mr-1 text-[9px] font-bold tracking-[0.15em] text-zinc-500">
-          {t.step}
-        </span>
-        {t.label}
-      </span>
+      <span className="min-w-0">{t.label}</span>
     </button>
   );
 
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-[#0a0a0c] text-zinc-200">
+        <header className="border-b border-zinc-800/80 bg-zinc-950/70 backdrop-blur">
+          <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-6 sm:px-6 lg:px-8">
+            <div className="flex items-center gap-4">
+              <div className="relative shrink-0">
+                <span className="grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 to-indigo-700 text-xl font-black text-white ring-1 ring-inset ring-white/20">
+                  V
+                </span>
+              </div>
+              <div>
+                <h1 className="text-2xl font-bold tracking-tight text-white">Profile</h1>
+                <p className="mt-0.5 truncate text-sm text-zinc-500">Not signed in</p>
+              </div>
+            </div>
+          </div>
+        </header>
+        <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
+          <Card className="max-w-md mx-auto">
+            <CardHeader
+              icon={UserRound}
+              title="Sign in to continue"
+              description="Access your saved list, watch history, and preferences."
+            />
+            <Body>
+              <div className="text-center py-4">
+                <p className="text-zinc-400 mb-4">
+                  This is a local demo. Your data stays in this browser.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const { signInDemo } = useLocalSession();
+                    signInDemo();
+                  }}
+                  className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-6 py-3 text-sm font-bold text-white transition hover:bg-indigo-500"
+                >
+                  Continue as Viewer
+                </button>
+              </div>
+            </Body>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#0a0a0c] text-zinc-200">
-      {/* ---------- banner ---------- */}
       <header className="border-b border-zinc-800/80 bg-zinc-950/70 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center gap-4 px-4 py-6 sm:px-6 lg:px-8">
-          <div className="relative shrink-0">
-            <span className="grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 to-indigo-700 text-xl font-black text-white ring-1 ring-inset ring-white/20">
-              {displayName.charAt(0).toUpperCase()}
-            </span>
-            <span className="absolute -bottom-1 -right-1 grid h-5 w-5 place-items-center rounded-full border-2 border-zinc-950 bg-emerald-500">
-              <span className="h-1.5 w-1.5 rounded-full bg-white" />
-            </span>
-          </div>
-
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-2xl font-bold tracking-tight text-white">
-                {displayName}
-              </h1>
-              <span className="inline-flex items-center gap-1 rounded-full border border-indigo-500/40 bg-indigo-600/15 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-[0.12em] text-indigo-300">
-                <Ribbon className="h-3 w-3" />
-                {account.plan === "founder"
-                  ? "Founder Tier — Dev Access"
-                  : "Dev Access"}
+        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-6 sm:px-6 lg:px-8">
+          <div className="flex items-center gap-4">
+            <div className="relative shrink-0">
+              <span className="grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 to-indigo-700 text-xl font-black text-white ring-1 ring-inset ring-white/20">
+                {displayName.charAt(0).toUpperCase()}
+              </span>
+              <span className="absolute -bottom-1 -right-1 grid h-5 w-5 place-items-center rounded-full border-2 border-zinc-950 bg-emerald-500">
+                <span className="h-1.5 w-1.5 rounded-full bg-white" />
               </span>
             </div>
-            <p className="mt-0.5 truncate text-sm text-zinc-500">{email}</p>
+
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="text-2xl font-bold tracking-tight text-white">
+                  {displayName}
+                </h1>
+                <span className="inline-flex items-center gap-1 rounded-full border border-indigo-500/40 bg-indigo-600/15 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-[0.12em] text-indigo-300">
+                  <span className="text-[9px] font-bold">Local demo profile</span>
+                </span>
+              </div>
+              <p className="mt-0.5 truncate text-sm text-zinc-500">{email}</p>
+            </div>
           </div>
 
           <button
@@ -483,10 +419,8 @@ export default function Profile() {
         </div>
       </header>
 
-      {/* ---------- body ---------- */}
       <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
         <div className="grid gap-8 lg:grid-cols-[240px_1fr]">
-          {/* sidebar — desktop */}
           <nav className="hidden lg:block">
             <div className="sticky top-8 space-y-1">
               <p className="mb-2 px-3 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-600">
@@ -496,7 +430,6 @@ export default function Profile() {
             </div>
           </nav>
 
-          {/* tabs — mobile */}
           <nav className="flex gap-2 overflow-x-auto pb-1 lg:hidden">
             {TABS.map(t => (
               <button
@@ -511,546 +444,138 @@ export default function Profile() {
                 }`}
               >
                 <t.icon className="h-3.5 w-3.5" />
-                {t.step} {t.label}
+                {t.label}
               </button>
             ))}
           </nav>
 
-          {/* main content */}
           <main className="min-w-0 space-y-6">
-            {tab === "account" && (
-              <>
-                {/* subscription status */}
-                <Card>
-                  <CardHeader
-                    icon={Ribbon}
-                    title="Subscription"
-                    description="Your founder access and renewal status."
-                  />
-                  <Body>
-                    <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
-                      <div>
-                        <p className="text-lg font-bold text-white">
-                          {account.plan === "founder"
-                            ? "Founder Tier"
-                            : "Dev Access"}
-                        </p>
-                        <p className="mt-0.5 text-sm text-zinc-400">
-                          Renews {formatRenewal(account.renewsAt)}
-                        </p>
-                        {account.plan === "founder" && (
-                          <span className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-indigo-600/15 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-indigo-300 ring-1 ring-inset ring-indigo-500/30">
-                            <ShieldCheck className="h-3 w-3" />
-                            Active
-                          </span>
-                        )}
-                      </div>
-                      <div>
-                        <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.15em] text-zinc-500">
-                          Plan tier
-                        </p>
-                        <Segmented<PlanTier>
-                          value={account.plan}
-                          onChange={setPlan}
-                          options={[
-                            { value: "founder", label: "Founder Tier" },
-                            { value: "dev", label: "Dev Access" },
-                          ]}
-                        />
-                      </div>
-                    </div>
-                  </Body>
-                </Card>
-
-                {/* two-factor */}
-                <Card>
-                  <CardHeader
-                    icon={ShieldCheck}
-                    title="Two-factor authentication"
-                    description="Add a second step at sign-in to protect your account."
-                    action={
-                      <button
-                        type="button"
-                        onClick={() => void toggle2FA()}
-                        disabled={
-                          !account.twoFactor &&
-                          !account.passwordHash &&
-                          !twoFactorPassword
-                        }
-                        className={
-                          account.twoFactor
-                            ? outlineBtn
-                            : `${primaryBtn} disabled:opacity-40`
-                        }
-                      >
-                        {account.twoFactor ? "Disable 2FA" : "Enable 2FA"}
-                      </button>
-                    }
-                  />
-                  <Body>
-                    <p className="text-sm text-zinc-300">
-                      {account.twoFactor
-                        ? "Enabled — a code is requested at every sign-in."
-                        : "Not enabled yet. Set a password below, then confirm it to turn 2FA on."}
-                    </p>
-                    {!account.twoFactor && (
-                      <div className="mt-3 flex flex-wrap items-center gap-2">
-                        <input
-                          type="password"
-                          value={twoFactorPassword}
-                          onChange={event =>
-                            setTwoFactorPassword(event.target.value)
-                          }
-                          placeholder="Confirm password"
-                          className="w-44 rounded-md border border-zinc-700/60 bg-zinc-950/60 px-3 py-2 text-xs text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-600/30"
-                        />
-                        <span className="text-[10px] text-zinc-600">
-                          Required to enable.
-                        </span>
-                      </div>
-                    )}
-                  </Body>
-                </Card>
-
-                {/* password */}
-                <Card>
-                  <CardHeader
-                    icon={KeyRound}
-                    title="Password"
-                    description="Choose a strong passphrase you won't reuse elsewhere."
-                    action={
-                      !account.passwordHash ? (
-                        <span className="rounded-full bg-zinc-800 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-zinc-400">
-                          Not set
-                        </span>
-                      ) : undefined
-                    }
-                  />
-                  <Body>
-                    <div className="grid gap-3 sm:grid-cols-3">
-                      <Field
-                        label="Current"
-                        type="password"
-                        value={currentPassword}
-                        onChange={setCurrentPassword}
-                        placeholder={account.passwordHash ? "••••••••" : "—"}
-                      />
-                      <Field
-                        label="New"
-                        type="password"
-                        value={newPassword}
-                        onChange={setNewPassword}
-                        placeholder="8+ characters"
-                      />
-                      <Field
-                        label="Confirm"
-                        type="password"
-                        value={confirmPassword}
-                        onChange={setConfirmPassword}
-                      />
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => void submitPassword()}
-                      disabled={savingPassword || !newPassword}
-                      className={`${primaryBtn} mt-4`}
-                    >
-                      {savingPassword ? "Saving…" : "Update password"}
-                    </button>
-                  </Body>
-                </Card>
-
-                {/* active sessions */}
-                <Card>
-                  <CardHeader
-                    icon={MonitorSmartphone}
-                    title="Active sessions"
-                    description="Devices currently signed in to FreeStream."
-                  />
-                  <Body>
-                    <ul className="space-y-2">
-                      {account.sessions.map(session => (
-                        <DeviceRow
-                          key={session.id}
-                          session={session}
-                          onSignOut={() => {
-                            signOutSession(session.id);
-                            toast("Session signed out.");
-                          }}
-                        />
-                      ))}
-                    </ul>
-                    <p className="mt-2 text-[10px] leading-4 text-zinc-600">
-                      Local demo — devices are stored on this machine, not a
-                      server.
-                    </p>
-                  </Body>
-                </Card>
-              </>
-            )}
-
-            {tab === "privacy" && (
-              <>
-                <Card>
-                  <CardHeader
-                    icon={Eye}
-                    title="Record Watch History"
-                    description="Control how FreeStream tracks your viewing."
-                    action={
-                      <SettingsPill
-                        on={settings.historyEnabled}
-                        onLabel="Recording"
-                        offLabel="Paused"
-                      />
-                    }
-                  />
-                  <Body>
-                    <Toggle
-                      checked={settings.historyEnabled}
-                      onChange={value => setSettings({ historyEnabled: value })}
-                      label="Record Watch History"
-                      description="Pause personalized tracking. Per-title progress and Continue Watching pause while the mindful counter keeps counting."
-                    />
-                  </Body>
-                </Card>
-
-                <Card>
-                  <CardHeader
-                    icon={Play}
-                    title="Continue Watching"
-                    description="Jump back into titles you've started."
-                    action={
-                      queue.length > 0 ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            clearHistory();
-                            toast("Continue Watching cleared.");
-                          }}
-                          className="text-[10px] font-bold uppercase tracking-[0.12em] text-zinc-500 transition hover:text-zinc-200"
-                        >
-                          Clear all
-                        </button>
-                      ) : undefined
-                    }
-                  />
-                  <Body>
-                    {queue.length === 0 ? (
-                      <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-zinc-800 bg-zinc-950/40 px-6 py-10 text-center">
-                        <span className="grid h-12 w-12 place-items-center rounded-full bg-zinc-800/70 text-zinc-600">
-                          <Eye className="h-5 w-5" />
-                        </span>
-                        <p className="mt-3 text-sm font-semibold text-zinc-300">
-                          Nothing in progress
-                        </p>
-                        <p className="mt-1 max-w-xs text-xs leading-5 text-zinc-500">
-                          {settings.historyEnabled
-                            ? "Start a title and it lands here so you can pick up where you left off."
-                            : "Watch history is paused, so this queue stays empty."}
-                        </p>
-                      </div>
-                    ) : (
-                      <ul className="space-y-2">
-                        {queue.map(item => (
-                          <li
-                            key={item.id}
-                            className="flex items-center gap-3 rounded-lg border border-zinc-800/70 bg-zinc-950/50 px-3 py-2"
-                          >
-                            <Poster src={item.poster} title={item.title} />
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate text-sm font-semibold text-zinc-100">
-                                {item.title}
-                              </p>
-                              <div className="mt-1 h-1 overflow-hidden rounded-full bg-zinc-800">
-                                <div
-                                  className="h-full rounded-full bg-indigo-500"
-                                  style={{
-                                    width: `${Math.min(100, item.fraction * 100)}%`,
-                                  }}
-                                />
-                              </div>
-                              <p className="mt-1 text-[10px] tabular-nums text-zinc-500">
-                                {Math.round(item.fraction * 100)}% watched
-                              </p>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => removeFromHistory(item.id)}
-                              aria-label={`Remove ${item.title} from Continue Watching`}
-                              className="grid h-7 w-7 place-items-center rounded-full text-zinc-500 transition hover:bg-white/10 hover:text-zinc-200"
-                            >
-                              <X className="h-3.5 w-3.5" />
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </Body>
-                </Card>
-
-                <Card>
-                  <CardHeader
-                    icon={Download}
-                    title="Data & privacy"
-                    description="Take your data with you, or remove it entirely."
-                  />
-                  <Body>
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={download}
-                        className={outlineBtn}
-                      >
-                        <Download className="h-3.5 w-3.5" />
-                        Download my data
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void deleteAccount()}
-                        className={dangerBtn}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                        Delete account
-                      </button>
-                    </div>
-                  </Body>
-                </Card>
-              </>
-            )}
-
-            {tab === "lists" && (
+            {tab === "overview" && (
               <>
                 <Card>
                   <CardHeader
                     icon={Bookmark}
-                    title="My Lists & Ratings"
-                    description="Curate your watchlist and see what you've rated."
-                    action={
-                      <Segmented<ListTag | "all">
-                        value={listFilter}
-                        onChange={setListFilter}
-                        options={[
-                          { value: "all", label: "All" },
-                          ...LIST_TAGS.map(tag => ({
-                            value: tag.value,
-                            label: tag.label,
-                          })),
-                        ]}
-                      />
-                    }
+                    title="My Library"
+                    description="Saved titles and watch history summary."
                   />
                   <Body>
-                    {list.length === 0 ? (
-                      <div className="rounded-lg border border-dashed border-zinc-800 bg-zinc-950/40 px-6 py-8 text-center">
-                        <p className="text-sm font-semibold text-zinc-300">
-                          No saved titles yet
-                        </p>
-                        <p className="mt-1 text-xs text-zinc-500">
-                          Save titles from the catalog — each can carry a Plan
-                          to Watch, Favorites, or Watched tag.
-                        </p>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="rounded-lg border border-zinc-800/70 bg-zinc-950/50 p-4">
+                        <p className="text-3xl font-bold text-white">{myListCount}</p>
+                        <p className="text-sm text-zinc-400">Saved Titles</p>
                       </div>
-                    ) : (
-                      <ul className="space-y-2">
-                        {list.map(entry => (
-                          <li
-                            key={entry.id}
-                            className="flex items-center gap-3 rounded-lg border border-zinc-800/70 bg-zinc-950/50 px-3 py-2"
-                          >
-                            <Poster src={entry.poster} title={entry.title} />
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate text-sm font-semibold text-zinc-100">
-                                {entry.title}
-                                {entry.year ? (
-                                  <span className="ml-1.5 text-zinc-500">
-                                    {entry.year}
-                                  </span>
-                                ) : null}
-                              </p>
-                              <div className="mt-2 flex flex-wrap items-center gap-1">
-                                {LIST_TAGS.map(tag => (
-                                  <button
-                                    key={tag.value}
-                                    type="button"
-                                    onClick={() =>
-                                      setEntryTag(entry.id, tag.value)
-                                    }
-                                    className={`rounded-full px-2.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.1em] transition ${
-                                      entry.tag === tag.value
-                                        ? "bg-indigo-600 text-white"
-                                        : "border border-zinc-800 text-zinc-500 hover:text-zinc-200"
-                                    }`}
-                                  >
-                                    {tag.label}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => removeFromList(entry.id)}
-                              aria-label={`Remove ${entry.title} from My List`}
-                              className="grid h-7 w-7 place-items-center rounded-full text-zinc-500 transition hover:bg-white/10 hover:text-zinc-200"
-                            >
-                              <X className="h-3.5 w-3.5" />
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
+                      <div className="rounded-lg border border-zinc-800/70 bg-zinc-950/50 p-4">
+                        <p className="text-3xl font-bold text-white">{historyCount}</p>
+                        <p className="text-sm text-zinc-400">Watch History</p>
+                      </div>
+                    </div>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setTab("preferences")}
+                        className={outlineBtn}
+                      >
+                        <SlidersHorizontal className="h-3.5 w-3.5" />
+                        Preferences
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTab("data")}
+                        className={outlineBtn}
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                        Data & Privacy
+                      </button>
+                    </div>
                   </Body>
                 </Card>
 
                 <Card>
                   <CardHeader
-                    icon={Star}
-                    title="Rating & review log"
-                    description="Stars you've given titles from their details sheet."
+                    icon={Clock3}
+                    title="Total Immersion"
+                    description="Time absorbed in the mindful cinema."
                   />
                   <Body>
-                    {ratings.length === 0 ? (
-                      <div className="rounded-lg border border-dashed border-zinc-800 bg-zinc-950/40 px-6 py-8 text-center">
-                        <p className="text-sm font-semibold text-zinc-300">
-                          No ratings yet
-                        </p>
-                        <p className="mt-1 text-xs text-zinc-500">
-                          Star a title after watching 15 minutes and it shows up
-                          here.
-                        </p>
-                      </div>
-                    ) : (
-                      <ul className="space-y-2">
-                        {ratings.map((rating: RatingEntry) => (
-                          <li
-                            key={rating.id}
-                            className="flex items-center gap-3 rounded-lg border border-zinc-800/70 bg-zinc-950/50 px-3 py-2"
-                          >
-                            <Poster src={rating.poster} title={rating.title} />
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate text-sm font-semibold text-zinc-100">
-                                {rating.title}
-                                {rating.year ? (
-                                  <span className="ml-1.5 text-zinc-500">
-                                    {rating.year}
-                                  </span>
-                                ) : null}
-                              </p>
-                              <div className="mt-1 flex items-center gap-2">
-                                <Stars value={rating.rating} />
-                                <span className="text-[10px] tabular-nums text-zinc-500">
-                                  {new Date(
-                                    rating.ratedAt
-                                  ).toLocaleDateString()}
-                                </span>
-                              </div>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => removeRating(rating.id)}
-                              aria-label={`Remove rating for ${rating.title}`}
-                              className="grid h-7 w-7 place-items-center rounded-full text-zinc-500 transition hover:bg-white/10 hover:text-zinc-200"
-                            >
-                              <X className="h-3.5 w-3.5" />
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </Body>
-                </Card>
-              </>
-            )}
-
-            {tab === "activity" && (
-              <>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <Card>
-                    <CardHeader
-                      icon={Clock3}
-                      title="Total Immersion"
-                      description="Time absorbed in the mindful cinema."
-                    />
-                    <Body>
-                      <div className="flex items-center gap-5">
-                        <svg
-                          viewBox="0 0 100 100"
-                          className="h-20 w-20 -rotate-90 shrink-0"
-                        >
-                          <circle
-                            cx="50"
-                            cy="50"
-                            r={RADIUS}
-                            fill="none"
-                            stroke="rgba(255,255,255,0.08)"
-                            strokeWidth="7"
-                          />
-                          <circle
-                            cx="50"
-                            cy="50"
-                            r={RADIUS}
-                            fill="none"
-                            stroke="#6366f1"
-                            strokeWidth="7"
-                            strokeLinecap="round"
-                            strokeDasharray={CIRC}
-                            strokeDashoffset={
-                              CIRC * (1 - (milestone?.fraction ?? 1))
-                            }
-                          />
-                        </svg>
-                        <div>
-                          <p className="text-3xl font-bold tabular-nums text-white">
-                            {hours.toFixed(1)}
-                            <span className="ml-1 text-sm font-semibold text-zinc-500">
-                              hours
-                            </span>
-                          </p>
-                          <p className="mt-0.5 text-xs text-zinc-500">
-                            {milestone
-                              ? `To your next badge: ${(milestone.target / 3600).toFixed(0)}h`
-                              : "All badges earned — truly immersed."}
-                          </p>
-                        </div>
-                      </div>
-                    </Body>
-                  </Card>
-
-                  <Card>
-                    <CardHeader
-                      icon={Gauge}
-                      title="Today's Cap"
-                      description="Plays toward your mindful daily limit."
-                    />
-                    <Body>
-                      <div className="flex items-baseline gap-2">
+                    <div className="flex items-center gap-5">
+                      <svg
+                        viewBox="0 0 100 100"
+                        className="h-20 w-20 -rotate-90 shrink-0"
+                      >
+                        <circle
+                          cx="50"
+                          cy="50"
+                          r={RADIUS}
+                          fill="none"
+                          stroke="rgba(255,255,255,0.08)"
+                          strokeWidth="7"
+                        />
+                        <circle
+                          cx="50"
+                          cy="50"
+                          r={RADIUS}
+                          fill="none"
+                          stroke="#6366f1"
+                          strokeWidth="7"
+                          strokeLinecap="round"
+                          strokeDasharray={CIRC}
+                          strokeDashoffset={
+                            CIRC * (1 - (milestone?.fraction ?? 1))
+                          }
+                        />
+                      </svg>
+                      <div>
                         <p className="text-3xl font-bold tabular-nums text-white">
-                          {Math.min(count, limit)}
-                          <span className="ml-1 text-lg text-zinc-500">
-                            / {limit}
+                          {hours.toFixed(1)}
+                          <span className="ml-1 text-sm font-semibold text-zinc-500">
+                            hours
                           </span>
                         </p>
-                        {locked && (
-                          <LockKeyhole className="h-4 w-4 text-red-400" />
-                        )}
+                        <p className="mt-0.5 text-xs text-zinc-500">
+                          {milestone
+                            ? `To your next badge: ${(milestone.target / 3600).toFixed(0)}h`
+                            : "All badges earned — truly immersed."}
+                        </p>
                       </div>
-                      <div className="mt-3 h-2 overflow-hidden rounded-full bg-zinc-800">
-                        <div
-                          className={`h-full rounded-full transition-all ${
-                            locked ? "bg-red-500" : "bg-indigo-500"
-                          }`}
-                          style={{
-                            width: `${Math.min(100, (count / limit) * 100)}%`,
-                          }}
-                        />
-                      </div>
-                      <p className="mt-2 text-[10px] uppercase tracking-[0.14em] text-zinc-600">
-                        {locked
-                          ? "Limit reached — see you tomorrow"
-                          : `${limit - count} plays remaining today`}
+                    </div>
+                  </Body>
+                </Card>
+
+                <Card>
+                  <CardHeader
+                    icon={Gauge}
+                    title="Today's Cap"
+                    description="Plays toward your mindful daily limit."
+                  />
+                  <Body>
+                    <div className="flex items-baseline gap-2">
+                      <p className="text-3xl font-bold tabular-nums text-white">
+                        {Math.min(count, limit)}
+                        <span className="ml-1 text-lg text-zinc-500">
+                          / {limit}
+                        </span>
                       </p>
-                    </Body>
-                  </Card>
-                </div>
+                      {locked && (
+                        <LockKeyhole className="h-4 w-4 text-red-400" />
+                      )}
+                    </div>
+                    <div className="mt-3 h-2 overflow-hidden rounded-full bg-zinc-800">
+                      <div
+                        className={`h-full rounded-full transition-all ${
+                          locked ? "bg-red-500" : "bg-indigo-500"
+                        }`}
+                        style={{
+                          width: `${Math.min(100, (count / limit) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                    <p className="mt-2 text-[10px] uppercase tracking-[0.14em] text-zinc-600">
+                      {locked
+                        ? "Limit reached — see you tomorrow"
+                        : `${limit - count} plays remaining today`}
+                    </p>
+                  </Body>
+                </Card>
 
                 <Card>
                   <CardHeader
@@ -1100,7 +625,7 @@ export default function Profile() {
               </>
             )}
 
-            {tab === "appearance" && (
+            {tab === "preferences" && (
               <>
                 <Card>
                   <CardHeader
@@ -1182,12 +707,114 @@ export default function Profile() {
                     />
                   </Body>
                 </Card>
+
+                <Card>
+                  <CardHeader
+                    icon={Eye}
+                    title="Record Watch History"
+                    description="Control how FreeStream tracks your viewing."
+                  />
+                  <Body>
+                    <Toggle
+                      checked={settings.historyEnabled}
+                      onChange={value => setSettings({ historyEnabled: value })}
+                      label="Record Watch History"
+                      description="Pause personalized tracking. Per-title progress and Continue Watching pause while the mindful counter keeps counting."
+                    />
+                  </Body>
+                </Card>
+              </>
+            )}
+
+            {tab === "data" && (
+              <>
+                <Card>
+                  <CardHeader
+                    icon={Download}
+                    title="Export your data"
+                    description="Download a JSON file with your preferences, list, ratings, and stats."
+                  />
+                  <Body>
+                    <button
+                      type="button"
+                      onClick={download}
+                      className={outlineBtn}
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      Download my data
+                    </button>
+                  </Body>
+                </Card>
+
+                <Card>
+                  <CardHeader
+                    icon={Trash2}
+                    title="Clear watch history"
+                    description="Remove all Continue Watching entries and progress."
+                  />
+                  <Body>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        clearHistory();
+                        toast("Watch history cleared.");
+                      }}
+                      className={dangerBtn}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Clear watch history
+                    </button>
+                  </Body>
+                </Card>
+
+                <Card>
+                  <CardHeader
+                    icon={Bookmark}
+                    title="Clear My List"
+                    description="Remove all saved titles from your list."
+                  />
+                  <Body>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        localStorage.removeItem("freestream-list-v1");
+                        window.dispatchEvent(new CustomEvent("freestream:list"));
+                        toast("My List cleared.");
+                      }}
+                      className={dangerBtn}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Clear My List
+                    </button>
+                  </Body>
+                </Card>
+
+                <Card>
+                  <CardHeader
+                    icon={Trash2}
+                    title="Clear all local data"
+                    description="Permanently delete your profile, list, history, ratings, and preferences from this browser."
+                  />
+                  <Body>
+                    <button
+                      type="button"
+                      onClick={clearAllData}
+                      className={dangerBtn}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Delete all local data
+                    </button>
+                    <p className="mt-2 text-[10px] text-zinc-600">
+                      This action cannot be undone. Your data is stored only in this browser.
+                    </p>
+                  </Body>
+                </Card>
               </>
             )}
 
             <footer className="flex items-center justify-between pt-2">
               <p className="text-[10px] text-zinc-600">
-                FreeStream — a mindful, ad-free streaming demo.
+                FreeStream — a mindful, ad-free streaming demo. Local demo profile — data stored in this browser only.
               </p>
               <SlidersHorizontal className="h-3.5 w-3.5 text-zinc-700" />
             </footer>
@@ -1197,8 +824,6 @@ export default function Profile() {
     </div>
   );
 }
-
-/* ------------------------------ sub-components ---------------------------- */
 
 function SettingsPill({
   on,
@@ -1219,56 +844,5 @@ function SettingsPill({
     >
       {on ? onLabel : offLabel}
     </span>
-  );
-}
-
-function DeviceRow({
-  session,
-  onSignOut,
-}: {
-  session: DeviceSession;
-  onSignOut: () => void;
-}) {
-  return (
-    <li
-      className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 ${
-        session.current
-          ? "border-indigo-500/40 bg-indigo-600/[0.06]"
-          : "border-zinc-800/70 bg-zinc-950/50"
-      }`}
-    >
-      <span
-        className={`grid h-8 w-8 place-items-center rounded-full ${
-          session.current
-            ? "bg-indigo-600 text-white"
-            : "bg-zinc-800 text-zinc-400"
-        }`}
-      >
-        <MonitorSmartphone className="h-4 w-4" />
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-semibold text-zinc-100">
-          {session.device}
-          {session.current && (
-            <span className="ml-2 rounded-full bg-indigo-600 px-2 py-px text-[8px] font-bold uppercase tracking-[0.1em] text-white">
-              This device
-            </span>
-          )}
-        </p>
-        <p className="text-[11px] text-zinc-500">
-          {session.browser} · last active{" "}
-          {new Date(session.lastActive).toLocaleDateString()}
-        </p>
-      </div>
-      {!session.current && (
-        <button
-          type="button"
-          onClick={onSignOut}
-          className="rounded-full border border-zinc-700/60 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.1em] text-zinc-300 transition hover:border-zinc-500 hover:bg-white/5"
-        >
-          Sign out
-        </button>
-      )}
-    </li>
   );
 }

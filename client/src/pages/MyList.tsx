@@ -1,32 +1,25 @@
 import { Link } from "wouter";
-import { Bookmark, Film, UserRound, Plus } from "lucide-react";
-import { useAuth } from "@/context/AuthContext";
-import {
-  sortedEntries,
-  subscribeList,
-  type ListTag,
-  type ListEntry,
-} from "@/services/lists";
-import { LIST_TAGS } from "@/services/lists";
+import { Bookmark, Film, Plus } from "lucide-react";
+import { useLocalSession } from "@/context/LocalSessionContext";
 import { useEffect, useState } from "react";
 
-/**
- * My List page — shows saved titles for authenticated users.
- * Guest mode: shows an inline placeholder with "Sign in to save movies to your list" and a Sign In CTA.
- */
 export default function MyList() {
-  const { user, isLoading, login } = useAuth();
-  const [listFilter, setListFilter] = useState<ListTag | "all">("all");
+  const { hydrated, isAuthenticated, getMyList, removeFromMyList } = useLocalSession();
+  const [listFilter, setListFilter] = useState<"all" | "plan" | "favorites" | "watched">("all");
   const [, setRev] = useState(0);
 
   useEffect(() => {
-    const unsub = subscribeList(() => setRev(r => r + 1));
-    return () => unsub();
+    const unsub = () => setRev(r => r + 1);
+    window.addEventListener("freestream:state-change", unsub);
+    return () => window.removeEventListener("freestream:state-change", unsub);
   }, []);
 
-  const list = sortedEntries(listFilter);
+  const list = getMyList().filter(entry => {
+    if (listFilter === "all") return true;
+    return (entry as any).tag === listFilter;
+  });
 
-  if (isLoading) {
+  if (!hydrated) {
     return (
       <div className="min-h-screen bg-[#050505] text-[#FFFFFF] flex items-center justify-center">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
@@ -34,7 +27,7 @@ export default function MyList() {
     );
   }
 
-  if (!user) {
+  if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-[#050505] text-[#FFFFFF]">
         <div className="mx-auto max-w-2xl px-4 py-16 sm:px-6 lg:px-8">
@@ -47,16 +40,18 @@ export default function MyList() {
             </h1>
             <p className="mt-4 text-lg text-white/60 max-w-md mx-auto">
               Sign in to save movies and shows to your personal list. Your saved
-              titles sync across devices and are always ready to watch.
+              titles are stored locally in this browser.
             </p>
             <div className="mt-8 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
               <button
                 type="button"
-                onClick={() => login()}
+                onClick={() => {
+                  const { signInDemo } = useLocalSession();
+                  signInDemo();
+                }}
                 className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-6 py-3 text-sm font-bold text-white transition hover:bg-indigo-500"
               >
-                <UserRound className="h-4 w-4" />
-                Sign In
+                Continue as Viewer
               </button>
               <Link
                 href="/"
@@ -67,7 +62,7 @@ export default function MyList() {
               </Link>
             </div>
             <p className="mt-6 text-sm text-white/40">
-              Already have an account? Your list will be waiting for you.
+              This is a local demo — your data stays in this browser.
             </p>
           </div>
         </div>
@@ -89,18 +84,18 @@ export default function MyList() {
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {LIST_TAGS.map(tag => (
+              {(["plan", "favorites", "watched"] as const).map(tag => (
                 <button
-                  key={tag.value}
+                  key={tag}
                   type="button"
-                  onClick={() => setListFilter(tag.value)}
+                  onClick={() => setListFilter(tag)}
                   className={`rounded-full px-3 py-1.5 text-sm font-medium transition ${
-                    listFilter === tag.value
+                    listFilter === tag
                       ? "bg-indigo-600 text-white"
                       : "border border-white/10 text-white/60 hover:bg-white/5 hover:text-white"
                   }`}
                 >
-                  {tag.label}
+                  {tag === "plan" ? "Plan to Watch" : tag === "favorites" ? "Favorites" : "Watched"}
                 </button>
               ))}
               <button
@@ -126,7 +121,6 @@ export default function MyList() {
             </h2>
             <p className="mt-2 text-white/50 max-w-md mx-auto">
               Start exploring the catalog and save movies or shows to your list.
-              Each title can be tagged as Plan to Watch, Favorites, or Watched.
             </p>
             <Link
               href="/"
@@ -138,13 +132,13 @@ export default function MyList() {
           </div>
         ) : (
           <div className="space-y-6">
-            {list.map((entry: ListEntry) => (
+            {list.map((entry: any) => (
               <article
                 key={entry.id}
                 className="flex gap-4 rounded-xl border border-white/10 bg-white/5 transition hover:border-white/20"
               >
                 <Link
-                  href={`/watch/${entry.id}`}
+                  href={`/watch/${entry.providerId ?? entry.id}`}
                   className="relative shrink-0 overflow-hidden rounded-lg bg-white/10"
                   style={{ width: 112, height: 168 }}
                 >
@@ -173,25 +167,21 @@ export default function MyList() {
                       )}
                     </div>
                     <p className="mt-1 text-sm text-white/50">
-                      {entry.tag &&
-                        LIST_TAGS.find(t => t.value === entry.tag)?.label}
+                      {(entry as any).tag &&
+                        (["plan", "favorites", "watched"] as const).find(t => t === (entry as any).tag)
+                          ? (entry as any).tag
+                          : "Plan to Watch"}
                     </p>
                   </div>
                   <div className="mt-4 flex items-center gap-2">
-                    {LIST_TAGS.map(tag => (
-                      <button
-                        key={tag.value}
-                        type="button"
-                        onClick={() => setListFilter(tag.value)}
-                        className={`rounded-full px-2.5 py-1 text-xs font-medium uppercase tracking-[0.1em] transition ${
-                          entry.tag === tag.value
-                            ? "bg-indigo-600 text-white"
-                            : "border border-white/10 text-white/50 hover:bg-white/5 hover:text-white"
-                        }`}
-                      >
-                        {tag.label}
-                      </button>
-                    ))}
+                    <button
+                      type="button"
+                      onClick={() => removeFromMyList(entry.id)}
+                      aria-label={`Remove ${entry.title} from My List`}
+                      className="grid h-7 w-7 place-items-center rounded-full text-zinc-500 transition hover:bg-white/10 hover:text-zinc-200"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                    </button>
                   </div>
                 </div>
               </article>

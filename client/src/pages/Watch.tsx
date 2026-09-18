@@ -47,6 +47,7 @@ import { AuthorizedVideoPlayer, type StreamVariant } from "@/components/stream/A
 import { EpisodeMatrix } from "@/components/movies/EpisodeMatrix";
 import { cancelInFlightPrefetch, prefetchForOpen } from "@/services/prefetch";
 import { attemptPlay } from "@/services/capGate";
+import { useLocalSession } from "@/context/LocalSessionContext";
 import {
   getProgress,
   progressForTitle,
@@ -241,6 +242,9 @@ export function WatchPage() {
 
   // Refs for retry logic
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Local session for My List and History
+  const { isInMyList, toggleMyList, addToHistory } = useLocalSession();
 
   // Fetch movie details on mount
   useEffect(() => {
@@ -545,6 +549,23 @@ export function WatchPage() {
         ? `${movie.title} — S${season} E${episode}`
         : movie?.title || "Loading...";
 
+  // Add to watch history when movie resolves and starts playing
+  useEffect(() => {
+    if (resolved?.stream && movie) {
+      addToHistory({
+        id: movie.id,
+        providerId: movie.providerId,
+        title: movie.title,
+        year: movie.year,
+        poster: movie.poster,
+        backdrop: movie.backdrop,
+        mediaType: movie.mediaType,
+        score: movie.score,
+        watchedAt: Date.now(),
+      });
+    }
+  }, [resolved?.stream, movie, addToHistory]);
+
   // Determine if stream is external embed
   const streamUrl = resolved?.stream?.stream_url ?? "";
   const isEmbed = isExternalEmbedUrl(streamUrl);
@@ -820,12 +841,13 @@ export function WatchPage() {
                   <Button
                     variant="outline"
                     className="flex items-center gap-2 px-4 py-3"
-                    onClick={() => {
-                      /* Add to library */
-                    }}
+                    onClick={() => toggleMyList(movie)}
+                    aria-pressed={isInMyList(movie.id)}
                   >
                     <Plus className="h-5 w-5" />
-                    <span className="hidden sm:inline">My Library</span>
+                    <span className="hidden sm:inline">
+                      {isInMyList(movie.id) ? "In My List" : "My Library"}
+                    </span>
                   </Button>
                 </div>
               </div>

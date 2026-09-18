@@ -9,7 +9,7 @@ import {
   User,
 } from "lucide-react";
 import { Link } from "wouter";
-import { useAuth } from "@/context/AuthContext";
+import { useLocalSession } from "@/context/LocalSessionContext";
 import { useStatsRevision } from "@/hooks/useStats";
 import { capLimit, dayCount, dayLocked } from "@/services/capGate";
 import {
@@ -22,13 +22,8 @@ import {
 const RADIUS = 30;
 const CIRC = 2 * Math.PI * RADIUS;
 
-/**
- * Compact circular profile control with a monochrome dropdown.
- * Guest mode: shows "Sign In" button.
- * Authenticated mode: shows avatar with dropdown containing Profile, My List, Sign Out, and stats.
- */
 export function ProfileMenu() {
-  const { user, isLoading, login, logout } = useAuth();
+  const { user, isAuthenticated, signInDemo, signOut: logout } = useLocalSession();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   useStatsRevision();
@@ -47,19 +42,11 @@ export function ProfileMenu() {
     };
   }, [open]);
 
-  if (isLoading) {
-    return (
-      <div className="grid h-9 w-9 place-items-center rounded-full border border-white/15 bg-white/[0.08] text-white/50">
-        <div className="h-4 w-4 animate-pulse rounded-full bg-white/30" />
-      </div>
-    );
-  }
-
-  if (!user) {
+  if (!isAuthenticated || !user) {
     return (
       <button
         type="button"
-        onClick={() => login()}
+        onClick={signInDemo}
         aria-label="Sign In"
         className="grid h-9 w-9 place-items-center rounded-full border border-white/15 bg-white/[0.08] text-white transition hover:bg-white/20 hover:border-white/30"
       >
@@ -89,15 +76,15 @@ export function ProfileMenu() {
         aria-label="Profile"
         className="grid h-9 w-9 place-items-center rounded-full border border-white/15 bg-white/[0.08] text-white transition hover:bg-white/20"
       >
-        {user.avatar_url ? (
+        {user.avatarUrl ? (
           <img
-            src={user.avatar_url}
+            src={user.avatarUrl}
             alt=""
             className="h-9 w-9 rounded-full object-cover"
           />
         ) : (
           <span className="grid h-9 w-9 place-items-center rounded-full bg-indigo-600 text-white font-bold text-sm">
-            {user.name.charAt(0).toUpperCase()}
+            {user.displayName.charAt(0).toUpperCase()}
           </span>
         )}
       </button>
@@ -106,23 +93,26 @@ export function ProfileMenu() {
         <div className="absolute right-0 top-full z-50 mt-2 w-[19rem] overflow-hidden rounded-xl border border-white/10 bg-[#121212] shadow-2xl">
           <div className="border-b border-white/10 px-4 py-3">
             <div className="flex items-center gap-3">
-              {user.avatar_url ? (
+              {user.avatarUrl ? (
                 <img
-                  src={user.avatar_url}
+                  src={user.avatarUrl}
                   alt=""
                   className="h-10 w-10 rounded-full object-cover"
                 />
               ) : (
                 <span className="grid h-10 w-10 place-items-center rounded-full bg-indigo-600 text-white font-bold">
-                  {user.name.charAt(0).toUpperCase()}
+                  {user.displayName.charAt(0).toUpperCase()}
                 </span>
               )}
               <div className="min-w-0">
                 <p className="text-sm font-semibold text-white truncate">
-                  {user.name}
+                  {user.displayName}
                 </p>
                 <p className="text-[11px] text-white/50 truncate">
                   {user.email}
+                </p>
+                <p className="mt-1 text-[10px] font-bold uppercase tracking-[0.1em] text-indigo-400">
+                  Local demo profile
                 </p>
               </div>
             </div>
