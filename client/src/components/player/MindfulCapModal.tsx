@@ -1,11 +1,6 @@
 import { useEffect, useState } from "react";
 import { MoonStar } from "lucide-react";
-import {
-  capLimit,
-  dayCount,
-  resetCap,
-  subscribeCap,
-} from "@/services/capGate";
+import { capLimit, dayCount, resetCap, subscribeCap } from "@/services/capGate";
 import { secondsToReset } from "@/services/stats";
 
 function formatCountdown(total: number): string {

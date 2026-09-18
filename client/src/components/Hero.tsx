@@ -22,7 +22,8 @@ function getBackdropUrl(backdrop: string | null | undefined): string | null {
 
 function formatRuntime(minutes: string | number | undefined): string {
   if (!minutes) return "";
-  const mins = typeof minutes === "string" ? parseInt(minutes.replace("m", "")) : minutes;
+  const mins =
+    typeof minutes === "string" ? parseInt(minutes.replace("m", "")) : minutes;
   if (isNaN(mins)) return "";
   const hours = Math.floor(mins / 60);
   const remainingMins = mins % 60;
@@ -50,7 +51,9 @@ export function Hero({
   const [trailer, setTrailer] = useState<TrailerInfo | null>(null);
   const [trailerLoading, setTrailerLoading] = useState(false);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const trailerCacheRef = useRef(new Map<string, Promise<TrailerInfo | null>>());
+  const trailerCacheRef = useRef(
+    new Map<string, Promise<TrailerInfo | null>>()
+  );
 
   useEffect(() => {
     if (count === 0) return;
@@ -86,15 +89,18 @@ export function Hero({
     }
   }, []);
 
-  const handleMouseEnter = useCallback((movie: Movie) => {
-    if (hoverTimerRef.current) {
-      clearTimeout(hoverTimerRef.current);
-    }
-    hoverTimerRef.current = setTimeout(() => {
-      loadTrailer(movie);
-      setShowTrailer(true);
-    }, 800);
-  }, [loadTrailer]);
+  const handleMouseEnter = useCallback(
+    (movie: Movie) => {
+      if (hoverTimerRef.current) {
+        clearTimeout(hoverTimerRef.current);
+      }
+      hoverTimerRef.current = setTimeout(() => {
+        loadTrailer(movie);
+        setShowTrailer(true);
+      }, 800);
+    },
+    [loadTrailer]
+  );
 
   const handleMouseLeave = useCallback(() => {
     if (hoverTimerRef.current) {
@@ -107,12 +113,12 @@ export function Hero({
 
   const handlePlay = (movie: Movie) => {
     if (!movie.providerId) {
-      console.warn('[Hero] No providerId for movie:', movie.title);
+      console.warn("[Hero] No providerId for movie:", movie.title);
       return;
     }
     const tmdbId = parseInt(movie.providerId, 10);
     if (isNaN(tmdbId)) {
-      console.warn('[Hero] Invalid TMDB ID:', movie.providerId);
+      console.warn("[Hero] Invalid TMDB ID:", movie.providerId);
       return;
     }
     navigate(`/watch/${tmdbId}`);
@@ -139,7 +145,10 @@ export function Hero({
     >
       {/* Cross-fading media layer */}
       <div className="absolute inset-0">
-        <div className="absolute inset-0 transition-opacity duration-700 ease-[cubic-bezier(0.32,0.72,0,1)]" style={{ opacity: showTrailer && trailer ? 0 : 1 }}>
+        <div
+          className="absolute inset-0 transition-opacity duration-700 ease-[cubic-bezier(0.32,0.72,0,1)]"
+          style={{ opacity: showTrailer && trailer ? 0 : 1 }}
+        >
           {current ? (
             <div
               key={current.id}
@@ -180,9 +189,18 @@ export function Hero({
       </div>
 
       {/* Gradient architecture into void black */}
-      <div aria-hidden className="absolute inset-0 bg-[radial-gradient(ellipse_130%_110%_at_62%_-12%,transparent_0%,rgba(5,5,5,0.30)_40%,#050505_80%)]" />
-      <div aria-hidden className="absolute inset-0 bg-[linear-gradient(90deg,#050505_0%,rgba(5,5,5,0.80)_44%,rgba(5,5,5,0.20)_72%,transparent_100%)]" />
-      <div aria-hidden className="absolute inset-x-0 bottom-0 h-48 bg-[linear-gradient(180deg,transparent_0%,#050505_92%)]" />
+      <div
+        aria-hidden
+        className="absolute inset-0 bg-[radial-gradient(ellipse_130%_110%_at_62%_-12%,transparent_0%,rgba(5,5,5,0.30)_40%,#050505_80%)]"
+      />
+      <div
+        aria-hidden
+        className="absolute inset-0 bg-[linear-gradient(90deg,#050505_0%,rgba(5,5,5,0.80)_44%,rgba(5,5,5,0.20)_72%,transparent_100%)]"
+      />
+      <div
+        aria-hidden
+        className="absolute inset-x-0 bottom-0 h-48 bg-[linear-gradient(180deg,transparent_0%,#050505_92%)]"
+      />
 
       {/* Side Chevron Navigation - Far left and right edges */}
       {count > 1 && (
@@ -277,7 +295,11 @@ export function Hero({
                   onClick={() => onSave?.(current)}
                   className="inline-flex items-center gap-2 rounded-full px-7 py-3.5 text-sm font-semibold transition-all duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white border-2 border-white/20 bg-black/30 text-white backdrop-blur-md hover:border-white/40 hover:bg-white/10 hover:text-white active:scale-[0.97] active:border-white/50"
                 >
-                  {saved ? <Film className="h-5 w-5 fill-current" /> : <Film className="h-5 w-5" />}
+                  {saved ? (
+                    <Film className="h-5 w-5 fill-current" />
+                  ) : (
+                    <Film className="h-5 w-5" />
+                  )}
                   {saved ? "In My Library" : "My Library"}
                 </button>
               </div>
@@ -314,7 +336,10 @@ export function Hero({
 
       {/* Per-slide rotation progress */}
       {count > 1 && rotateSeconds > 0 && (
-        <div aria-hidden className="absolute inset-x-0 bottom-0 z-10 h-[3px] bg-white/10">
+        <div
+          aria-hidden
+          className="absolute inset-x-0 bottom-0 z-10 h-[3px] bg-white/10"
+        >
           <div
             key={index}
             className="fs-progress h-full bg-white"

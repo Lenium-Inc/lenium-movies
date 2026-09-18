@@ -11,11 +11,7 @@ interface UseInViewOptions {
  * Returns a ref to attach to the element and a boolean indicating visibility.
  */
 export function useInView(options: UseInViewOptions = {}) {
-  const {
-    threshold = 0.1,
-    rootMargin = "100px",
-    triggerOnce = true,
-  } = options;
+  const { threshold = 0.1, rootMargin = "100px", triggerOnce = true } = options;
 
   const [isInView, setIsInView] = useState(false);
   const elementRef = useRef<HTMLElement | null>(null);
@@ -62,7 +58,10 @@ export function useInView(options: UseInViewOptions = {}) {
  * Hook for staggered loading of multiple items with viewport intersection.
  * Items are queued and loaded with a small delay between each for smooth rendering.
  */
-export function useStaggeredInView<T>(items: T[], options: UseInViewOptions = {}) {
+export function useStaggeredInView<T>(
+  items: T[],
+  options: UseInViewOptions = {}
+) {
   const { threshold = 0.1, rootMargin = "200px", triggerOnce = true } = options;
   const [visibleIndices, setVisibleIndices] = useState<Set<number>>(new Set());
   const observerRef = useRef<IntersectionObserver | null>(null);
@@ -90,17 +89,18 @@ export function useStaggeredInView<T>(items: T[], options: UseInViewOptions = {}
     return () => observerRef.current?.disconnect();
   }, [items.length, threshold, rootMargin, triggerOnce]);
 
-  const getSentinelRef = useCallback(
-    (node: HTMLDivElement | null) => {
-      sentinelRef.current = node;
-    },
-    []
-  );
+  const getSentinelRef = useCallback((node: HTMLDivElement | null) => {
+    sentinelRef.current = node;
+  }, []);
 
   const isItemVisible = useCallback(
     (index: number) => visibleIndices.has(index),
     [visibleIndices]
   );
 
-  return { sentinelRef: getSentinelRef, isItemVisible, visibleCount: visibleIndices.size };
+  return {
+    sentinelRef: getSentinelRef,
+    isItemVisible,
+    visibleCount: visibleIndices.size,
+  };
 }

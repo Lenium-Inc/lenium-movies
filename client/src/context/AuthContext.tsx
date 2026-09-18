@@ -1,4 +1,10 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
 
 export type StreamQuality = "4K" | "1080p" | "720p" | "480p" | "320p";
 
@@ -33,7 +39,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
         const parsed = JSON.parse(stored);
-        if (parsed && typeof parsed.id === "string" && typeof parsed.name === "string" && typeof parsed.email === "string") {
+        if (
+          parsed &&
+          typeof parsed.id === "string" &&
+          typeof parsed.name === "string" &&
+          typeof parsed.email === "string"
+        ) {
           setUser(parsed);
         }
       }
@@ -44,12 +55,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   }, []);
 
-  const login = async (credentials?: Record<string, unknown>): Promise<void> => {
+  const login = async (
+    credentials?: Record<string, unknown>
+  ): Promise<void> => {
     setIsLoading(true);
     try {
       if (credentials?.email && credentials?.name) {
         const newUser: User = {
-          id: credentials.id as string || crypto.randomUUID(),
+          id: (credentials.id as string) || crypto.randomUUID(),
           name: credentials.name as string,
           email: credentials.email as string,
           avatar_url: credentials.avatar_url as string | undefined,

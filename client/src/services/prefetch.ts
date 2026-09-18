@@ -112,9 +112,10 @@ export function prefetchPending(): boolean {
  * Keeping prefetch and the player on the same variant makes the blob-first
  * handoff deterministic instead of a happy accident.
  */
-function pickStartVariant(
-  movie: StreamMovie
-): { variant?: StreamVariant; url: string } {
+function pickStartVariant(movie: StreamMovie): {
+  variant?: StreamVariant;
+  url: string;
+} {
   const pref = getSettings().quality;
   if (pref !== "auto") {
     const found = movie.streams?.find(s => s.quality === pref);
@@ -198,7 +199,9 @@ export async function prefetchMovie(
 }
 
 /** Resolve the cached blob for a prefetch record, or null if it's gone. */
-export function resolvePrefetched(record: PrefetchRecord): Promise<Blob | null> {
+export function resolvePrefetched(
+  record: PrefetchRecord
+): Promise<Blob | null> {
   return getBlob(record.key);
 }
 

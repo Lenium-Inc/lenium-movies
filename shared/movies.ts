@@ -7,5 +7,7 @@ export type SearchableMovie = {
 export function matchesMovieSearch(movie: SearchableMovie, query: string) {
   const normalized = query.trim().toLowerCase();
   if (!normalized) return true;
-  return `${movie.title} ${movie.genre.join(" ")} ${movie.director}`.toLowerCase().includes(normalized);
+  return `${movie.title} ${movie.genre.join(" ")} ${movie.director}`
+    .toLowerCase()
+    .includes(normalized);
 }

@@ -8,11 +8,7 @@
 import { getSettings, historyEnabled } from "./settings";
 import { savedListIds } from "./lists";
 import { ratingLog } from "./ratings";
-import {
-  earnedAchievements,
-  hoursWatched,
-  playsToday,
-} from "./stats";
+import { earnedAchievements, hoursWatched, playsToday } from "./stats";
 
 export type PlanTier = "founder" | "dev";
 
@@ -59,9 +55,24 @@ function seed(): Account {
         lastActive: now.toISOString(),
         current: true,
       },
-      { id: "tv", device: "Living-room TV", browser: "Browser", lastActive: named(2) },
-      { id: "phone", device: "iPhone", browser: "Safari", lastActive: named(5) },
-      { id: "laptop", device: "MacBook Pro", browser: "Safari", lastActive: named(9) },
+      {
+        id: "tv",
+        device: "Living-room TV",
+        browser: "Browser",
+        lastActive: named(2),
+      },
+      {
+        id: "phone",
+        device: "iPhone",
+        browser: "Safari",
+        lastActive: named(5),
+      },
+      {
+        id: "laptop",
+        device: "MacBook Pro",
+        browser: "Safari",
+        lastActive: named(9),
+      },
     ],
   };
 }
@@ -126,7 +137,9 @@ async function hashPassword(password: string): Promise<string> {
       "SHA-256",
       new TextEncoder().encode(SALT + password)
     );
-    return Array.from(new Uint8Array(bytes), b => b.toString(16).padStart(2, "0")).join("");
+    return Array.from(new Uint8Array(bytes), b =>
+      b.toString(16).padStart(2, "0")
+    ).join("");
   } catch {
     let hash = 5381;
     const text = SALT + password;
@@ -162,11 +175,17 @@ export async function updatePassword(
 }
 
 /** 2FA requires a vault password so a forgotten password can't hide a breach. */
-export async function toggleTwoFactor(enabled: boolean, password: string): Promise<PasswordResult> {
+export async function toggleTwoFactor(
+  enabled: boolean,
+  password: string
+): Promise<PasswordResult> {
   const account = getAccount();
   if (enabled) {
     if (!account.passwordHash) {
-      return { ok: false, error: "Set a password first, then enable two-factor." };
+      return {
+        ok: false,
+        error: "Set a password first, then enable two-factor.",
+      };
     }
     const hash = await hashPassword(password);
     if (hash !== account.passwordHash) {
@@ -178,9 +197,12 @@ export async function toggleTwoFactor(enabled: boolean, password: string): Promi
   return { ok: true };
 }
 
-export function updateProfile(patch: Partial<Pick<Account, "email" | "displayName">>): void {
+export function updateProfile(
+  patch: Partial<Pick<Account, "email" | "displayName">>
+): void {
   const account = getAccount();
-  if (patch.email !== undefined && patch.email.trim()) account.email = patch.email.trim();
+  if (patch.email !== undefined && patch.email.trim())
+    account.email = patch.email.trim();
   if (patch.displayName !== undefined && patch.displayName.trim()) {
     account.displayName = patch.displayName.trim();
   }

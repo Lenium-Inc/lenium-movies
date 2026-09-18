@@ -6,13 +6,13 @@ FreeStream helps viewers **discover, decide, play, and remember** authorized fil
 
 ## Personas
 
-| Persona | Primary need | MVP surface |
-|---|---|---|
-| Casual viewer | Find a good film quickly | Home, search, movie page, authorized play |
-| Enthusiast | Track and explore taste | Watchlist, history, ratings, recommendations |
-| Filmmaker | Submit and manage a film | Creator portal, rights declaration, status |
-| Administrator | Operate catalogue and trust | Admin, rights, moderation, ingestion |
-| Partner | Control licensed distribution | Rights, availability, reporting |
+| Persona       | Primary need                  | MVP surface                                  |
+| ------------- | ----------------------------- | -------------------------------------------- |
+| Casual viewer | Find a good film quickly      | Home, search, movie page, authorized play    |
+| Enthusiast    | Track and explore taste       | Watchlist, history, ratings, recommendations |
+| Filmmaker     | Submit and manage a film      | Creator portal, rights declaration, status   |
+| Administrator | Operate catalogue and trust   | Admin, rights, moderation, ingestion         |
+| Partner       | Control licensed distribution | Rights, availability, reporting              |
 
 ## MVP requirements
 

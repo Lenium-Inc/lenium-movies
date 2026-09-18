@@ -10,32 +10,32 @@ FreeStream is a polished **visual prototype**, not a production movie platform. 
 
 ## Classification summary
 
-| Area | Classification | Evidence |
-|---|---|---|
-| Authentication | PARTIALLY REAL | `useAuth` calls `trpc.auth.me`; `server/routers.ts` exposes `auth.me` and `auth.logout`; Manus OAuth/session infrastructure exists. No product account/profile/session-management features exist. |
-| Home/discovery shell | MOCKED | `Home.tsx` renders a hardcoded eight-item `movies` array and static editorial copy. |
-| Search | PARTIALLY REAL | `useMemo` filters the fixture array with `matchesMovieSearch`; no search API, database query, index, pagination, provider, loading state, or server persistence. |
-| Browse/category filters | PARTIALLY REAL | Category chips filter local fixture state only; no `/movies`, genre, year, country, language, browse API, or canonical route. |
-| Movie data acquisition | MOCKED | No metadata provider adapter, credentials, ingestion job, provider ID, provenance, normalization, or movie tables exist. |
-| Movie details | MOCKED | Details are a client modal over fixture objects; no movie route, database lookup, cast/crew records, availability lookup, or error boundary for provider data. |
-| Watchlist | MOCKED | `savedIds` is React state initialized to `[4, 7]`; no watchlist table, API, auth guard, or persistence. |
-| History/continue watching | MOCKED | Static “Soft Focus”, “32 min left”, and “Episode 01” values are rendered; no history/progress tables or procedures exist. |
-| Playback | MOCKED | “Start watching” only calls `toast.success("Playback is ready for authorized titles")`; no player, source, rights check, session, signed access, captions, or telemetry. |
-| Rights management | UNIMPLEMENTED | No rights tables, policy service, procedures, UI, evidence workflow, or tests exist. |
-| Admin | UNIMPLEMENTED | Framework has `adminProcedure`, but no FreeStream admin routes, pages, entities, or mutations exist. |
-| Ingestion | UNIMPLEMENTED | No provider adapter, queue, background worker, idempotency, retries, rate limiting, or ingestion procedures exist. |
-| Search index | UNIMPLEMENTED | No search service, index state, indexing worker, reconciliation, or search router exists. |
-| SEO/server rendering | UNIMPLEMENTED | `App.tsx` is a client-side Wouter shell; no server-rendered movie pages, dynamic metadata, canonical tags, Open Graph, Twitter metadata, or JSON-LD. |
-| Sitemap | UNIMPLEMENTED | No sitemap route, generator, database-backed URL selection, or sitemap tests. |
-| robots.txt | UNIMPLEMENTED | No dynamic or static robots policy exists. |
-| Structured data | UNIMPLEMENTED | No JSON-LD or schema generation exists. |
-| Ad/tracker protection | UNIMPLEMENTED | `AdBlockRule` exists only in documentation; no schema, evaluator, allowlist, admin UI, telemetry, or tests. |
-| Security | PARTIALLY REAL | OAuth/session cookie helpers and `protectedProcedure`/`adminProcedure` exist in framework. Product authorization, rights enforcement, upload safety, provider webhook handling, rate limiting, CSP policy, and audit events are absent. |
-| Performance | PARTIALLY REAL | Homepage was measured and image loading/bundle optimizations were applied. It remains a client fixture page with a large JS chunk; no real API/database/player performance exists. |
-| Mobile UX | PARTIALLY REAL | Responsive homepage and mobile navigation exist and were screenshot-verified. Product mobile routes, player controls, account flows, and low-bandwidth states do not exist. |
-| Accessibility | PARTIALLY REAL | Semantic headings, labels, buttons, and dialog roles exist. Focus management, keyboard-complete navigation, real player accessibility, captions, and automated a11y tests are absent. |
-| Analytics | MOCKED/EXTERNAL TEMPLATE | `client/index.html` includes a template Umami script with environment placeholders; no product event taxonomy, consent, server events, or verified analytics configuration. |
-| Tests | PARTIALLY REAL | Auth logout and pure local search-helper tests pass. There are no tests for catalogue, APIs, database, rights, playback, SEO, sitemap, robots, security, upload, or accessibility. |
+| Area                      | Classification           | Evidence                                                                                                                                                                                                                                |
+| ------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Authentication            | PARTIALLY REAL           | `useAuth` calls `trpc.auth.me`; `server/routers.ts` exposes `auth.me` and `auth.logout`; Manus OAuth/session infrastructure exists. No product account/profile/session-management features exist.                                       |
+| Home/discovery shell      | MOCKED                   | `Home.tsx` renders a hardcoded eight-item `movies` array and static editorial copy.                                                                                                                                                     |
+| Search                    | PARTIALLY REAL           | `useMemo` filters the fixture array with `matchesMovieSearch`; no search API, database query, index, pagination, provider, loading state, or server persistence.                                                                        |
+| Browse/category filters   | PARTIALLY REAL           | Category chips filter local fixture state only; no `/movies`, genre, year, country, language, browse API, or canonical route.                                                                                                           |
+| Movie data acquisition    | MOCKED                   | No metadata provider adapter, credentials, ingestion job, provider ID, provenance, normalization, or movie tables exist.                                                                                                                |
+| Movie details             | MOCKED                   | Details are a client modal over fixture objects; no movie route, database lookup, cast/crew records, availability lookup, or error boundary for provider data.                                                                          |
+| Watchlist                 | MOCKED                   | `savedIds` is React state initialized to `[4, 7]`; no watchlist table, API, auth guard, or persistence.                                                                                                                                 |
+| History/continue watching | MOCKED                   | Static “Soft Focus”, “32 min left”, and “Episode 01” values are rendered; no history/progress tables or procedures exist.                                                                                                               |
+| Playback                  | MOCKED                   | “Start watching” only calls `toast.success("Playback is ready for authorized titles")`; no player, source, rights check, session, signed access, captions, or telemetry.                                                                |
+| Rights management         | UNIMPLEMENTED            | No rights tables, policy service, procedures, UI, evidence workflow, or tests exist.                                                                                                                                                    |
+| Admin                     | UNIMPLEMENTED            | Framework has `adminProcedure`, but no FreeStream admin routes, pages, entities, or mutations exist.                                                                                                                                    |
+| Ingestion                 | UNIMPLEMENTED            | No provider adapter, queue, background worker, idempotency, retries, rate limiting, or ingestion procedures exist.                                                                                                                      |
+| Search index              | UNIMPLEMENTED            | No search service, index state, indexing worker, reconciliation, or search router exists.                                                                                                                                               |
+| SEO/server rendering      | UNIMPLEMENTED            | `App.tsx` is a client-side Wouter shell; no server-rendered movie pages, dynamic metadata, canonical tags, Open Graph, Twitter metadata, or JSON-LD.                                                                                    |
+| Sitemap                   | UNIMPLEMENTED            | No sitemap route, generator, database-backed URL selection, or sitemap tests.                                                                                                                                                           |
+| robots.txt                | UNIMPLEMENTED            | No dynamic or static robots policy exists.                                                                                                                                                                                              |
+| Structured data           | UNIMPLEMENTED            | No JSON-LD or schema generation exists.                                                                                                                                                                                                 |
+| Ad/tracker protection     | UNIMPLEMENTED            | `AdBlockRule` exists only in documentation; no schema, evaluator, allowlist, admin UI, telemetry, or tests.                                                                                                                             |
+| Security                  | PARTIALLY REAL           | OAuth/session cookie helpers and `protectedProcedure`/`adminProcedure` exist in framework. Product authorization, rights enforcement, upload safety, provider webhook handling, rate limiting, CSP policy, and audit events are absent. |
+| Performance               | PARTIALLY REAL           | Homepage was measured and image loading/bundle optimizations were applied. It remains a client fixture page with a large JS chunk; no real API/database/player performance exists.                                                      |
+| Mobile UX                 | PARTIALLY REAL           | Responsive homepage and mobile navigation exist and were screenshot-verified. Product mobile routes, player controls, account flows, and low-bandwidth states do not exist.                                                             |
+| Accessibility             | PARTIALLY REAL           | Semantic headings, labels, buttons, and dialog roles exist. Focus management, keyboard-complete navigation, real player accessibility, captions, and automated a11y tests are absent.                                                   |
+| Analytics                 | MOCKED/EXTERNAL TEMPLATE | `client/index.html` includes a template Umami script with environment placeholders; no product event taxonomy, consent, server events, or verified analytics configuration.                                                             |
+| Tests                     | PARTIALLY REAL           | Auth logout and pure local search-helper tests pass. There are no tests for catalogue, APIs, database, rights, playback, SEO, sitemap, robots, security, upload, or accessibility.                                                      |
 
 ## Feature-by-feature trace
 
@@ -93,15 +93,15 @@ FreeStream is a polished **visual prototype**, not a production movie platform. 
 
 ## External blockers and exact remaining actions
 
-| Blocker | Exact action |
-|---|---|
-| Metadata provider | Select a licensed provider, obtain production API credentials, confirm commercial terms, attribution, caching, image rights, rate limits, and provider IDs; implement adapter and ingestion jobs. |
-| Artwork | Obtain a provider-approved image usage path or first-party licensed artwork storage; do not use fixture Unsplash art as catalogue artwork without confirming rights and attribution. |
-| Authorized video | Select a managed video/DRM provider, configure account/signing/webhook secrets, define HLS/DASH/caption/audio capabilities, and pass signed-access/revocation tests. |
-| Rights | Obtain contracts/evidence, territories, dates, platform restrictions, takedown contact, and legal approval; implement RightsGrant and policy evaluation. |
-| Database/infrastructure | Provision production PostgreSQL, migrations, backups, object storage, CDN, queue workers, search, monitoring, and restore drills. |
-| SEO/domain | Configure the canonical production domain, SSR runtime, sitemap/robots delivery, Search Console/Bing Webmaster verification, and redirect policy. |
-| Privacy/analytics | Approve consent/lawful-basis policy, event taxonomy, retention, deletion/export behavior, and analytics processor configuration. |
+| Blocker                 | Exact action                                                                                                                                                                                      |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Metadata provider       | Select a licensed provider, obtain production API credentials, confirm commercial terms, attribution, caching, image rights, rate limits, and provider IDs; implement adapter and ingestion jobs. |
+| Artwork                 | Obtain a provider-approved image usage path or first-party licensed artwork storage; do not use fixture Unsplash art as catalogue artwork without confirming rights and attribution.              |
+| Authorized video        | Select a managed video/DRM provider, configure account/signing/webhook secrets, define HLS/DASH/caption/audio capabilities, and pass signed-access/revocation tests.                              |
+| Rights                  | Obtain contracts/evidence, territories, dates, platform restrictions, takedown contact, and legal approval; implement RightsGrant and policy evaluation.                                          |
+| Database/infrastructure | Provision production PostgreSQL, migrations, backups, object storage, CDN, queue workers, search, monitoring, and restore drills.                                                                 |
+| SEO/domain              | Configure the canonical production domain, SSR runtime, sitemap/robots delivery, Search Console/Bing Webmaster verification, and redirect policy.                                                 |
+| Privacy/analytics       | Approve consent/lawful-basis policy, event taxonomy, retention, deletion/export behavior, and analytics processor configuration.                                                                  |
 
 ## Required production gate
 

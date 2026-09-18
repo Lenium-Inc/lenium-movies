@@ -6,13 +6,13 @@ The API is versioned, typed, authenticated by session, and organized by domain. 
 
 ## Public procedures
 
-| Procedure | Input | Output |
-|---|---|---|
-| `catalog.home` | locale, optional cursor | featured rows and stable collection references |
-| `catalog.search` | query, facets, sort, cursor | results, facets, suggestions, zero-result hints |
-| `catalog.movieBySlug` | slug | canonical movie data, availability state, structured metadata |
-| `catalog.collectionBySlug` | slug, cursor | published collection and items |
-| `catalog.personBySlug` | slug | filmography when indexable |
+| Procedure                  | Input                       | Output                                                        |
+| -------------------------- | --------------------------- | ------------------------------------------------------------- |
+| `catalog.home`             | locale, optional cursor     | featured rows and stable collection references                |
+| `catalog.search`           | query, facets, sort, cursor | results, facets, suggestions, zero-result hints               |
+| `catalog.movieBySlug`      | slug                        | canonical movie data, availability state, structured metadata |
+| `catalog.collectionBySlug` | slug, cursor                | published collection and items                                |
+| `catalog.personBySlug`     | slug                        | filmography when indexable                                    |
 
 ## Authenticated procedures
 

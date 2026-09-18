@@ -1,5 +1,13 @@
 import { useState, useEffect } from "react";
-import { ChevronDown, ChevronUp, Calendar, Filter, Star, X, Loader2 } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  Calendar,
+  Filter,
+  Star,
+  X,
+  Loader2,
+} from "lucide-react";
 import { useCatalog } from "@/hooks/useCatalog";
 import { genreFilterOptions } from "@/hooks/useCatalog";
 import type { View } from "@/components/layout/navigation";
@@ -107,7 +115,10 @@ export function DiscoverFilter({
   }
 
   return (
-    <div id="discover-filters" className="animate-in slide-in-from-top-2 duration-200">
+    <div
+      id="discover-filters"
+      className="animate-in slide-in-from-top-2 duration-200"
+    >
       <div className="mb-4 rounded-lg border border-white/10 bg-[#121212] p-4">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
@@ -115,7 +126,10 @@ export function DiscoverFilter({
             <h3 className="text-sm font-bold text-white">Discover Filters</h3>
             {hasActiveFilters && (
               <span className="rounded-full bg-indigo-600/20 px-2 py-0.5 text-[10px] font-medium text-indigo-300">
-                {selectedMoods.length + (yearRange ? 1 : 0) + (contentType !== "all" ? 1 : 0)} active
+                {selectedMoods.length +
+                  (yearRange ? 1 : 0) +
+                  (contentType !== "all" ? 1 : 0)}{" "}
+                active
               </span>
             )}
           </div>
@@ -297,7 +311,9 @@ export function DiscoverFilter({
             </>
           ) : (
             <>
-              {filteredCount === 0 ? "No matches found" : `${filteredCount} title${filteredCount !== 1 ? "s" : ""} found`}
+              {filteredCount === 0
+                ? "No matches found"
+                : `${filteredCount} title${filteredCount !== 1 ? "s" : ""} found`}
             </>
           )}
         </span>

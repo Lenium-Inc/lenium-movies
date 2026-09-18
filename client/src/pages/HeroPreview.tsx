@@ -33,7 +33,9 @@ const previewFilms: PreviewFilm[] = [
   {
     id: 569094,
     title: "Spider-Man: Across the Spider-Verse",
-    year: 2023, runtimeMin: 140, score: 8.3,
+    year: 2023,
+    runtimeMin: 140,
+    score: 8.3,
     genre: ["Sci-Fi", "Action"],
     poster: img("/8Vt6mWEReuy4Of61Lnj5Xj704m8.jpg", "w342"),
     backdrop: img("/kVd3a9YeLGkoeR50jGEXM6EqseS.jpg", "w780"),
@@ -44,7 +46,9 @@ const previewFilms: PreviewFilm[] = [
   {
     id: 634649,
     title: "Spider-Man: No Way Home",
-    year: 2021, runtimeMin: 148, score: 7.9,
+    year: 2021,
+    runtimeMin: 148,
+    score: 7.9,
     genre: ["Action", "Sci-Fi"],
     poster: img("/1g0dhYtq4irTY1GPXvft6k4YLjm.jpg", "w342"),
     backdrop: img("/uyrOU4BDm2kbVxFsMiDFIHDhc4d.jpg", "w780"),
@@ -55,7 +59,9 @@ const previewFilms: PreviewFilm[] = [
   {
     id: 429617,
     title: "Spider-Man: Far From Home",
-    year: 2019, runtimeMin: 129, score: 7.4,
+    year: 2019,
+    runtimeMin: 129,
+    score: 7.4,
     genre: ["Action", "Sci-Fi"],
     poster: img("/4q2NNj4S5dG2RLF9CpXsej7yXl.jpg", "w342"),
     backdrop: img("/vamhMTvh9m9zFHDoR0v1nRtf6T4.jpg", "w780"),
@@ -66,7 +72,9 @@ const previewFilms: PreviewFilm[] = [
   {
     id: 10331,
     title: "Night of the Living Dead",
-    year: 1968, runtimeMin: 96, score: 7.6,
+    year: 1968,
+    runtimeMin: 96,
+    score: 7.6,
     genre: ["Thriller"],
     poster: img("/rb2NWyb008u1EcKCOyXs2Nmj0ra.jpg", "w342"),
     backdrop: img("/5KtmBSqFtHY3I9t8lgH27Mc0bqY.jpg", "w780"),
@@ -77,7 +85,9 @@ const previewFilms: PreviewFilm[] = [
   {
     id: 16093,
     title: "Carnival of Souls",
-    year: 1962, runtimeMin: 78, score: 6.9,
+    year: 1962,
+    runtimeMin: 78,
+    score: 6.9,
     genre: ["Thriller"],
     poster: img("/AdbQsFB8pS090l0NO3uBtLZy2zw.jpg", "w342"),
     backdrop: img("/esIoQw7VaykfHsw6fx2VltZ1R7U.jpg", "w780"),
@@ -88,7 +98,9 @@ const previewFilms: PreviewFilm[] = [
   {
     id: 653,
     title: "Nosferatu",
-    year: 1922, runtimeMin: 94, score: 7.7,
+    year: 1922,
+    runtimeMin: 94,
+    score: 7.7,
     genre: ["Thriller"],
     poster: img("/zv7J85D8CC9qYagAEhPM63CIG6j.jpg", "w342"),
     backdrop: img("/cA9iGtvjRGJHzDBfrq48l0eyCvA.jpg", "w780"),
@@ -99,7 +111,9 @@ const previewFilms: PreviewFilm[] = [
   {
     id: 44977,
     title: "Dhoom 3",
-    year: 2013, runtimeMin: 171, score: 6.0,
+    year: 2013,
+    runtimeMin: 171,
+    score: 6.0,
     genre: ["Action"],
     poster: img("/rUVTM5EQUQ2I0fcfE46AkvBYWae.jpg", "w342"),
     backdrop: img("/m715Fj5VVCXfwzqbCZFhmJBH8S9.jpg", "w780"),
@@ -110,7 +124,9 @@ const previewFilms: PreviewFilm[] = [
   {
     id: 20453,
     title: "3 Idiots",
-    year: 2009, runtimeMin: 171, score: 8.0,
+    year: 2009,
+    runtimeMin: 171,
+    score: 8.0,
     genre: ["Comedy"],
     poster: img("/66A9MqXOyVFCssoloscw79z8Tew.jpg", "w342"),
     backdrop: img("/8gT3UKtglLVpu0YfccwbmXZ5Eis.jpg", "w780"),
@@ -121,7 +137,9 @@ const previewFilms: PreviewFilm[] = [
   {
     id: 534780,
     title: "Andhadhun",
-    year: 2018, runtimeMin: 139, score: 7.6,
+    year: 2018,
+    runtimeMin: 139,
+    score: 7.6,
     genre: ["Thriller", "Comedy"],
     poster: img("/dy3K6hNvwE05siGgiLJcEiwgpdO.jpg", "w342"),
     backdrop: img("/ArvKQJv3nEpnBoVyjWDUT7TtJOL.jpg", "w780"),
@@ -132,7 +150,9 @@ const previewFilms: PreviewFilm[] = [
   {
     id: 813,
     title: "Airplane!",
-    year: 1980, runtimeMin: 88, score: 7.3,
+    year: 1980,
+    runtimeMin: 88,
+    score: 7.3,
     genre: ["Comedy"],
     poster: img("/7Q3efxd3AF1vQjlSxnlerSA7RzN.jpg", "w342"),
     backdrop: img("/wQyvrsNSTzFVEGgarZbFkFyIciy.jpg", "w780"),
@@ -151,7 +171,9 @@ const fallbackFilms: PreviewFilm[] = [
   {
     id: 900001,
     title: "Reel from the Vault",
-    year: 1985, runtimeMin: null, score: null,
+    year: 1985,
+    runtimeMin: null,
+    score: null,
     genre: ["Thriller"],
     poster: null,
     backdrop: null,
@@ -161,7 +183,9 @@ const fallbackFilms: PreviewFilm[] = [
   {
     id: 900002,
     title: "Archival Copy 07",
-    year: null, runtimeMin: null, score: null,
+    year: null,
+    runtimeMin: null,
+    score: null,
     genre: ["Thriller"],
     poster: null,
     backdrop: null,
@@ -249,16 +273,17 @@ export default function HeroPreview() {
     );
 
   const showDetails = (film: Movie) =>
-    alert(`${film.title} · ${film.year}\n\n${film.synopsis ?? "No synopsis available."}`);
+    alert(
+      `${film.title} · ${film.year}\n\n${film.synopsis ?? "No synopsis available."}`
+    );
 
   return (
     <div className="min-h-screen bg-[#050505] font-sans text-[#FFFFFF]">
-      <GlassHeader profile={<ProfileMenu />} /><Spotlight
+      <GlassHeader profile={<ProfileMenu />} />
+      <Spotlight
         items={spotlightItems}
         savedIds={savedIds}
-        onSave={film =>
-          toggleSave(film.id)
-        }
+        onSave={film => toggleSave(film.id)}
       />
       <main className="mx-auto max-w-6xl px-4 pb-24 pt-10 sm:px-6">
         <section aria-labelledby="discover-title" className="mt-12">

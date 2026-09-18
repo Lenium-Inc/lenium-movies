@@ -1,8 +1,18 @@
 import { X, Film as FilmIcon, UserRound } from "lucide-react";
 import { Link } from "wouter";
 import { useState } from "react";
-import { navItems, type NavItem, type View, genreFilterOptions } from "./navigation";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  navItems,
+  type NavItem,
+  type View,
+  genreFilterOptions,
+} from "./navigation";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 interface SidebarProps {
   view: View;
@@ -26,7 +36,7 @@ function RailButton({
 }) {
   const Icon = item.icon;
   const iconColor = item.color || "#d7d7d3";
-  
+
   if (item.id === "profile") {
     return (
       <TooltipProvider>
@@ -41,10 +51,17 @@ function RailButton({
                   : "hover:bg-white/[0.08] hover:scale-105"
               }`}
             >
-              <Icon className="h-6 w-6" style={{ color: active ? "#000" : iconColor }} />
+              <Icon
+                className="h-6 w-6"
+                style={{ color: active ? "#000" : iconColor }}
+              />
             </Link>
           </TooltipTrigger>
-          <TooltipContent side="right" align="center" className="bg-[#1c1c20] text-white text-xs font-medium px-2 py-1 rounded border border-white/10 shadow-lg">
+          <TooltipContent
+            side="right"
+            align="center"
+            className="bg-[#1c1c20] text-white text-xs font-medium px-2 py-1 rounded border border-white/10 shadow-lg"
+          >
             {item.label}
           </TooltipContent>
         </Tooltip>
@@ -66,10 +83,17 @@ function RailButton({
                 : "hover:bg-white/[0.08] hover:scale-105"
             }`}
           >
-            <Icon className="h-6 w-6" style={{ color: active ? "#000" : iconColor }} />
+            <Icon
+              className="h-6 w-6"
+              style={{ color: active ? "#000" : iconColor }}
+            />
           </button>
         </TooltipTrigger>
-        <TooltipContent side="right" align="center" className="bg-[#1c1c20] text-white text-xs font-medium px-2 py-1 rounded border border-white/10 shadow-lg">
+        <TooltipContent
+          side="right"
+          align="center"
+          className="bg-[#1c1c20] text-white text-xs font-medium px-2 py-1 rounded border border-white/10 shadow-lg"
+        >
           {item.label}
         </TooltipContent>
       </Tooltip>
@@ -82,7 +106,15 @@ function RailButton({
  * Clean icon-only navigation with tooltip labels on hover.
  * Positioned as a floating vertical panel on the left edge of the screen.
  */
-export function Sidebar({ view, onNavigate, open, onClose, activeGenre, onGenreChange, hidden = false }: SidebarProps) {
+export function Sidebar({
+  view,
+  onNavigate,
+  open,
+  onClose,
+  activeGenre,
+  onGenreChange,
+  hidden = false,
+}: SidebarProps) {
   const navigate = (next: View) => {
     onNavigate(next);
     onClose();
@@ -146,7 +178,9 @@ export function Sidebar({ view, onNavigate, open, onClose, activeGenre, onGenreC
           >
             <FilmIcon className="h-3.5 w-3.5" style={{ color: "#d7d7d3" }} />
             <span className="flex-1 text-left">All Genres</span>
-            {activeGenre === "All" && <FilmIcon className="h-3.5 w-3.5" style={{ color: "#d7d7d3" }} />}
+            {activeGenre === "All" && (
+              <FilmIcon className="h-3.5 w-3.5" style={{ color: "#d7d7d3" }} />
+            )}
           </button>
         </div>
       </aside>

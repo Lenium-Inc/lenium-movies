@@ -1,13 +1,41 @@
 // player/VideoPlayer.tsx
-import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Play, Pause, RotateCcw, RotateCw, Volume2, VolumeX, Maximize, Settings, Subtitles, X, Loader2, WifiOff, Server, Monitor, AlertCircle, RefreshCw, Wifi, Zap, Languages, Volume2 as Volume2Icon, Headphones } from 'lucide-react';
+import React, {
+  useState,
+  useRef,
+  useEffect,
+  useCallback,
+  useMemo,
+} from "react";
+import {
+  Play,
+  Pause,
+  RotateCcw,
+  RotateCw,
+  Volume2,
+  VolumeX,
+  Maximize,
+  Settings,
+  Subtitles,
+  X,
+  Loader2,
+  WifiOff,
+  Server,
+  Monitor,
+  AlertCircle,
+  RefreshCw,
+  Wifi,
+  Zap,
+  Languages,
+  Volume2 as Volume2Icon,
+  Headphones,
+} from "lucide-react";
 
 export interface StreamMirror {
   name: string;
   url: string;
 }
 
-export type EmbedProvider = 
+export type EmbedProvider =
   | "vidsrc"
   | "embed.su"
   | "2embed"
@@ -19,7 +47,13 @@ export type EmbedProvider =
   | "unknown";
 
 export interface PlaybackError {
-  type: "network" | "provider_unavailable" | "geo_blocked" | "not_found" | "rate_limited" | "unknown";
+  type:
+    | "network"
+    | "provider_unavailable"
+    | "geo_blocked"
+    | "not_found"
+    | "rate_limited"
+    | "unknown";
   message: string;
   recoverable: boolean;
   provider?: EmbedProvider;
@@ -59,19 +93,38 @@ export interface VideoPlayerProps {
   onIframeLoad?: () => void;
 }
 
-export const QUALITY_ORDER = ['4K', '1080p', '720p', '480p', '320p'] as const;
-export type QualityOption = typeof QUALITY_ORDER[number];
+export const QUALITY_ORDER = ["4K", "1080p", "720p", "480p", "320p"] as const;
+export type QualityOption = (typeof QUALITY_ORDER)[number];
 
-const PROVIDER_CONFIGS: Record<EmbedProvider, { name: string; supportsQuality: boolean; qualityParam: string }> = {
-  "vidsrc": { name: "VidSrc", supportsQuality: true, qualityParam: "quality" },
-  "embed.su": { name: "Embed.su", supportsQuality: true, qualityParam: "quality" },
-  "autoembed": { name: "AutoEmbed", supportsQuality: true, qualityParam: "quality" },
+const PROVIDER_CONFIGS: Record<
+  EmbedProvider,
+  { name: string; supportsQuality: boolean; qualityParam: string }
+> = {
+  vidsrc: { name: "VidSrc", supportsQuality: true, qualityParam: "quality" },
+  "embed.su": {
+    name: "Embed.su",
+    supportsQuality: true,
+    qualityParam: "quality",
+  },
+  autoembed: {
+    name: "AutoEmbed",
+    supportsQuality: true,
+    qualityParam: "quality",
+  },
   "2embed": { name: "2Embed", supportsQuality: true, qualityParam: "q" },
-  "multiembed": { name: "MultiEmbed", supportsQuality: true, qualityParam: "qual" },
-  "goojara": { name: "Goojara", supportsQuality: false, qualityParam: "" },
-  "vidlink": { name: "VidLink", supportsQuality: true, qualityParam: "quality" },
-  "vidstream": { name: "VidStream", supportsQuality: true, qualityParam: "quality" },
-  "unknown": { name: "Unknown", supportsQuality: false, qualityParam: "" },
+  multiembed: {
+    name: "MultiEmbed",
+    supportsQuality: true,
+    qualityParam: "qual",
+  },
+  goojara: { name: "Goojara", supportsQuality: false, qualityParam: "" },
+  vidlink: { name: "VidLink", supportsQuality: true, qualityParam: "quality" },
+  vidstream: {
+    name: "VidStream",
+    supportsQuality: true,
+    qualityParam: "quality",
+  },
+  unknown: { name: "Unknown", supportsQuality: false, qualityParam: "" },
 };
 
 function detectEmbedProvider(url: string): EmbedProvider {
@@ -91,8 +144,13 @@ function detectEmbedProvider(url: string): EmbedProvider {
   return "unknown";
 }
 
-function applyQualityToUrl(url: string, quality: string, provider: EmbedProvider): string {
-  if (provider === "unknown" || !PROVIDER_CONFIGS[provider]?.supportsQuality) return url;
+function applyQualityToUrl(
+  url: string,
+  quality: string,
+  provider: EmbedProvider
+): string {
+  if (provider === "unknown" || !PROVIDER_CONFIGS[provider]?.supportsQuality)
+    return url;
   try {
     const urlObj = new URL(url);
     const config = PROVIDER_CONFIGS[provider];
@@ -137,9 +195,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [qualityMenuOpen, setQualityMenuOpen] = useState<boolean>(false);
   const [subtitleMenuOpen, setSubtitleMenuOpen] = useState<boolean>(false);
   const [mirrorMenuOpen, setMirrorMenuOpen] = useState<boolean>(false);
-  const [currentQuality, setCurrentQuality] = useState<QualityOption>(selectedQuality as QualityOption);
-  const [currentSubtitles, setCurrentSubtitles] = useState<string>('Off');
-  const [currentMirror, setCurrentMirror] = useState<number>(currentMirrorIndex);
+  const [currentQuality, setCurrentQuality] = useState<QualityOption>(
+    selectedQuality as QualityOption
+  );
+  const [currentSubtitles, setCurrentSubtitles] = useState<string>("Off");
+  const [currentMirror, setCurrentMirror] =
+    useState<number>(currentMirrorIndex);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [iframeLoaded, setIframeLoaded] = useState(false);
 
@@ -147,7 +208,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const playerRef = useRef<HTMLDivElement>(null);
   const controlsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const qualityChangeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const qualityChangeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
 
   // Sync with external props
   useEffect(() => {
@@ -161,13 +224,22 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, [selectedQuality]);
 
   useEffect(() => {
-    setPlaybackError(externalPlaybackError ? `${externalPlaybackError.type}: ${externalPlaybackError.message}` : null);
+    setPlaybackError(
+      externalPlaybackError
+        ? `${externalPlaybackError.type}: ${externalPlaybackError.message}`
+        : null
+    );
   }, [externalPlaybackError]);
 
   // Determine effective mirrors
   const effectiveMirrors = useMemo(() => {
     if (availableMirrors.length > 0) return availableMirrors;
-    const baseMirrors: StreamMirror[] = [{ name: `${PROVIDER_CONFIGS[currentProvider]?.name || "Primary"} Server`, url: streamUrl }];
+    const baseMirrors: StreamMirror[] = [
+      {
+        name: `${PROVIDER_CONFIGS[currentProvider]?.name || "Primary"} Server`,
+        url: streamUrl,
+      },
+    ];
     if (mirrors.length) return [...baseMirrors, ...mirrors];
     return baseMirrors;
   }, [availableMirrors, mirrors, streamUrl, currentProvider]);
@@ -175,7 +247,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // Determine if embed
   const isEmbed = useMemo(() => {
     const url = effectiveMirrors[currentMirror]?.url || streamUrl;
-    return url.includes('embed') || url.includes('vidsrc') || url.includes('goojara') || url.includes('vidlink') || url.includes('vidstream');
+    return (
+      url.includes("embed") ||
+      url.includes("vidsrc") ||
+      url.includes("goojara") ||
+      url.includes("vidlink") ||
+      url.includes("vidstream")
+    );
   }, [effectiveMirrors, currentMirror, streamUrl]);
 
   // Get current mirror URL with quality applied
@@ -185,9 +263,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       return applyQualityToUrl(url, currentQuality, currentProvider);
     }
     return url;
-  }, [effectiveMirrors, currentMirror, streamUrl, currentQuality, isEmbed, currentProvider]);
+  }, [
+    effectiveMirrors,
+    currentMirror,
+    streamUrl,
+    currentQuality,
+    isEmbed,
+    currentProvider,
+  ]);
 
-  const providerConfig = useMemo(() => PROVIDER_CONFIGS[currentProvider], [currentProvider]);
+  const providerConfig = useMemo(
+    () => PROVIDER_CONFIGS[currentProvider],
+    [currentProvider]
+  );
   const supportsQuality = providerConfig?.supportsQuality ?? false;
   const effectiveIsLoading = externalIsLoading || isLoading;
 
@@ -202,7 +290,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // For direct video playback
   useEffect(() => {
     if (isEmbed) return; // Skip for iframe embeds
-    
+
     const video = videoRef.current;
     if (!video) return;
 
@@ -219,30 +307,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
 
     const handleError = () => {
-      const error = video.error?.message || 'Playback failed';
+      const error = video.error?.message || "Playback failed";
       setPlaybackError(`Error: ${error}. Trying next server...`);
       setIsLoading(false);
     };
 
-    video.addEventListener('timeupdate', handleTimeUpdate);
-    video.addEventListener('loadedmetadata', handleLoadedMetadata);
-    video.addEventListener('waiting', () => setIsLoading(true));
-    video.addEventListener('playing', () => setIsLoading(false));
-    video.addEventListener('error', handleError);
+    video.addEventListener("timeupdate", handleTimeUpdate);
+    video.addEventListener("loadedmetadata", handleLoadedMetadata);
+    video.addEventListener("waiting", () => setIsLoading(true));
+    video.addEventListener("playing", () => setIsLoading(false));
+    video.addEventListener("error", handleError);
 
     return () => {
-      video.removeEventListener('timeupdate', handleTimeUpdate);
-      video.removeEventListener('loadedmetadata', handleLoadedMetadata);
-      video.removeEventListener('waiting', () => setIsLoading(true));
-      video.removeEventListener('playing', () => setIsLoading(false));
-      video.removeEventListener('error', handleError);
+      video.removeEventListener("timeupdate", handleTimeUpdate);
+      video.removeEventListener("loadedmetadata", handleLoadedMetadata);
+      video.removeEventListener("waiting", () => setIsLoading(true));
+      video.removeEventListener("playing", () => setIsLoading(false));
+      video.removeEventListener("error", handleError);
     };
   }, [currentMirrorUrl, currentMirror, isEmbed]);
 
   // For iframe embeds - listen for load events
   useEffect(() => {
     if (!isEmbed) return;
-    
+
     const iframe = iframeRef.current;
     if (!iframe) return;
 
@@ -252,16 +340,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
 
     const handleError = () => {
-      setPlaybackError('Failed to load embed. Trying next server...');
+      setPlaybackError("Failed to load embed. Trying next server...");
       setIsLoading(false);
     };
 
-    iframe.addEventListener('load', handleLoad);
-    iframe.addEventListener('error', handleError);
+    iframe.addEventListener("load", handleLoad);
+    iframe.addEventListener("error", handleError);
 
     return () => {
-      iframe.removeEventListener('load', handleLoad);
-      iframe.removeEventListener('error', handleError);
+      iframe.removeEventListener("load", handleLoad);
+      iframe.removeEventListener("error", handleError);
     };
   }, [currentMirrorUrl, isEmbed]);
 
@@ -282,24 +370,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setIsPlaying(!isPlaying);
   }, [isPlaying, isEmbed]);
 
-  const handleSeek = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    if (isEmbed) return; // Can't seek iframe embeds directly
-    const video = videoRef.current;
-    if (!video || isNaN(duration)) return;
-    const seekTime = (parseFloat(e.target.value) / 100) * duration;
-    video.currentTime = seekTime;
-    setProgress(parseFloat(e.target.value));
-  }, [duration, isEmbed]);
+  const handleSeek = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (isEmbed) return; // Can't seek iframe embeds directly
+      const video = videoRef.current;
+      if (!video || isNaN(duration)) return;
+      const seekTime = (parseFloat(e.target.value) / 100) * duration;
+      video.currentTime = seekTime;
+      setProgress(parseFloat(e.target.value));
+    },
+    [duration, isEmbed]
+  );
 
-  const handleVolumeChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    if (isEmbed) return; // Can't control iframe volume directly
-    const video = videoRef.current;
-    if (!video) return;
-    const newVol = parseFloat(e.target.value);
-    setVolume(newVol);
-    setIsMuted(newVol === 0);
-    video.volume = newVol;
-  }, [isEmbed]);
+  const handleVolumeChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (isEmbed) return; // Can't control iframe volume directly
+      const video = videoRef.current;
+      if (!video) return;
+      const newVol = parseFloat(e.target.value);
+      setVolume(newVol);
+      setIsMuted(newVol === 0);
+      video.volume = newVol;
+    },
+    [isEmbed]
+  );
 
   const toggleMute = useCallback(() => {
     if (isEmbed) {
@@ -327,106 +421,119 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   }, []);
 
-  const switchMirror = useCallback((index: number) => {
-    if (index === currentMirror) return;
-    setCurrentMirror(index);
-    setIsLoading(true);
-    setPlaybackError(null);
-    setQualityMenuOpen(false);
-    setIframeLoaded(false);
-    onMirrorChange?.(index);
-  }, [currentMirror, onMirrorChange]);
+  const switchMirror = useCallback(
+    (index: number) => {
+      if (index === currentMirror) return;
+      setCurrentMirror(index);
+      setIsLoading(true);
+      setPlaybackError(null);
+      setQualityMenuOpen(false);
+      setIframeLoaded(false);
+      onMirrorChange?.(index);
+    },
+    [currentMirror, onMirrorChange]
+  );
 
-  const switchQuality = useCallback((quality: QualityOption) => {
-    if (quality === currentQuality) return;
-    
-    setCurrentQuality(quality);
-    setIsLoading(true);
-    setPlaybackError(null);
-    setQualityMenuOpen(false);
-    setIframeLoaded(false);
-    onQualityChange?.(quality);
+  const switchQuality = useCallback(
+    (quality: QualityOption) => {
+      if (quality === currentQuality) return;
 
-    // For embeds, the URL change will trigger reload
-    if (isEmbed) {
-      qualityChangeTimeoutRef.current = setTimeout(() => {
-        setIsLoading(false);
-      }, 1500);
-    }
-  }, [currentQuality, isEmbed, onQualityChange]);
+      setCurrentQuality(quality);
+      setIsLoading(true);
+      setPlaybackError(null);
+      setQualityMenuOpen(false);
+      setIframeLoaded(false);
+      onQualityChange?.(quality);
+
+      // For embeds, the URL change will trigger reload
+      if (isEmbed) {
+        qualityChangeTimeoutRef.current = setTimeout(() => {
+          setIsLoading(false);
+        }, 1500);
+      }
+    },
+    [currentQuality, isEmbed, onQualityChange]
+  );
 
   const formatTime = useCallback((seconds: number) => {
-    if (isNaN(seconds)) return '0:00';
+    if (isNaN(seconds)) return "0:00";
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+    return `${mins}:${secs < 10 ? "0" : ""}${secs}`;
   }, []);
 
-  const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-    
-    if (isEmbed) {
-      // Limited keyboard support for embeds
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent) => {
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement
+      )
+        return;
+
+      if (isEmbed) {
+        // Limited keyboard support for embeds
+        switch (e.key) {
+          case "f":
+            e.preventDefault();
+            toggleFullscreen();
+            break;
+          case "Escape":
+            if (document.fullscreenElement) {
+              document.exitFullscreen();
+            }
+            break;
+        }
+        return;
+      }
+
+      const video = videoRef.current;
+      if (!video) return;
+
       switch (e.key) {
-        case 'f':
+        case " ":
+        case "k":
           e.preventDefault();
+          togglePlay();
+          break;
+        case "ArrowLeft":
+          e.preventDefault();
+          video.currentTime = Math.max(0, video.currentTime - 10);
+          break;
+        case "ArrowRight":
+          e.preventDefault();
+          video.currentTime = Math.min(duration, video.currentTime + 10);
+          break;
+        case "ArrowUp":
+          e.preventDefault();
+          video.volume = Math.min(1, video.volume + 0.1);
+          setVolume(video.volume);
+          setIsMuted(false);
+          break;
+        case "ArrowDown":
+          e.preventDefault();
+          video.volume = Math.max(0, video.volume - 0.1);
+          setVolume(video.volume);
+          if (video.volume === 0) setIsMuted(true);
+          break;
+        case "m":
+          toggleMute();
+          break;
+        case "f":
           toggleFullscreen();
           break;
-        case 'Escape':
+        case "Escape":
           if (document.fullscreenElement) {
             document.exitFullscreen();
           }
           break;
       }
-      return;
-    }
-    
-    const video = videoRef.current;
-    if (!video) return;
-
-    switch (e.key) {
-      case ' ':
-      case 'k':
-        e.preventDefault();
-        togglePlay();
-        break;
-      case 'ArrowLeft':
-        e.preventDefault();
-        video.currentTime = Math.max(0, video.currentTime - 10);
-        break;
-      case 'ArrowRight':
-        e.preventDefault();
-        video.currentTime = Math.min(duration, video.currentTime + 10);
-        break;
-      case 'ArrowUp':
-        e.preventDefault();
-        video.volume = Math.min(1, video.volume + 0.1);
-        setVolume(video.volume);
-        setIsMuted(false);
-        break;
-      case 'ArrowDown':
-        e.preventDefault();
-        video.volume = Math.max(0, video.volume - 0.1);
-        setVolume(video.volume);
-        if (video.volume === 0) setIsMuted(true);
-        break;
-      case 'm':
-        toggleMute();
-        break;
-      case 'f':
-        toggleFullscreen();
-        break;
-      case 'Escape':
-        if (document.fullscreenElement) {
-          document.exitFullscreen();
-        }
-        break;
-    }
-  }, [togglePlay, toggleMute, toggleFullscreen, duration, isEmbed]);
+    },
+    [togglePlay, toggleMute, toggleFullscreen, duration, isEmbed]
+  );
 
   useEffect(() => {
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleKeyDown]);
 
   // Prevent context menu on video/iframe
@@ -452,12 +559,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       {effectiveIsLoading && (
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/80 backdrop-blur-md">
           <div className="relative w-full h-full max-w-6xl max-h-[85vh] flex items-center justify-center">
-            <img src={poster} alt={title} className="absolute inset-0 w-full h-full object-cover opacity-40 blur-sm" />
+            <img
+              src={poster}
+              alt={title}
+              className="absolute inset-0 w-full h-full object-cover opacity-40 blur-sm"
+            />
             <div className="relative z-20 flex flex-col items-center gap-4">
               <div className="w-12 h-12 border-4 border-white/20 border-t-white rounded-full animate-spin" />
               {playbackError ? (
                 <div className="text-center max-w-md px-4">
-                  <p className="text-white/80 font-medium text-sm tracking-wider mb-3">{playbackError}</p>
+                  <p className="text-white/80 font-medium text-sm tracking-wider mb-3">
+                    {playbackError}
+                  </p>
                   <button
                     onClick={handleRetry}
                     className="flex items-center gap-2 px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white text-sm font-medium transition-colors"
@@ -467,7 +580,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   </button>
                 </div>
               ) : (
-                <p className="text-white/80 font-medium text-sm tracking-wider">Loading stream at {currentQuality}...</p>
+                <p className="text-white/80 font-medium text-sm tracking-wider">
+                  Loading stream at {currentQuality}...
+                </p>
               )}
             </div>
           </div>
@@ -505,10 +620,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       )}
 
       {/* Top Header Overlay */}
-      <div className={`absolute top-0 inset-x-0 p-4 bg-gradient-to-b from-black/80 via-black/40 to-transparent flex items-center justify-between transition-opacity duration-300 z-30 ${showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+      <div
+        className={`absolute top-0 inset-x-0 p-4 bg-gradient-to-b from-black/80 via-black/40 to-transparent flex items-center justify-between transition-opacity duration-300 z-30 ${showControls ? "opacity-100" : "opacity-0 pointer-events-none"}`}
+      >
         <div className="flex items-center gap-3 min-w-0">
-          <h1 className="text-white text-base font-semibold tracking-wide drop-shadow-md truncate">{title}</h1>
-          {mediaType === 'tv' && season && episode && (
+          <h1 className="text-white text-base font-semibold tracking-wide drop-shadow-md truncate">
+            {title}
+          </h1>
+          {mediaType === "tv" && season && episode && (
             <span className="px-2 py-0.5 text-xs font-medium bg-white/10 border border-white/10 rounded text-white/80">
               S{season} E{episode}
             </span>
@@ -529,8 +648,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       </div>
 
       {/* Bottom Controls */}
-      <div className={`absolute bottom-0 inset-x-0 p-4 bg-gradient-to-t from-black/95 via-black/60 to-transparent flex flex-col gap-2.5 transition-opacity duration-300 z-30 ${showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
-        
+      <div
+        className={`absolute bottom-0 inset-x-0 p-4 bg-gradient-to-t from-black/95 via-black/60 to-transparent flex flex-col gap-2.5 transition-opacity duration-300 z-30 ${showControls ? "opacity-100" : "opacity-0 pointer-events-none"}`}
+      >
         {/* Timeline Scrubber - only for direct video */}
         {!isEmbed && (
           <div className="relative group flex items-center">
@@ -541,7 +661,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               value={progress || 0}
               onChange={handleSeek}
               className="w-full h-1 bg-white/30 rounded-lg appearance-none cursor-pointer accent-red-600 hover:h-2 transition-all"
-              onMouseDown={() => { if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current); }}
+              onMouseDown={() => {
+                if (controlsTimeoutRef.current)
+                  clearTimeout(controlsTimeoutRef.current);
+              }}
               onMouseUp={() => handleMouseMove()}
             />
           </div>
@@ -550,16 +673,38 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         {/* Control Buttons Bar */}
         <div className="flex items-center justify-between text-white flex-wrap gap-3">
           <div className="flex items-center gap-4 flex-1 min-w-0">
-            <button onClick={togglePlay} className="hover:text-red-500 transition-colors flex-shrink-0" aria-label={isPlaying ? "Pause" : "Play"}>
-              {isPlaying ? <Pause className="w-6 h-6 fill-current" /> : <Play className="w-6 h-6 fill-current" />}
+            <button
+              onClick={togglePlay}
+              className="hover:text-red-500 transition-colors flex-shrink-0"
+              aria-label={isPlaying ? "Pause" : "Play"}
+            >
+              {isPlaying ? (
+                <Pause className="w-6 h-6 fill-current" />
+              ) : (
+                <Play className="w-6 h-6 fill-current" />
+              )}
             </button>
-            
+
             {!isEmbed && (
               <>
-                <button onClick={() => { const v = videoRef.current; if (v) v.currentTime -= 10; }} className="hover:text-red-500 transition-colors flex-shrink-0" aria-label="Rewind 10s">
+                <button
+                  onClick={() => {
+                    const v = videoRef.current;
+                    if (v) v.currentTime -= 10;
+                  }}
+                  className="hover:text-red-500 transition-colors flex-shrink-0"
+                  aria-label="Rewind 10s"
+                >
                   <RotateCcw className="w-5 h-5" />
                 </button>
-                <button onClick={() => { const v = videoRef.current; if (v) v.currentTime += 10; }} className="hover:text-red-500 transition-colors flex-shrink-0" aria-label="Forward 10s">
+                <button
+                  onClick={() => {
+                    const v = videoRef.current;
+                    if (v) v.currentTime += 10;
+                  }}
+                  className="hover:text-red-500 transition-colors flex-shrink-0"
+                  aria-label="Forward 10s"
+                >
                   <RotateCw className="w-5 h-5" />
                 </button>
               </>
@@ -568,8 +713,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             {/* Volume Control - only for direct video */}
             {!isEmbed && (
               <div className="flex items-center gap-2 group flex-shrink-0">
-                <button onClick={toggleMute} className="hover:text-red-500 transition-colors flex-shrink-0" aria-label={isMuted ? "Unmute" : "Mute"}>
-                  {isMuted || volume === 0 ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
+                <button
+                  onClick={toggleMute}
+                  className="hover:text-red-500 transition-colors flex-shrink-0"
+                  aria-label={isMuted ? "Unmute" : "Mute"}
+                >
+                  {isMuted || volume === 0 ? (
+                    <VolumeX className="w-5 h-5" />
+                  ) : (
+                    <Volume2 className="w-5 h-5" />
+                  )}
                 </button>
                 <input
                   type="range"
@@ -579,7 +732,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   value={isMuted ? 0 : volume}
                   onChange={handleVolumeChange}
                   className="w-20 h-1 bg-white/30 rounded-lg appearance-none cursor-pointer accent-white hover:accent-red-500 transition-all"
-                  onMouseDown={() => { if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current); }}
+                  onMouseDown={() => {
+                    if (controlsTimeoutRef.current)
+                      clearTimeout(controlsTimeoutRef.current);
+                  }}
                 />
               </div>
             )}
@@ -587,7 +743,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             {/* Timestamp - only for direct video */}
             {!isEmbed && (
               <span className="text-xs font-medium text-white/80 flex-shrink-0">
-                {formatTime(videoRef.current?.currentTime || 0)} / {formatTime(duration)}
+                {formatTime(videoRef.current?.currentTime || 0)} /{" "}
+                {formatTime(duration)}
               </span>
             )}
 
@@ -602,7 +759,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             {/* Language/Audio/Subtitles Flyout - for both embed and direct video */}
             <div className="relative z-40">
               <button
-                onClick={() => { setSubtitleMenuOpen(!subtitleMenuOpen); setQualityMenuOpen(false); setMirrorMenuOpen(false); }}
+                onClick={() => {
+                  setSubtitleMenuOpen(!subtitleMenuOpen);
+                  setQualityMenuOpen(false);
+                  setMirrorMenuOpen(false);
+                }}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-white/10 hover:bg-white/20 text-xs font-semibold tracking-wider transition-all"
                 aria-label="Audio & Subtitles"
               >
@@ -613,19 +774,29 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-56 bg-zinc-900 border border-white/10 rounded-lg shadow-xl overflow-hidden py-1 z-50">
                   {/* Audio Track Section */}
                   <div className="px-4 py-2 border-b border-white/10">
-                    <p className="text-xs font-semibold text-white/60 uppercase tracking-wider mb-2">Audio Track</p>
+                    <p className="text-xs font-semibold text-white/60 uppercase tracking-wider mb-2">
+                      Audio Track
+                    </p>
                     <div className="space-y-1">
                       {isEmbed ? (
                         <>
                           <button
-                            onClick={(e) => { e.stopPropagation(); setCurrentSubtitles("English (Dubbed)"); setSubtitleMenuOpen(false); }}
+                            onClick={e => {
+                              e.stopPropagation();
+                              setCurrentSubtitles("English (Dubbed)");
+                              setSubtitleMenuOpen(false);
+                            }}
                             className="w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors flex items-center gap-2"
                           >
                             <Headphones className="w-3 h-3" />
                             <span>English (Dubbed)</span>
                           </button>
                           <button
-                            onClick={(e) => { e.stopPropagation(); setCurrentSubtitles("Native"); setSubtitleMenuOpen(false); }}
+                            onClick={e => {
+                              e.stopPropagation();
+                              setCurrentSubtitles("Native");
+                              setSubtitleMenuOpen(false);
+                            }}
                             className="w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors flex items-center gap-2"
                           >
                             <Volume2Icon className="w-3 h-3" />
@@ -635,7 +806,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       ) : (
                         <>
                           <button
-                            onClick={(e) => { e.stopPropagation(); setCurrentSubtitles("Native"); setSubtitleMenuOpen(false); }}
+                            onClick={e => {
+                              e.stopPropagation();
+                              setCurrentSubtitles("Native");
+                              setSubtitleMenuOpen(false);
+                            }}
                             className="w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors flex items-center gap-2"
                           >
                             <Volume2Icon className="w-3 h-3" />
@@ -647,36 +822,58 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   </div>
                   {/* Subtitles Section */}
                   <div className="px-4 py-2">
-                    <p className="text-xs font-semibold text-white/60 uppercase tracking-wider mb-2">Subtitles</p>
+                    <p className="text-xs font-semibold text-white/60 uppercase tracking-wider mb-2">
+                      Subtitles
+                    </p>
                     <div className="space-y-1 max-h-48 overflow-y-auto">
-                      {isEmbed ? (
-                        ['Off', 'English [Auto]', 'English', 'Spanish', 'French', 'German', 'Italian', 'Portuguese', 'Japanese', 'Korean', 'Chinese'].map((sub) => (
-                          <button
-                            key={sub}
-                            onClick={(e) => { e.stopPropagation(); setCurrentSubtitles(sub); setSubtitleMenuOpen(false); }}
-                            className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors flex items-center gap-2 ${currentSubtitles === sub ? 'text-red-500 font-bold' : 'text-white'}`}
-                          >
-                            {sub === 'Off' ? (
-                              <Subtitles className="w-3 h-3 opacity-50" />
-                            ) : sub === 'English [Auto]' ? (
-                              <span className="text-[10px] bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded">Auto</span>
-                            ) : (
-                              <Subtitles className="w-3 h-3" />
-                            )}
-                            <span>{sub}</span>
-                          </button>
-                        ))
-                      ) : (
-                        ['Off', 'English', 'Spanish', 'French'].map((sub) => (
-                          <button
-                            key={sub}
-                            onClick={(e) => { e.stopPropagation(); setCurrentSubtitles(sub); setSubtitleMenuOpen(false); }}
-                            className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors ${currentSubtitles === sub ? 'text-red-500 font-bold' : 'text-white'}`}
-                          >
-                            {sub}
-                          </button>
-                        ))
-                      )}
+                      {isEmbed
+                        ? [
+                            "Off",
+                            "English [Auto]",
+                            "English",
+                            "Spanish",
+                            "French",
+                            "German",
+                            "Italian",
+                            "Portuguese",
+                            "Japanese",
+                            "Korean",
+                            "Chinese",
+                          ].map(sub => (
+                            <button
+                              key={sub}
+                              onClick={e => {
+                                e.stopPropagation();
+                                setCurrentSubtitles(sub);
+                                setSubtitleMenuOpen(false);
+                              }}
+                              className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors flex items-center gap-2 ${currentSubtitles === sub ? "text-red-500 font-bold" : "text-white"}`}
+                            >
+                              {sub === "Off" ? (
+                                <Subtitles className="w-3 h-3 opacity-50" />
+                              ) : sub === "English [Auto]" ? (
+                                <span className="text-[10px] bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded">
+                                  Auto
+                                </span>
+                              ) : (
+                                <Subtitles className="w-3 h-3" />
+                              )}
+                              <span>{sub}</span>
+                            </button>
+                          ))
+                        : ["Off", "English", "Spanish", "French"].map(sub => (
+                            <button
+                              key={sub}
+                              onClick={e => {
+                                e.stopPropagation();
+                                setCurrentSubtitles(sub);
+                                setSubtitleMenuOpen(false);
+                              }}
+                              className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors ${currentSubtitles === sub ? "text-red-500 font-bold" : "text-white"}`}
+                            >
+                              {sub}
+                            </button>
+                          ))}
                     </div>
                   </div>
                 </div>
@@ -686,22 +883,31 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             {/* Quality Selector */}
             <div className="relative z-40">
               <button
-                onClick={() => { setQualityMenuOpen(!qualityMenuOpen); setSubtitleMenuOpen(false); setMirrorMenuOpen(false); }}
+                onClick={() => {
+                  setQualityMenuOpen(!qualityMenuOpen);
+                  setSubtitleMenuOpen(false);
+                  setMirrorMenuOpen(false);
+                }}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-white/10 hover:bg-white/20 text-xs font-semibold tracking-wider transition-all"
                 disabled={isEmbed && !supportsQuality}
               >
                 <Settings className="w-4 h-4" />
                 <span>{currentQuality}</span>
-                {isEmbed && supportsQuality && <span className="text-[10px] text-white/40">(embed)</span>}
+                {isEmbed && supportsQuality && (
+                  <span className="text-[10px] text-white/40">(embed)</span>
+                )}
               </button>
               {qualityMenuOpen && (
                 <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-28 bg-zinc-900 border border-white/10 rounded-lg shadow-xl overflow-hidden py-1 z-50">
-                  {availableQualities.map((q) => (
+                  {availableQualities.map(q => (
                     <button
                       key={q}
-                      onClick={(e) => { e.stopPropagation(); switchQuality(q as QualityOption); }}
+                      onClick={e => {
+                        e.stopPropagation();
+                        switchQuality(q as QualityOption);
+                      }}
                       disabled={isEmbed && !supportsQuality}
-                      className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors ${currentQuality === q ? 'text-red-500 font-bold' : 'text-white'} ${isEmbed && !supportsQuality ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors ${currentQuality === q ? "text-red-500 font-bold" : "text-white"} ${isEmbed && !supportsQuality ? "opacity-50 cursor-not-allowed" : ""}`}
                     >
                       {q}
                     </button>
@@ -714,21 +920,33 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             {effectiveMirrors.length > 1 && (
               <div className="relative z-40">
                 <button
-                  onClick={() => { setMirrorMenuOpen(!mirrorMenuOpen); setSubtitleMenuOpen(false); setQualityMenuOpen(false); }}
+                  onClick={() => {
+                    setMirrorMenuOpen(!mirrorMenuOpen);
+                    setSubtitleMenuOpen(false);
+                    setQualityMenuOpen(false);
+                  }}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-white/10 hover:bg-white/20 text-xs font-semibold tracking-wider transition-all"
                 >
                   <Server className="w-4 h-4" />
-                  <span>{effectiveMirrors[currentMirror]?.name || `Server ${currentMirror + 1}`}</span>
+                  <span>
+                    {effectiveMirrors[currentMirror]?.name ||
+                      `Server ${currentMirror + 1}`}
+                  </span>
                 </button>
                 {mirrorMenuOpen && (
                   <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-44 bg-zinc-900 border border-white/10 rounded-lg shadow-xl overflow-hidden py-1 z-50">
                     {effectiveMirrors.map((mirror, idx) => (
                       <button
                         key={idx}
-                        onClick={(e) => { e.stopPropagation(); switchMirror(idx); }}
-                        className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors flex items-center gap-2 ${currentMirror === idx ? 'text-red-500 font-bold' : 'text-white'}`}
+                        onClick={e => {
+                          e.stopPropagation();
+                          switchMirror(idx);
+                        }}
+                        className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors flex items-center gap-2 ${currentMirror === idx ? "text-red-500 font-bold" : "text-white"}`}
                       >
-                        {currentMirror === idx && <Loader2 className="w-3 h-3 animate-spin" />}
+                        {currentMirror === idx && (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        )}
                         {mirror.name}
                       </button>
                     ))}
@@ -737,7 +955,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               </div>
             )}
 
-            <button onClick={toggleFullscreen} className="hover:text-red-500 transition-colors flex-shrink-0" aria-label="Fullscreen">
+            <button
+              onClick={toggleFullscreen}
+              className="hover:text-red-500 transition-colors flex-shrink-0"
+              aria-label="Fullscreen"
+            >
               <Maximize className="w-5 h-5" />
             </button>
           </div>

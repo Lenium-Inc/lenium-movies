@@ -10,21 +10,21 @@ The highest-impact measured issue was image payload. The second was unnecessary 
 
 Measurements were collected from the live preview in a Chromium browser. Before values were captured on the same homepage before the performance changes; after values were captured after the changes and a fresh preview navigation.
 
-| Metric | Before | After | Result |
-|---|---:|---:|---|
-| TTFB | 31 ms | 20 ms | 35% lower; preview variance, not attributed to code |
-| First Paint | 388 ms | 276 ms | 29% lower |
-| First Contentful Paint | 584 ms | 276 ms | 53% lower in this run; validate with repeated field samples |
-| DOMContentLoaded | 579 ms | 184 ms | 68% lower in this run |
-| Load event | 880 ms | 195 ms | 78% lower in this run |
-| Browser resource count | 62 | 62 | unchanged |
-| Fresh first-viewport image payload | 761,691 bytes | 628,371 bytes | 17% lower |
-| Production JS bundle | 678,329 bytes | 637,196 bytes | 6% lower minified; 182.30 KB gzip |
-| Production CSS bundle | 118,753 bytes | 118,753 bytes | unchanged; 19.41 KB gzip |
-| API requests | 0 | 0 | no production catalogue API exists yet |
-| Database query latency | N/A | N/A | no catalogue queries exist yet |
-| Search latency | N/A | N/A | search service does not exist yet |
-| Cache hit rate | N/A | N/A | no application cache exists yet |
+| Metric                             |        Before |         After | Result                                                      |
+| ---------------------------------- | ------------: | ------------: | ----------------------------------------------------------- |
+| TTFB                               |         31 ms |         20 ms | 35% lower; preview variance, not attributed to code         |
+| First Paint                        |        388 ms |        276 ms | 29% lower                                                   |
+| First Contentful Paint             |        584 ms |        276 ms | 53% lower in this run; validate with repeated field samples |
+| DOMContentLoaded                   |        579 ms |        184 ms | 68% lower in this run                                       |
+| Load event                         |        880 ms |        195 ms | 78% lower in this run                                       |
+| Browser resource count             |            62 |            62 | unchanged                                                   |
+| Fresh first-viewport image payload | 761,691 bytes | 628,371 bytes | 17% lower                                                   |
+| Production JS bundle               | 678,329 bytes | 637,196 bytes | 6% lower minified; 182.30 KB gzip                           |
+| Production CSS bundle              | 118,753 bytes | 118,753 bytes | unchanged; 19.41 KB gzip                                    |
+| API requests                       |             0 |             0 | no production catalogue API exists yet                      |
+| Database query latency             |           N/A |           N/A | no catalogue queries exist yet                              |
+| Search latency                     |           N/A |           N/A | search service does not exist yet                           |
+| Cache hit rate                     |           N/A |           N/A | no application cache exists yet                             |
 
 The aggregate image payload was measured with uncached browser `fetch` requests against the exact rendered image URLs. The browser resource timing API reported zero transfer bytes on the second navigation because those images were already cached; therefore the uncached fetch measurement is the authoritative after value.
 
@@ -44,18 +44,18 @@ No blanket caching was added. No database or search optimization was fabricated 
 
 ## Surface audit
 
-| Surface | Current state | Audit result |
-|---|---|---|
-| Homepage | Implemented client-rendered fixture experience | Measured and optimized |
-| Search | Input exists, local fixture filtering only | No API/search latency to measure; not production-ready |
-| Movie page | Modal detail view only | No crawlable route or server-rendered page |
-| Browse | Category chips filter local data | No paginated browse API or database query |
-| Watchlist | Local client state | No persistence, request, or DB latency |
-| Player | No real player; interaction is a prototype toast | No playback startup, rebuffering, or telemetry metrics |
-| Mobile | Responsive homepage | Screenshot verified at 375×812; horizontal genre rail intentionally scrolls |
-| Slow network | No browser throttling available in this audit environment | Not measured; must be run in CI/device lab before launch |
-| Empty catalogue | Not represented by current fixture UI | Requires a production empty-state test |
-| Large catalogue | Not represented; six fixture movies | Requires load testing against real query/index plans |
+| Surface         | Current state                                             | Audit result                                                                |
+| --------------- | --------------------------------------------------------- | --------------------------------------------------------------------------- |
+| Homepage        | Implemented client-rendered fixture experience            | Measured and optimized                                                      |
+| Search          | Input exists, local fixture filtering only                | No API/search latency to measure; not production-ready                      |
+| Movie page      | Modal detail view only                                    | No crawlable route or server-rendered page                                  |
+| Browse          | Category chips filter local data                          | No paginated browse API or database query                                   |
+| Watchlist       | Local client state                                        | No persistence, request, or DB latency                                      |
+| Player          | No real player; interaction is a prototype toast          | No playback startup, rebuffering, or telemetry metrics                      |
+| Mobile          | Responsive homepage                                       | Screenshot verified at 375×812; horizontal genre rail intentionally scrolls |
+| Slow network    | No browser throttling available in this audit environment | Not measured; must be run in CI/device lab before launch                    |
+| Empty catalogue | Not represented by current fixture UI                     | Requires a production empty-state test                                      |
+| Large catalogue | Not represented; six fixture movies                       | Requires load testing against real query/index plans                        |
 
 ## Findings that remain
 

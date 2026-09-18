@@ -68,7 +68,13 @@ export const ACHIEVEMENTS: Achievement[] = [
     icon: Award,
     hint: "Complete a title",
   },
-  { id: "eye-open", title: "Wakeful", copy: "You opened your eyes cinema.", icon: Eye, hint: "Open a title" },
+  {
+    id: "eye-open",
+    title: "Wakeful",
+    copy: "You opened your eyes cinema.",
+    icon: Eye,
+    hint: "Open a title",
+  },
 ];
 
 export interface Stats {
@@ -202,7 +208,11 @@ export function recordPlay(): CapResult {
 /** Seconds until the daily counter resets at local midnight. */
 export function secondsToReset(): number {
   const now = new Date();
-  const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  const midnight = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate() + 1
+  );
   return Math.max(0, Math.round((midnight.getTime() - now.getTime()) / 1000));
 }
 

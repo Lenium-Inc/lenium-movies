@@ -7,12 +7,7 @@
  * base URL is configurable through `VITE_MOVIE_API_BASE_URL` and defaults to
  * the local development server.
  */
-export type StreamQuality =
-  | "4K"
-  | "1080p"
-  | "720p"
-  | "480p"
-  | "320p";
+export type StreamQuality = "4K" | "1080p" | "720p" | "480p" | "320p";
 
 export interface StreamVariant {
   quality: StreamQuality;
@@ -122,6 +117,11 @@ export function proxiedStreamUrl(url: string): string {
 export const MOVIE_API_BASE_URL =
   import.meta.env.VITE_MOVIE_API_BASE_URL ?? "https://vy-e721.onrender.com";
 
+/** Build a full API URL for the movie backend. */
+export function apiUrl(path: string): string {
+  return `${MOVIE_API_BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
 function isStreamMovie(value: unknown): value is StreamMovie {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
@@ -145,13 +145,17 @@ function isStreamMovie(value: unknown): value is StreamMovie {
 export async function searchCatalog(query: string): Promise<StreamMovie[]> {
   const trimmed = query.trim();
   if (!trimmed) return [];
-  const response = await fetch(`${MOVIE_API_BASE_URL}/api/search?q=${encodeURIComponent(trimmed)}`);
+  const response = await fetch(
+    `${MOVIE_API_BASE_URL}/api/search?q=${encodeURIComponent(trimmed)}`
+  );
   if (!response.ok) {
     throw new Error(`Movie backend responded with status ${response.status}`);
   }
   const data: unknown = await response.json();
   if (!Array.isArray(data)) {
-    throw new Error("Movie backend returned an unexpected search payload shape");
+    throw new Error(
+      "Movie backend returned an unexpected search payload shape"
+    );
   }
   return data.filter(isStreamMovie);
 }
@@ -196,16 +200,15 @@ function isResolveMovie(value: unknown): value is Record<string, unknown> {
   );
 }
 
-function normalizeResolvedMovie(
-  value: unknown
-): StreamMovie | null {
+function normalizeResolvedMovie(value: unknown): StreamMovie | null {
   if (!isResolveMovie(value)) return null;
   const mediaType = value.media_type === "tv" ? "tv" : "movie";
   return {
     id: String(value.id),
     title: String(value.title),
     poster_url: typeof value.poster_url === "string" ? value.poster_url : "",
-    backdrop_url: typeof value.backdrop_url === "string" ? value.backdrop_url : "",
+    backdrop_url:
+      typeof value.backdrop_url === "string" ? value.backdrop_url : "",
     stream_url: String(value.stream_url),
     year: toStreamYear(value.year),
     media_type: mediaType,
@@ -226,21 +229,22 @@ function normalizeResolvedMovie(
         ? value.episodes_per_season
         : Number(value.episodes_per_season) || 1,
     overview: typeof value.overview === "string" ? value.overview : "",
-    vote_average: typeof value.vote_average === "number" ? value.vote_average : undefined,
-    popularity: typeof value.popularity === "number" ? value.popularity : undefined,
+    vote_average:
+      typeof value.vote_average === "number" ? value.vote_average : undefined,
+    popularity:
+      typeof value.popularity === "number" ? value.popularity : undefined,
     genres: Array.isArray(value.genres) ? value.genres : [],
     ...(value.episodes && Array.isArray(value.episodes)
       ? { episodes: value.episodes }
       : {}),
     ...(value.mirrors && Array.isArray(value.mirrors)
       ? {
-          mirrors: value.mirrors.filter(
-            (mirror): mirror is StreamMirror =>
-              Boolean(
-                mirror &&
-                  typeof (mirror as StreamMirror).name === "string" &&
-                  typeof (mirror as StreamMirror).url === "string"
-              )
+          mirrors: value.mirrors.filter((mirror): mirror is StreamMirror =>
+            Boolean(
+              mirror &&
+              typeof (mirror as StreamMirror).name === "string" &&
+              typeof (mirror as StreamMirror).url === "string"
+            )
           ),
         }
       : {}),
@@ -366,7 +370,9 @@ export async function getStreamSource(
     params.set("season", String(input.season ?? 1));
     params.set("episode", String(input.episode ?? 1));
   }
-  const response = await fetch(`${MOVIE_API_BASE_URL}/api/get-stream?${params.toString()}`);
+  const response = await fetch(
+    `${MOVIE_API_BASE_URL}/api/get-stream?${params.toString()}`
+  );
   if (!response.ok) {
     throw new Error(`Movie backend responded with status ${response.status}`);
   }
@@ -423,9 +429,7 @@ function isTrailerPayload(value: unknown): value is { trailer?: TrailerInfo } {
   const record = value as { trailer?: unknown };
   if (!record.trailer) return true;
   const trailer = record.trailer as { provider?: unknown; id?: unknown };
-  return (
-    typeof trailer.provider === "string" && typeof trailer.id === "string"
-  );
+  return typeof trailer.provider === "string" && typeof trailer.id === "string";
 }
 
 /**
@@ -441,7 +445,9 @@ export async function fetchTrailer(
   const params = new URLSearchParams();
   params.set("title", title);
   if (year) params.set("year", String(year));
-  const response = await fetch(`${MOVIE_API_BASE_URL}/api/movies/trailer?${params.toString()}`);
+  const response = await fetch(
+    `${MOVIE_API_BASE_URL}/api/movies/trailer?${params.toString()}`
+  );
   if (response.status === 404) return null;
   if (!response.ok) {
     throw new Error(`Movie backend responded with status ${response.status}`);
@@ -460,7 +466,9 @@ export async function fetchTrailer(
 export async function fetchTrailerByTmdbId(
   tmdbId: string | number
 ): Promise<TrailerInfo | null> {
-  const response = await fetch(`${MOVIE_API_BASE_URL}/api/catalog/movieTrailer?id=${tmdbId}`);
+  const response = await fetch(
+    `${MOVIE_API_BASE_URL}/api/catalog/movieTrailer?id=${tmdbId}`
+  );
   if (response.status === 404) return null;
   if (!response.ok) {
     throw new Error(`Movie backend responded with status ${response.status}`);
@@ -485,7 +493,9 @@ export async function fetchEpisodeDetails(
   params.set("tmdb_id", tmdbId);
   params.set("season", String(season));
   params.set("episode", String(episode));
-  const response = await fetch(`${MOVIE_API_BASE_URL}/api/episodes?${params.toString()}`);
+  const response = await fetch(
+    `${MOVIE_API_BASE_URL}/api/episodes?${params.toString()}`
+  );
   if (response.status === 404) return null;
   if (!response.ok) {
     throw new Error(`Movie backend responded with status ${response.status}`);
@@ -495,7 +505,9 @@ export async function fetchEpisodeDetails(
   return payload.episode;
 }
 
-function isEpisodeDetailPayload(value: unknown): value is { episode: StreamEpisode } {
+function isEpisodeDetailPayload(
+  value: unknown
+): value is { episode: StreamEpisode } {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
   return typeof record.episode === "object" && record.episode !== null;
@@ -512,16 +524,22 @@ export interface SearchSuggestion {
 /**
  * Fetch live search autocomplete suggestions from the backend.
  */
-export async function searchSuggest(query: string): Promise<SearchSuggestion[]> {
+export async function searchSuggest(
+  query: string
+): Promise<SearchSuggestion[]> {
   const trimmed = query.trim();
   if (!trimmed || trimmed.length < 2) return [];
-  const response = await fetch(`${MOVIE_API_BASE_URL}/api/search/suggest?q=${encodeURIComponent(trimmed)}`);
+  const response = await fetch(
+    `${MOVIE_API_BASE_URL}/api/search/suggest?q=${encodeURIComponent(trimmed)}`
+  );
   if (!response.ok) {
     throw new Error(`Movie backend responded with status ${response.status}`);
   }
   const data: unknown = await response.json();
   if (!Array.isArray(data)) {
-    throw new Error("Movie backend returned an unexpected suggest payload shape");
+    throw new Error(
+      "Movie backend returned an unexpected suggest payload shape"
+    );
   }
   return data.filter(isSuggestion);
 }
@@ -569,7 +587,9 @@ export interface TrendingParams {
   media_type?: "all" | "movie" | "tv";
 }
 
-export async function fetchTrending(params: TrendingParams = {}): Promise<StreamMovie[]> {
+export async function fetchTrending(
+  params: TrendingParams = {}
+): Promise<StreamMovie[]> {
   const cacheKey = `trending:${params.time_window || "week"}:${params.media_type || "all"}`;
   const cached = getCached<StreamMovie[]>(cacheKey);
   if (cached) return cached;
@@ -577,13 +597,17 @@ export async function fetchTrending(params: TrendingParams = {}): Promise<Stream
   const query = new URLSearchParams();
   if (params.time_window) query.set("time_window", params.time_window);
   if (params.media_type) query.set("media_type", params.media_type);
-  const response = await fetch(`${MOVIE_API_BASE_URL}/api/movies/trending?${query.toString()}`);
+  const response = await fetch(
+    `${MOVIE_API_BASE_URL}/api/movies/trending?${query.toString()}`
+  );
   if (!response.ok) {
     throw new Error(`Movie backend responded with status ${response.status}`);
   }
   const data: unknown = await response.json();
   if (!Array.isArray(data)) {
-    throw new Error("Movie backend returned an unexpected trending payload shape");
+    throw new Error(
+      "Movie backend returned an unexpected trending payload shape"
+    );
   }
   const result = data.filter(isStreamMovie);
   setCache(cacheKey, result);
@@ -599,7 +623,9 @@ export interface PopularParams {
   page?: number;
 }
 
-export async function fetchPopular(params: PopularParams = {}): Promise<StreamMovie[]> {
+export async function fetchPopular(
+  params: PopularParams = {}
+): Promise<StreamMovie[]> {
   const cacheKey = `popular:${params.media_type || "movie"}:${params.page || 1}`;
   const cached = getCached<StreamMovie[]>(cacheKey);
   if (cached) return cached;
@@ -607,13 +633,17 @@ export async function fetchPopular(params: PopularParams = {}): Promise<StreamMo
   const query = new URLSearchParams();
   if (params.media_type) query.set("media_type", params.media_type);
   if (params.page) query.set("page", String(params.page));
-  const response = await fetch(`${MOVIE_API_BASE_URL}/api/movies/popular?${query.toString()}`);
+  const response = await fetch(
+    `${MOVIE_API_BASE_URL}/api/movies/popular?${query.toString()}`
+  );
   if (!response.ok) {
     throw new Error(`Movie backend responded with status ${response.status}`);
   }
   const data: unknown = await response.json();
   if (!Array.isArray(data)) {
-    throw new Error("Movie backend returned an unexpected popular payload shape");
+    throw new Error(
+      "Movie backend returned an unexpected popular payload shape"
+    );
   }
   const result = data.filter(isStreamMovie);
   setCache(cacheKey, result);
@@ -628,20 +658,26 @@ export interface NowPlayingParams {
   page?: number;
 }
 
-export async function fetchNowPlaying(params: NowPlayingParams = {}): Promise<StreamMovie[]> {
+export async function fetchNowPlaying(
+  params: NowPlayingParams = {}
+): Promise<StreamMovie[]> {
   const cacheKey = `now_playing:${params.page || 1}`;
   const cached = getCached<StreamMovie[]>(cacheKey);
   if (cached) return cached;
 
   const query = new URLSearchParams();
   if (params.page) query.set("page", String(params.page));
-  const response = await fetch(`${MOVIE_API_BASE_URL}/api/movies/now_playing?${query.toString()}`);
+  const response = await fetch(
+    `${MOVIE_API_BASE_URL}/api/movies/now_playing?${query.toString()}`
+  );
   if (!response.ok) {
     throw new Error(`Movie backend responded with status ${response.status}`);
   }
   const data: unknown = await response.json();
   if (!Array.isArray(data)) {
-    throw new Error("Movie backend returned an unexpected now_playing payload shape");
+    throw new Error(
+      "Movie backend returned an unexpected now_playing payload shape"
+    );
   }
   const result = data.filter(isStreamMovie);
   setCache(cacheKey, result);
@@ -656,20 +692,26 @@ export interface OnTheAirParams {
   page?: number;
 }
 
-export async function fetchOnTheAir(params: OnTheAirParams = {}): Promise<StreamMovie[]> {
+export async function fetchOnTheAir(
+  params: OnTheAirParams = {}
+): Promise<StreamMovie[]> {
   const cacheKey = `on_the_air:${params.page || 1}`;
   const cached = getCached<StreamMovie[]>(cacheKey);
   if (cached) return cached;
 
   const query = new URLSearchParams();
   if (params.page) query.set("page", String(params.page));
-  const response = await fetch(`${MOVIE_API_BASE_URL}/api/movies/on_the_air?${query.toString()}`);
+  const response = await fetch(
+    `${MOVIE_API_BASE_URL}/api/movies/on_the_air?${query.toString()}`
+  );
   if (!response.ok) {
     throw new Error(`Movie backend responded with status ${response.status}`);
   }
   const data: unknown = await response.json();
   if (!Array.isArray(data)) {
-    throw new Error("Movie backend returned an unexpected on_the_air payload shape");
+    throw new Error(
+      "Movie backend returned an unexpected on_the_air payload shape"
+    );
   }
   const result = data.filter(isStreamMovie);
   setCache(cacheKey, result);

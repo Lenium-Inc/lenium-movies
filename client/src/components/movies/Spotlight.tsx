@@ -32,7 +32,8 @@ function getBackdropUrl(backdrop: string | null | undefined): string | null {
 
 function formatRuntime(minutes: string | number | undefined): string {
   if (!minutes) return "";
-  const mins = typeof minutes === "string" ? parseInt(minutes.replace("m", "")) : minutes;
+  const mins =
+    typeof minutes === "string" ? parseInt(minutes.replace("m", "")) : minutes;
   if (isNaN(mins)) return "";
   const hours = Math.floor(mins / 60);
   const remainingMins = mins % 60;
@@ -129,12 +130,12 @@ export function Spotlight({
 
   const handlePlay = (movie: Movie) => {
     if (!movie.providerId) {
-      console.warn('[Spotlight] No providerId for movie:', movie.title);
+      console.warn("[Spotlight] No providerId for movie:", movie.title);
       return;
     }
     const tmdbId = parseInt(movie.providerId, 10);
     if (isNaN(tmdbId)) {
-      console.warn('[Spotlight] Invalid TMDB ID:', movie.providerId);
+      console.warn("[Spotlight] Invalid TMDB ID:", movie.providerId);
       return;
     }
     navigate(`/watch/${tmdbId}`);

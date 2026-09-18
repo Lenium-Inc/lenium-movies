@@ -12,7 +12,7 @@ interface CatalogEmptyStateProps {
 /**
  * Fallback shown when the catalogue has no movies: distinguishes "loading",
  * "no results", and "provider not configured" so failures read clearly.
- * 
+ *
  * Loading states are now handled by the global TopProgressBar component.
  * This component only renders for empty/error states.
  */

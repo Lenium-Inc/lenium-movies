@@ -22,13 +22,13 @@ The existing UI is a visual prototype with development-only fixture cards. Befor
 
 ## Delivery sequence
 
-| Phase | Scope | Exit condition |
-|---|---|---|
-| 1 | Catalogue, rights, search, movie pages | Real provider records are searchable and crawlable |
-| 2 | Auth, watchlist, progress, playback session | Rights policy gates every play request |
-| 3 | Admin, ingestion, collections, moderation | Operators can publish without direct database edits |
-| 4 | Creator portal and reviews | Rights evidence and moderation are auditable |
-| 5 | Advanced recommendations and monetization | Business and privacy review complete |
+| Phase | Scope                                       | Exit condition                                      |
+| ----- | ------------------------------------------- | --------------------------------------------------- |
+| 1     | Catalogue, rights, search, movie pages      | Real provider records are searchable and crawlable  |
+| 2     | Auth, watchlist, progress, playback session | Rights policy gates every play request              |
+| 3     | Admin, ingestion, collections, moderation   | Operators can publish without direct database edits |
+| 4     | Creator portal and reviews                  | Rights evidence and moderation are auditable        |
+| 5     | Advanced recommendations and monetization   | Business and privacy review complete                |
 
 ## Audit remediation: population without fake content
 

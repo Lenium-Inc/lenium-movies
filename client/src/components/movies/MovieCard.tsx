@@ -1,6 +1,6 @@
-import { Star, Film, Tv, Bookmark, Check } from 'lucide-react';
+import { Star, Film, Tv, Bookmark, Check } from "lucide-react";
 import { useLocation } from "wouter";
-import type { Movie } from './types';
+import type { Movie } from "./types";
 
 interface MovieCardProps {
   movie: Movie;
@@ -11,7 +11,8 @@ interface MovieCardProps {
 
 function formatRuntime(minutes: string | number | undefined): string {
   if (!minutes) return "";
-  const mins = typeof minutes === "string" ? parseInt(minutes.replace("m", "")) : minutes;
+  const mins =
+    typeof minutes === "string" ? parseInt(minutes.replace("m", "")) : minutes;
   if (isNaN(mins)) return "";
   const hours = Math.floor(mins / 60);
   const remainingMins = mins % 60;
@@ -23,12 +24,19 @@ function formatRating(score: number | null | undefined): string {
   return score.toFixed(1);
 }
 
-export const MovieCard: React.FC<MovieCardProps> = ({ movie, saved, onPlay, onSave }) => {
+export const MovieCard: React.FC<MovieCardProps> = ({
+  movie,
+  saved,
+  onPlay,
+  onSave,
+}) => {
   const [, navigate] = useLocation();
-  const posterUrl = movie.poster || `https://via.placeholder.com/500x750?text=${encodeURIComponent(movie.title)}`;
-  const releaseYear = movie.year?.toString() || 'Unknown';
+  const posterUrl =
+    movie.poster ||
+    `https://via.placeholder.com/500x750?text=${encodeURIComponent(movie.title)}`;
+  const releaseYear = movie.year?.toString() || "Unknown";
   const voteAverage = formatRating(movie.vote_average ?? movie.score);
-  const mediaType = movie.mediaType || 'movie';
+  const mediaType = movie.mediaType || "movie";
   const tmdbId = movie.providerId ? parseInt(movie.providerId, 10) : null;
 
   const handlePlayClick = (e: React.MouseEvent) => {
@@ -38,7 +46,7 @@ export const MovieCard: React.FC<MovieCardProps> = ({ movie, saved, onPlay, onSa
       return;
     }
     if (!tmdbId || isNaN(tmdbId)) {
-      console.warn('[MovieCard] Invalid TMDB ID:', movie.providerId);
+      console.warn("[MovieCard] Invalid TMDB ID:", movie.providerId);
       return;
     }
     navigate(`/watch/${tmdbId}`);
@@ -64,10 +72,10 @@ export const MovieCard: React.FC<MovieCardProps> = ({ movie, saved, onPlay, onSa
             className="w-full h-full object-cover transition-opacity duration-300 group-hover:opacity-90 group-hover:scale-[1.02]"
             loading="lazy"
           />
-          
+
           {/* Media type badge - top left */}
           <span className="absolute top-2 left-2 flex items-center gap-1 px-2 py-1 bg-black/70 backdrop-blur-sm text-[10px] font-semibold uppercase text-white rounded border border-white/10">
-            {mediaType === 'tv' ? (
+            {mediaType === "tv" ? (
               <>
                 <Tv className="h-3 w-3" />
                 Series
@@ -95,7 +103,11 @@ export const MovieCard: React.FC<MovieCardProps> = ({ movie, saved, onPlay, onSa
               className="absolute top-10 right-2 z-10 flex items-center justify-center w-8 h-8 rounded-full bg-black/60 hover:bg-white/10 backdrop-blur-sm text-white/80 hover:text-white transition-colors"
               aria-label={saved ? "Remove from My List" : "Add to My List"}
             >
-              {saved ? <Check className="h-4 w-4 text-green-400" /> : <Bookmark className="h-4 w-4" />}
+              {saved ? (
+                <Check className="h-4 w-4 text-green-400" />
+              ) : (
+                <Bookmark className="h-4 w-4" />
+              )}
             </button>
           )}
         </div>

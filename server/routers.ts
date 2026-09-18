@@ -41,9 +41,7 @@ export const appRouter = router({
           limit: z.number().int().min(1).max(40).default(20),
         })
       )
-      .query(({ input }) =>
-        searchMovies(input.query, input.type, input.limit)
-      ),
+      .query(({ input }) => searchMovies(input.query, input.type, input.limit)),
     movieById: publicProcedure
       .input(z.object({ id: z.number().int().positive() }))
       .query(({ input }) => getMovieById(input.id)),

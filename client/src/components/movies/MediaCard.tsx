@@ -23,7 +23,10 @@ function genresText(genres: readonly string[] | string | null | undefined) {
 }
 
 /** Cover-cropped 16:9 trailer embed pinned inside the 2:3 poster frame. */
-export const TrailerEmbed = React.forwardRef<HTMLIFrameElement, TrailerInfo & { onLoad?: () => void }>(({ provider, id, onLoad }, ref) => {
+export const TrailerEmbed = React.forwardRef<
+  HTMLIFrameElement,
+  TrailerInfo & { onLoad?: () => void }
+>(({ provider, id, onLoad }, ref) => {
   const src =
     provider === "dailymotion"
       ? `https://www.dailymotion.com/embed/video/${id}?autoplay=1&muted=1&loop=1&controls=0`
@@ -80,7 +83,7 @@ export function MediaCard({
   const [trailerReady, setTrailerReady] = useState(false);
   const [trailerPreloaded, setTrailerPreloaded] = useState(false);
   const [isInViewport, setIsInViewport] = useState(false);
-  
+
   const timer = useRef<number | null>(null);
   const trailerRequested = useRef(false);
   const trailerPreloadTriggered = useRef(false);
@@ -104,7 +107,7 @@ export function MediaCard({
     if (!cardElement) return;
 
     const observer = new IntersectionObserver(
-      (entries) => {
+      entries => {
         entries.forEach(entry => {
           if (entry.isIntersecting || entry.intersectionRatio > 0.1) {
             setIsInViewport(true);
@@ -113,7 +116,7 @@ export function MediaCard({
           }
         });
       },
-      { rootMargin: '200px', threshold: 0.1 }
+      { rootMargin: "200px", threshold: 0.1 }
     );
 
     observer.observe(cardElement);
@@ -122,11 +125,17 @@ export function MediaCard({
 
   // Preload trailer when card enters viewport (background, non-blocking)
   useEffect(() => {
-    if (!isInViewport || trailerPreloadTriggered.current || !trailerResolver || trailer) return;
-    
+    if (
+      !isInViewport ||
+      trailerPreloadTriggered.current ||
+      !trailerResolver ||
+      trailer
+    )
+      return;
+
     trailerPreloadTriggered.current = true;
     let alive = true;
-    
+
     // Preload in background - don't await, just fire and forget
     trailerResolver()
       .then(info => {
@@ -138,7 +147,7 @@ export function MediaCard({
       .catch(() => {
         // Silently fail - keep poster/backdrop fallback
       });
-    
+
     return () => {
       alive = false;
     };
@@ -148,13 +157,13 @@ export function MediaCard({
   useEffect(() => {
     if (!peeked || trailerRequested.current) return;
     trailerRequested.current = true;
-    
+
     // If already preloaded, just mark as ready
     if (trailerPreloaded && trailer) {
       setTrailerReady(true);
       return;
     }
-    
+
     // Otherwise fetch now (should be fast if preloaded)
     let alive = true;
     trailerResolver?.()
@@ -167,7 +176,7 @@ export function MediaCard({
       .catch(() => {
         // Keep poster/backdrop fallback
       });
-    
+
     return () => {
       alive = false;
     };
@@ -250,7 +259,12 @@ export function MediaCard({
           {/* Preview layer: official trailer → muted native clip → backdrop */}
           {showTrailer && trailer ? (
             <div className="absolute inset-0 flex items-center justify-center z-10">
-              <TrailerEmbed provider={trailer.provider} id={trailer.id} onLoad={handleTrailerLoad} ref={iframeRef} />
+              <TrailerEmbed
+                provider={trailer.provider}
+                id={trailer.id}
+                onLoad={handleTrailerLoad}
+                ref={iframeRef}
+              />
             </div>
           ) : null}
           {showVideo && (

@@ -1,5 +1,5 @@
 /**
- * A movie/TV show as surfaced to the catalog UI. 
+ * A movie/TV show as surfaced to the catalog UI.
  * Mirrors the backend API StreamMovie shape so cards and detail views can render consistently.
  * Extended with additional fields for UI rendering.
  */

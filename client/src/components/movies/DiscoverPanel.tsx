@@ -1,5 +1,12 @@
 import { useState } from "react";
-import { ChevronDown, ChevronUp, Calendar, Filter, Star, X } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  Calendar,
+  Filter,
+  Star,
+  X,
+} from "lucide-react";
 
 interface DiscoverPanelProps {
   open: boolean;

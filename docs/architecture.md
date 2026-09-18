@@ -8,18 +8,18 @@ The current WebDev implementation is a visual prototype. It uses React, Tailwind
 
 ## Proposed stack
 
-| Concern | Production choice | Reason |
-|---|---|---|
-| Web application | Next.js or equivalent SSR-capable React runtime | Crawlable movie pages and low client JavaScript |
-| API | TypeScript procedures behind a versioned API boundary | Typed contracts and modular authorization |
-| Primary database | PostgreSQL with Prisma or Drizzle | Relational integrity, indexing, and auditability |
-| Search | Meilisearch initially; OpenSearch if scale or analytics requires it | Typo tolerance and faceted search |
-| Cache | Redis-compatible service | Sessions, rate limits, hot catalogue responses, queues |
-| Media storage | S3-compatible object storage | Durable source and derivative storage |
-| Media delivery | CDN with signed URLs | Efficient delivery without proxying video through the app |
-| Video | Managed video provider or FFmpeg worker pipeline | HLS/DASH packaging, thumbnails, captions, DRM integration |
-| Auth | Managed OAuth plus verified email identity | Secure session lifecycle and lower credential risk |
-| Observability | Structured logs, metrics, traces, error tracking | Playback, ingestion, and rights operations require visibility |
+| Concern          | Production choice                                                   | Reason                                                        |
+| ---------------- | ------------------------------------------------------------------- | ------------------------------------------------------------- |
+| Web application  | Next.js or equivalent SSR-capable React runtime                     | Crawlable movie pages and low client JavaScript               |
+| API              | TypeScript procedures behind a versioned API boundary               | Typed contracts and modular authorization                     |
+| Primary database | PostgreSQL with Prisma or Drizzle                                   | Relational integrity, indexing, and auditability              |
+| Search           | Meilisearch initially; OpenSearch if scale or analytics requires it | Typo tolerance and faceted search                             |
+| Cache            | Redis-compatible service                                            | Sessions, rate limits, hot catalogue responses, queues        |
+| Media storage    | S3-compatible object storage                                        | Durable source and derivative storage                         |
+| Media delivery   | CDN with signed URLs                                                | Efficient delivery without proxying video through the app     |
+| Video            | Managed video provider or FFmpeg worker pipeline                    | HLS/DASH packaging, thumbnails, captions, DRM integration     |
+| Auth             | Managed OAuth plus verified email identity                          | Secure session lifecycle and lower credential risk            |
+| Observability    | Structured logs, metrics, traces, error tracking                    | Playback, ingestion, and rights operations require visibility |
 
 ## Boundaries
 

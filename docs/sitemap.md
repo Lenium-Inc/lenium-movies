@@ -2,16 +2,16 @@
 
 ## Public, indexable routes
 
-| Route | Purpose | Indexing |
-|---|---|---|
-| `/` | Home discovery | Index |
-| `/browse` | Stable catalogue browse | Index when canonical filters are absent or approved |
-| `/genre/{slug}` | Genre landing page | Index |
-| `/collection/{slug}` | Curated collection | Index when published |
-| `/movie/{slug}-{year}` | Movie detail | Index when published and not removed |
-| `/person/{slug}` | Person filmography | Index only with sufficient unique content |
-| `/about` | Organization information | Index |
-| `/help` | Public help | Index |
+| Route                  | Purpose                  | Indexing                                            |
+| ---------------------- | ------------------------ | --------------------------------------------------- |
+| `/`                    | Home discovery           | Index                                               |
+| `/browse`              | Stable catalogue browse  | Index when canonical filters are absent or approved |
+| `/genre/{slug}`        | Genre landing page       | Index                                               |
+| `/collection/{slug}`   | Curated collection       | Index when published                                |
+| `/movie/{slug}-{year}` | Movie detail             | Index when published and not removed                |
+| `/person/{slug}`       | Person filmography       | Index only with sufficient unique content           |
+| `/about`               | Organization information | Index                                               |
+| `/help`                | Public help              | Index                                               |
 
 ## Private or non-indexable routes
 

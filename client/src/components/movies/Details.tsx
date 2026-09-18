@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Bookmark, Check, Play, Star, X, MessageSquare, Clock } from "lucide-react";
+import {
+  Bookmark,
+  Check,
+  Play,
+  Star,
+  X,
+  MessageSquare,
+  Clock,
+} from "lucide-react";
 import { useLocation } from "wouter";
 import { getRating, setRating, subscribeRatings } from "@/services/ratings";
 import {
@@ -13,10 +21,7 @@ import {
   type TrailerInfo,
 } from "@/services/api";
 import { EpisodeMatrix } from "@/components/movies/EpisodeMatrix";
-import {
-  cancelInFlightPrefetch,
-  prefetchForOpen,
-} from "@/services/prefetch";
+import { cancelInFlightPrefetch, prefetchForOpen } from "@/services/prefetch";
 import { attemptPlay } from "@/services/capGate";
 import {
   getProgress,
@@ -53,7 +58,9 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
   const [playError, setPlayError] = useState<string | null>(null);
   const [season, setSeason] = useState(1);
   const [episode, setEpisode] = useState(1);
-  const [myRating, setMyRating] = useState<number>(() => getRating(movie.id) ?? 0);
+  const [myRating, setMyRating] = useState<number>(
+    () => getRating(movie.id) ?? 0
+  );
   const [watchedSeconds, setWatchedSeconds] = useState(0);
   const [trailer, setTrailer] = useState<TrailerInfo | null>(null);
   const [detailsLoaded, setDetailsLoaded] = useState(false);
@@ -175,7 +182,9 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
 
       setResolved({ stream: playable, exact: true });
       prefetchForOpen(playable);
-      navigate(`/watch/${movie.providerId}${movie.mediaType === "tv" ? `?season=${targetSeason}&episode=${targetEpisode}&type=tv` : ""}`);
+      navigate(
+        `/watch/${movie.providerId}${movie.mediaType === "tv" ? `?season=${targetSeason}&episode=${targetEpisode}&type=tv` : ""}`
+      );
     } catch (error) {
       const isNotFound = error instanceof StreamNotFoundError;
       console.error(
@@ -198,14 +207,17 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
     if (resolved) {
       const isSeries = resolved.stream.media_type === "tv";
       await resolveAndPlay(isSeries ? season : 1, isSeries ? episode : 1);
-      navigate(`/watch/${movie.providerId}${isSeries ? `?season=${season}&episode=${episode}&type=tv` : ""}`);
+      navigate(
+        `/watch/${movie.providerId}${isSeries ? `?season=${season}&episode=${episode}&type=tv` : ""}`
+      );
       return;
     }
     await resolveAndPlay(1, 1);
     navigate(`/watch/${movie.providerId}`);
   };
 
-  const showMainPlayButton = !resolved?.stream.media_type || resolved.stream.media_type !== "tv";
+  const showMainPlayButton =
+    !resolved?.stream.media_type || resolved.stream.media_type !== "tv";
 
   const playEpisode = (targetSeason: number, targetEpisode: number) => {
     void resolveAndPlay(targetSeason, targetEpisode);
@@ -217,7 +229,7 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
     if (opened.current) return;
     opened.current = true;
     let disposed = false;
-    
+
     // Mark details as loaded after a brief moment for smooth UX
     const loadTimer = setTimeout(() => {
       if (!disposed) setDetailsLoaded(true);
@@ -225,7 +237,9 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
 
     void (async () => {
       try {
-        const stream = await resolveStream(movie.title, movie.year,
+        const stream = await resolveStream(
+          movie.title,
+          movie.year,
           movie.mediaType === "tv" ? { season: 1, episode: 1 } : undefined
         );
         if (disposed) return;
@@ -275,7 +289,10 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
       </div>
       <div className="mt-3 space-y-2">
         {[1, 2, 3].map(i => (
-          <div key={i} className="flex items-center gap-3 border-b border-white/5 px-4 py-3">
+          <div
+            key={i}
+            className="flex items-center gap-3 border-b border-white/5 px-4 py-3"
+          >
             <div className="h-8 w-8 rounded-full border border-white/10" />
             <div className="flex-1">
               <div className="h-4 w-3/4 bg-white/10 rounded" />
@@ -314,7 +331,13 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
               );
             }
             if (trailer) {
-              return <TrailerEmbed key="trailer-embed" provider={trailer.provider} id={trailer.id} />;
+              return (
+                <TrailerEmbed
+                  key="trailer-embed"
+                  provider={trailer.provider}
+                  id={trailer.id}
+                />
+              );
             }
             if (movie.backdrop) {
               return (
@@ -368,7 +391,7 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
           ) : (
             <SkeletonMetadata />
           )}
-          
+
           <div className="mt-5 flex flex-wrap items-center gap-3">
             {showMainPlayButton && (
               <button
@@ -391,14 +414,12 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
               )}
               <span>{saved ? "In My List" : "Add to My List"}</span>
             </button>
-            <button
-              className="flex items-center gap-2 rounded-md border border-white/15 bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/10 transition-colors"
-            >
+            <button className="flex items-center gap-2 rounded-md border border-white/15 bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/10 transition-colors">
               <MessageSquare className="h-4 w-4" />
               <span>Comments</span>
             </button>
           </div>
-          
+
           {canRate && detailsLoaded && (
             <div className="mt-4 flex items-center gap-2">
               <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-white/40">
@@ -419,7 +440,9 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
                   >
                     <Star
                       className={`h-4 w-4 ${
-                        star <= myRating ? "fill-[#d7d7d3] text-[#d7d7d3]" : "text-white/30"
+                        star <= myRating
+                          ? "fill-[#d7d7d3] text-[#d7d7d3]"
+                          : "text-white/30"
                       }`}
                     />
                   </button>
@@ -432,13 +455,13 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
               )}
             </div>
           )}
-          
+
           {playError && detailsLoaded && (
             <div className="mt-4 rounded-md border border-white/10 bg-white/[0.03] px-3 py-2.5 text-xs leading-5 text-[#c5c5c1]">
               <p>{playError}</p>
             </div>
           )}
-          
+
           {resolved && !resolved.exact && detailsLoaded && (
             <p className="mt-4 rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-xs leading-5 text-[#c5c5c1]">
               Closest matching archive film:{" "}
@@ -447,11 +470,11 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
               </span>
             </p>
           )}
-          
+
           {resolved && resolved.stream.media_type === "tv" ? (
             <EpisodeMatrix
               movie={resolved.stream}
-              onPlay={(ep) => {
+              onPlay={ep => {
                 playEpisode(ep.season, ep.number);
                 navigate(`/watch/${movie.id}`);
               }}

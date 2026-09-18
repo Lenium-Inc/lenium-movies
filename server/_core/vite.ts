@@ -53,7 +53,9 @@ function proxyMovieApi(
     }
   );
   proxyReq.on("error", err => {
-    res.status(502).json({ error: `Movie backend unreachable: ${err.message}` });
+    res
+      .status(502)
+      .json({ error: `Movie backend unreachable: ${err.message}` });
   });
   if (body) proxyReq.write(body);
   proxyReq.end();

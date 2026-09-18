@@ -1,7 +1,7 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { ChevronDown, Filter, X, Sparkles, Check } from 'lucide-react';
-import { genreFilterOptions } from '@/hooks/useCatalog';
-import type { View } from '@/components/layout/navigation';
+import React, { useState, useRef, useEffect } from "react";
+import { ChevronDown, Filter, X, Sparkles, Check } from "lucide-react";
+import { genreFilterOptions } from "@/hooks/useCatalog";
+import type { View } from "@/components/layout/navigation";
 
 interface DiscoverDropdownProps {
   genre: string;
@@ -19,48 +19,57 @@ export const DiscoverDropdown: React.FC<DiscoverDropdownProps> = ({
   isLoading,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
-  const [selectedGenre, setSelectedGenre] = useState(genre || 'All');
-  const [selectedSort, setSelectedSort] = useState('Trending');
-  const [selectedType, setSelectedType] = useState('All');
-  
+  const [selectedGenre, setSelectedGenre] = useState(genre || "All");
+  const [selectedSort, setSelectedSort] = useState("Trending");
+  const [selectedType, setSelectedType] = useState("All");
+
   const dropdownRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        if (triggerRef.current && triggerRef.current.contains(event.target as Node)) {
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(event.target as Node)
+      ) {
+        if (
+          triggerRef.current &&
+          triggerRef.current.contains(event.target as Node)
+        ) {
           return;
         }
         setIsOpen(false);
       }
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setIsOpen(false);
+      if (e.key === "Escape") setIsOpen(false);
     };
     if (isOpen) {
-      document.addEventListener('keydown', handleKeyDown);
+      document.addEventListener("keydown", handleKeyDown);
     }
-    return () => document.removeEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
   }, [isOpen]);
 
   const genres = genreFilterOptions;
-  const sortOptions = ['Trending', 'Top Rated', 'Release Year', 'Most Popular'];
-  const types = ['All', 'Movie', 'TV Show'];
+  const sortOptions = ["Trending", "Top Rated", "Release Year", "Most Popular"];
+  const types = ["All", "Movie", "TV Show"];
 
   const handleApply = () => {
     setSelectedGenre(selectedGenre);
     setGenre(selectedGenre);
-    setView('movies');
+    setView("movies");
     setIsOpen(false);
   };
 
-  const hasActiveFilters = selectedGenre !== 'All' || selectedSort !== 'Trending' || selectedType !== 'All';
+  const hasActiveFilters =
+    selectedGenre !== "All" ||
+    selectedSort !== "Trending" ||
+    selectedType !== "All";
 
   return (
     <div className="relative inline-block text-left z-40" ref={dropdownRef}>
@@ -73,7 +82,9 @@ export const DiscoverDropdown: React.FC<DiscoverDropdownProps> = ({
       >
         <Filter className="h-4 w-4" />
         <span>Discover</span>
-        <ChevronDown className={`h-4 w-4 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+        <ChevronDown
+          className={`h-4 w-4 transition-transform ${isOpen ? "rotate-180" : ""}`}
+        />
       </button>
 
       {isOpen && (
@@ -81,9 +92,11 @@ export const DiscoverDropdown: React.FC<DiscoverDropdownProps> = ({
           <div className="flex items-center justify-between border-b border-white/10 pb-3">
             <div className="flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-red-500" />
-              <span className="text-white font-semibold text-sm">Filter Catalog</span>
+              <span className="text-white font-semibold text-sm">
+                Filter Catalog
+              </span>
             </div>
-            <button 
+            <button
               onClick={() => setIsOpen(false)}
               className="text-zinc-400 hover:text-white transition-colors p-1"
             >
@@ -93,13 +106,15 @@ export const DiscoverDropdown: React.FC<DiscoverDropdownProps> = ({
 
           {/* Type Filter */}
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Type</label>
+            <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">
+              Type
+            </label>
             <div className="grid grid-cols-3 gap-1.5">
-              {types.map((t) => (
+              {types.map(t => (
                 <button
                   key={t}
                   onClick={() => setSelectedType(t)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${selectedType === t ? 'bg-red-600 text-white font-semibold' : 'bg-zinc-900 text-zinc-300 hover:bg-zinc-800'}`}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${selectedType === t ? "bg-red-600 text-white font-semibold" : "bg-zinc-900 text-zinc-300 hover:bg-zinc-800"}`}
                 >
                   {t}
                 </button>
@@ -109,13 +124,15 @@ export const DiscoverDropdown: React.FC<DiscoverDropdownProps> = ({
 
           {/* Genre Selection */}
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Genre</label>
+            <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">
+              Genre
+            </label>
             <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto pr-1">
-              {genres.map((g) => (
+              {genres.map(g => (
                 <button
                   key={g}
                   onClick={() => setSelectedGenre(g)}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${selectedGenre === g ? 'bg-white text-black font-semibold' : 'bg-zinc-900 text-zinc-300 hover:bg-zinc-800'}`}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${selectedGenre === g ? "bg-white text-black font-semibold" : "bg-zinc-900 text-zinc-300 hover:bg-zinc-800"}`}
                 >
                   {g}
                 </button>
@@ -125,16 +142,20 @@ export const DiscoverDropdown: React.FC<DiscoverDropdownProps> = ({
 
           {/* Sort By Selection */}
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Sort By</label>
+            <label className="text-xs font-medium text-zinc-400 uppercase tracking-wider">
+              Sort By
+            </label>
             <div className="grid grid-cols-2 gap-1.5">
-              {sortOptions.map((s) => (
+              {sortOptions.map(s => (
                 <button
                   key={s}
                   onClick={() => setSelectedSort(s)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium text-left transition-all flex items-center justify-between ${selectedSort === s ? 'bg-zinc-800 text-white border border-white/20' : 'bg-zinc-900 text-zinc-400 hover:bg-zinc-800'}`}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium text-left transition-all flex items-center justify-between ${selectedSort === s ? "bg-zinc-800 text-white border border-white/20" : "bg-zinc-900 text-zinc-400 hover:bg-zinc-800"}`}
                 >
                   <span>{s}</span>
-                  {selectedSort === s && <Check className="w-3 h-3 text-red-500" />}
+                  {selectedSort === s && (
+                    <Check className="w-3 h-3 text-red-500" />
+                  )}
                 </button>
               ))}
             </div>
@@ -151,20 +172,18 @@ export const DiscoverDropdown: React.FC<DiscoverDropdownProps> = ({
           {/* Results summary */}
           <div className="pt-3 border-t border-white/10 flex items-center justify-between text-xs text-zinc-500">
             <span>
-              {isLoading ? (
-                'Loading...'
-              ) : filteredCount === 0 ? (
-                'No matches found'
-              ) : (
-                `${filteredCount} title${filteredCount !== 1 ? 's' : ''} found`
-              )}
+              {isLoading
+                ? "Loading..."
+                : filteredCount === 0
+                  ? "No matches found"
+                  : `${filteredCount} title${filteredCount !== 1 ? "s" : ""} found`}
             </span>
             {hasActiveFilters && (
               <button
                 onClick={() => {
-                  setSelectedGenre('All');
-                  setSelectedSort('Trending');
-                  setSelectedType('All');
+                  setSelectedGenre("All");
+                  setSelectedSort("Trending");
+                  setSelectedType("All");
                 }}
                 className="text-red-400 hover:text-red-300 underline"
               >

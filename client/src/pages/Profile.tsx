@@ -181,7 +181,9 @@ function Toggle({
       <div className="min-w-0">
         <p className="text-sm font-semibold text-zinc-100">{label}</p>
         {description && (
-          <p className="mt-0.5 text-xs leading-5 text-zinc-400">{description}</p>
+          <p className="mt-0.5 text-xs leading-5 text-zinc-400">
+            {description}
+          </p>
         )}
       </div>
       <button
@@ -263,7 +265,13 @@ function Field({
   );
 }
 
-function Stars({ value, size = "h-3.5 w-3.5" }: { value: number; size?: string }) {
+function Stars({
+  value,
+  size = "h-3.5 w-3.5",
+}: {
+  value: number;
+  size?: string;
+}) {
   return (
     <span className="flex items-center gap-0.5">
       {[1, 2, 3, 4, 5].map(star => (
@@ -564,7 +572,11 @@ export default function Profile() {
                       <button
                         type="button"
                         onClick={() => void toggle2FA()}
-                        disabled={!account.twoFactor && !account.passwordHash && !twoFactorPassword}
+                        disabled={
+                          !account.twoFactor &&
+                          !account.passwordHash &&
+                          !twoFactorPassword
+                        }
                         className={
                           account.twoFactor
                             ? outlineBtn
@@ -586,7 +598,9 @@ export default function Profile() {
                         <input
                           type="password"
                           value={twoFactorPassword}
-                          onChange={event => setTwoFactorPassword(event.target.value)}
+                          onChange={event =>
+                            setTwoFactorPassword(event.target.value)
+                          }
                           placeholder="Confirm password"
                           className="w-44 rounded-md border border-zinc-700/60 bg-zinc-950/60 px-3 py-2 text-xs text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-600/30"
                         />
@@ -667,7 +681,8 @@ export default function Profile() {
                       ))}
                     </ul>
                     <p className="mt-2 text-[10px] leading-4 text-zinc-600">
-                      Local demo — devices are stored on this machine, not a server.
+                      Local demo — devices are stored on this machine, not a
+                      server.
                     </p>
                   </Body>
                 </Card>
@@ -781,7 +796,11 @@ export default function Profile() {
                   />
                   <Body>
                     <div className="flex flex-wrap gap-2">
-                      <button type="button" onClick={download} className={outlineBtn}>
+                      <button
+                        type="button"
+                        onClick={download}
+                        className={outlineBtn}
+                      >
                         <Download className="h-3.5 w-3.5" />
                         Download my data
                       </button>
@@ -827,8 +846,8 @@ export default function Profile() {
                           No saved titles yet
                         </p>
                         <p className="mt-1 text-xs text-zinc-500">
-                          Save titles from the catalog — each can carry a Plan to
-                          Watch, Favorites, or Watched tag.
+                          Save titles from the catalog — each can carry a Plan
+                          to Watch, Favorites, or Watched tag.
                         </p>
                       </div>
                     ) : (
@@ -853,7 +872,9 @@ export default function Profile() {
                                   <button
                                     key={tag.value}
                                     type="button"
-                                    onClick={() => setEntryTag(entry.id, tag.value)}
+                                    onClick={() =>
+                                      setEntryTag(entry.id, tag.value)
+                                    }
                                     className={`rounded-full px-2.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.1em] transition ${
                                       entry.tag === tag.value
                                         ? "bg-indigo-600 text-white"
@@ -893,7 +914,8 @@ export default function Profile() {
                           No ratings yet
                         </p>
                         <p className="mt-1 text-xs text-zinc-500">
-                          Star a title after watching 15 minutes and it shows up here.
+                          Star a title after watching 15 minutes and it shows up
+                          here.
                         </p>
                       </div>
                     ) : (
@@ -916,7 +938,9 @@ export default function Profile() {
                               <div className="mt-1 flex items-center gap-2">
                                 <Stars value={rating.rating} />
                                 <span className="text-[10px] tabular-nums text-zinc-500">
-                                  {new Date(rating.ratedAt).toLocaleDateString()}
+                                  {new Date(
+                                    rating.ratedAt
+                                  ).toLocaleDateString()}
                                 </span>
                               </div>
                             </div>
@@ -948,7 +972,10 @@ export default function Profile() {
                     />
                     <Body>
                       <div className="flex items-center gap-5">
-                        <svg viewBox="0 0 100 100" className="h-20 w-20 -rotate-90 shrink-0">
+                        <svg
+                          viewBox="0 0 100 100"
+                          className="h-20 w-20 -rotate-90 shrink-0"
+                        >
                           <circle
                             cx="50"
                             cy="50"
@@ -966,7 +993,9 @@ export default function Profile() {
                             strokeWidth="7"
                             strokeLinecap="round"
                             strokeDasharray={CIRC}
-                            strokeDashoffset={CIRC * (1 - (milestone?.fraction ?? 1))}
+                            strokeDashoffset={
+                              CIRC * (1 - (milestone?.fraction ?? 1))
+                            }
                           />
                         </svg>
                         <div>
@@ -996,7 +1025,9 @@ export default function Profile() {
                       <div className="flex items-baseline gap-2">
                         <p className="text-3xl font-bold tabular-nums text-white">
                           {Math.min(count, limit)}
-                          <span className="ml-1 text-lg text-zinc-500">/ {limit}</span>
+                          <span className="ml-1 text-lg text-zinc-500">
+                            / {limit}
+                          </span>
                         </p>
                         {locked && (
                           <LockKeyhole className="h-4 w-4 text-red-400" />
@@ -1035,7 +1066,9 @@ export default function Profile() {
                         return (
                           <div
                             key={achievement.id}
-                            title={isEarned ? achievement.copy : achievement.hint}
+                            title={
+                              isEarned ? achievement.copy : achievement.hint
+                            }
                             className={`flex flex-col items-center gap-1.5 rounded-lg border px-1 py-2.5 text-center transition ${
                               isEarned
                                 ? "border-indigo-500/30 bg-indigo-600/10"
@@ -1126,7 +1159,9 @@ export default function Profile() {
                   <Body>
                     <Toggle
                       checked={settings.autoplayPreviews}
-                      onChange={value => setSettings({ autoplayPreviews: value })}
+                      onChange={value =>
+                        setSettings({ autoplayPreviews: value })
+                      }
                       label="Autoplay previews"
                       description="Instantly plays a silent preview when a card is hovered."
                     />

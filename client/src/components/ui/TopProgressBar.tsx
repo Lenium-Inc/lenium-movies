@@ -55,9 +55,7 @@ export function TopProgressBar({ isLoading }: { isLoading: boolean }) {
         className="h-full bg-gradient-to-r from-indigo-600 via-indigo-500 to-indigo-600 transition-all duration-300 ease-out"
         style={{ width: `${Math.min(progress, 100)}%` }}
       />
-      <div
-        className="absolute top-0 right-0 h-full w-12 bg-gradient-to-l from-transparent to-indigo-500 opacity-50"
-      />
+      <div className="absolute top-0 right-0 h-full w-12 bg-gradient-to-l from-transparent to-indigo-500 opacity-50" />
     </div>
   );
 }

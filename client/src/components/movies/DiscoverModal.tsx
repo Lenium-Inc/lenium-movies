@@ -1,5 +1,13 @@
 import { useState, useEffect, useRef } from "react";
-import { ChevronDown, ChevronUp, Calendar, Filter, Star, X, Loader2 } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  Calendar,
+  Filter,
+  Star,
+  X,
+  Loader2,
+} from "lucide-react";
 import { genreFilterOptions } from "@/hooks/useCatalog";
 import type { View } from "@/components/layout/navigation";
 import { createPortal } from "react-dom";
@@ -110,7 +118,10 @@ export function DiscoverModal({
     const handleClickOutside = (e: MouseEvent) => {
       if (modalRef.current && !modalRef.current.contains(e.target as Node)) {
         // Check if click was on trigger button
-        if (triggerRef.current && triggerRef.current.contains(e.target as Node)) {
+        if (
+          triggerRef.current &&
+          triggerRef.current.contains(e.target as Node)
+        ) {
           return;
         }
         onClose();
@@ -137,10 +148,18 @@ export function DiscoverModal({
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <Filter className="h-4 w-4 text-[#d7d7d3]" />
-              <h3 id="discover-modal-title" className="text-sm font-bold text-white">Discover Filters</h3>
+              <h3
+                id="discover-modal-title"
+                className="text-sm font-bold text-white"
+              >
+                Discover Filters
+              </h3>
               {hasActiveFilters && (
                 <span className="rounded-full bg-indigo-600/20 px-2 py-0.5 text-[10px] font-medium text-indigo-300">
-                  {selectedMoods.length + (yearRange ? 1 : 0) + (contentType !== "all" ? 1 : 0)} active
+                  {selectedMoods.length +
+                    (yearRange ? 1 : 0) +
+                    (contentType !== "all" ? 1 : 0)}{" "}
+                  active
                 </span>
               )}
             </div>
@@ -284,7 +303,10 @@ export function DiscoverModal({
                     )}
                     {contentType !== "all" && (
                       <span className="flex items-center gap-1 rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-medium text-white/70">
-                        {CONTENT_TYPES.find(t => t.value === contentType)?.label}
+                        {
+                          CONTENT_TYPES.find(t => t.value === contentType)
+                            ?.label
+                        }
                         <button
                           onClick={() => setContentType("all")}
                           className="ml-1 hover:text-white"

@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Movie } from "@/components/movies/types";
 import type { View } from "@/components/layout/navigation";
-import { searchCatalog, fetchTrending, fetchPopular, type StreamMovie } from "@/services/api";
 import {
-  savedListIds,
-  subscribeList,
-  toggleListSave,
-} from "@/services/lists";
+  searchCatalog,
+  fetchTrending,
+  fetchPopular,
+  type StreamMovie,
+} from "@/services/api";
+import { savedListIds, subscribeList, toggleListSave } from "@/services/lists";
 
 export const genreFilterOptions = [
   "All",
@@ -44,7 +45,14 @@ interface UseCatalog {
   toggleSave: (movie: Movie) => void;
 }
 
-const VIEWS_WITH_TV_FILTER: View[] = ["tv", "trending", "popular", "new", "my-list", "home"];
+const VIEWS_WITH_TV_FILTER: View[] = [
+  "tv",
+  "trending",
+  "popular",
+  "new",
+  "my-list",
+  "home",
+];
 
 /** Stable numeric fallback for non-TMDB (archive.org) ids in the backend search. */
 function stableId(id: string): number {
@@ -60,9 +68,9 @@ function stableId(id: string): number {
 
 /** Map a backend `StreamMovie` (playable, embed-ready) to a catalog `Movie`. */
 function toCatalogMovie(item: StreamMovie): Movie {
-  const mediaType: "movie" | "tv" =
-    item.media_type === "tv" ? "tv" : "movie";
-  const year = typeof item.year === "number" ? item.year : Number(item.year) || null;
+  const mediaType: "movie" | "tv" = item.media_type === "tv" ? "tv" : "movie";
+  const year =
+    typeof item.year === "number" ? item.year : Number(item.year) || null;
   return {
     id: stableId(item.id),
     providerId: item.id,
@@ -71,10 +79,13 @@ function toCatalogMovie(item: StreamMovie): Movie {
     runtime: "",
     rating: "Rating unavailable",
     score: item.vote_average ?? null,
-    genre: item.genres?.length ? item.genres : [mediaType === "tv" ? "Series" : "Movie"],
+    genre: item.genres?.length
+      ? item.genres
+      : [mediaType === "tv" ? "Series" : "Movie"],
     poster: item.poster_url || null,
     backdrop: item.backdrop_url || null,
-    synopsis: item.overview || "Playable right now — pick it to start watching.",
+    synopsis:
+      item.overview || "Playable right now — pick it to start watching.",
     director: null,
     source: "tmdb",
     mediaType,
@@ -154,7 +165,7 @@ export function useCatalog(): UseCatalog {
   // Handle live searches against Flask backend with debounce and caching
   useEffect(() => {
     const query = search.trim();
-    
+
     if (!query) {
       setSearchResults([]);
       setSearchLoading(false);
@@ -189,7 +200,10 @@ export function useCatalog(): UseCatalog {
       searchCatalog(query)
         .then(results => {
           if (!controller.signal.aborted) {
-            searchCacheRef.current.set(query, { results, timestamp: Date.now() });
+            searchCacheRef.current.set(query, {
+              results,
+              timestamp: Date.now(),
+            });
             setSearchResults(results);
             setSearchLoading(false);
           }
@@ -215,22 +229,32 @@ export function useCatalog(): UseCatalog {
 
   const searching = search.trim().length > 0;
   const activeStreamMovies = searching ? searchResults : catalogItems;
-  const movies = useMemo(() => activeStreamMovies.map(toCatalogMovie), [activeStreamMovies]);
+  const movies = useMemo(
+    () => activeStreamMovies.map(toCatalogMovie),
+    [activeStreamMovies]
+  );
 
   const filtered = useMemo(() => {
     if (searching) return movies;
-    let base = genre === "All" ? movies : movies.filter(movie => movie.genre.includes(genre));
-    
+    let base =
+      genre === "All"
+        ? movies
+        : movies.filter(movie => movie.genre.includes(genre));
+
     // Filter by media type for TV-specific views
     if (VIEWS_WITH_TV_FILTER.includes(view)) {
       if (view === "tv") {
         base = base.filter(movie => movie.mediaType === "tv");
       } else if (view === "trending") {
         // Trending shows both but prioritizes TV
-        base = base.filter(movie => movie.mediaType === "tv" || movie.popularity && movie.popularity > 50);
+        base = base.filter(
+          movie =>
+            movie.mediaType === "tv" ||
+            (movie.popularity && movie.popularity > 50)
+        );
       }
     }
-    
+
     return base;
   }, [genre, movies, searching, view]);
 
@@ -248,13 +272,9 @@ export function useCatalog(): UseCatalog {
           { title: "Popular on FreeStream", items: filtered.slice(0, cap) },
         ];
       case "trending":
-        return [
-          { title: "Trending Now", items: filtered.slice(0, cap) },
-        ];
+        return [{ title: "Trending Now", items: filtered.slice(0, cap) }];
       case "tv":
-        return [
-          { title: "TV Series", items: filtered.slice(0, cap) },
-        ];
+        return [{ title: "TV Series", items: filtered.slice(0, cap) }];
       case "my-list":
         return [
           {
@@ -263,9 +283,7 @@ export function useCatalog(): UseCatalog {
           },
         ];
       case "downloads":
-        return [
-          { title: "Downloads", items: filtered.slice(0, cap) },
-        ];
+        return [{ title: "Downloads", items: filtered.slice(0, cap) }];
       default:
         return [
           { title: "Trending Now", items: filtered.slice(0, cap) },

@@ -38,20 +38,28 @@ async function proxyToFlask(req: express.Request, res: express.Response) {
       method: req.method,
       headers: {
         "Content-Type": "application/json",
-        ...(req.headers["content-length"] && { "Content-Length": req.headers["content-length"] }),
+        ...(req.headers["content-length"] && {
+          "Content-Length": req.headers["content-length"],
+        }),
       },
-      body: req.method !== "GET" && req.method !== "HEAD" ? JSON.stringify(req.body) : undefined,
+      body:
+        req.method !== "GET" && req.method !== "HEAD"
+          ? JSON.stringify(req.body)
+          : undefined,
     });
 
     const data = await response.text();
-    
+
     // Copy headers properly
     response.headers.forEach((value, key) => {
-      if (key.toLowerCase() !== "content-encoding" && key.toLowerCase() !== "transfer-encoding") {
+      if (
+        key.toLowerCase() !== "content-encoding" &&
+        key.toLowerCase() !== "transfer-encoding"
+      ) {
         res.setHeader(key, value);
       }
     });
-    
+
     res.status(response.status).send(data);
   } catch (err) {
     console.error("[Proxy Error]", err);

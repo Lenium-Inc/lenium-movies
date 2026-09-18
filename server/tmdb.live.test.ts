@@ -4,10 +4,11 @@ import { getMovieById, searchMovies } from "./providers/tmdb";
 describe("TMDB live credential", () => {
   it("authenticates against the lightweight configuration endpoint", async () => {
     const apiKey = process.env.TMDB_API_KEY;
-    if (!apiKey) throw new Error("TMDB_API_KEY is not available to the test process");
+    if (!apiKey)
+      throw new Error("TMDB_API_KEY is not available to the test process");
 
     const response = await fetch(
-      `https://api.themoviedb.org/3/configuration?api_key=${encodeURIComponent(apiKey)}`,
+      `https://api.themoviedb.org/3/configuration?api_key=${encodeURIComponent(apiKey)}`
     );
 
     expect(response.ok).toBe(true);

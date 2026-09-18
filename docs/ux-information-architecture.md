@@ -20,27 +20,27 @@ The redesign reduces hero prominence, moves navigation and categories closer to 
 
 The shell is present on authenticated and public catalogue routes. It provides a stable way to move between discovery contexts without returning to the homepage.
 
-| Area | Desktop | Tablet | Mobile | Purpose |
-|---|---|---|---|---|
-| Sidebar | Expanded or collapsed | Collapsed by default | Replaced by bottom navigation and drawer | Primary catalogue navigation |
-| Header | Brand, global search, profile | Brand, search, profile | Brand, search icon, menu | Global orientation and search |
-| Main content | Dense rows and grids | Dense rows and grids | Swipeable rows and compact grids | Discovery and selection |
-| Player state | Dedicated route or modal | Dedicated route or modal | Full-screen route or bottom sheet | Authorized playback only |
+| Area         | Desktop                       | Tablet                   | Mobile                                   | Purpose                       |
+| ------------ | ----------------------------- | ------------------------ | ---------------------------------------- | ----------------------------- |
+| Sidebar      | Expanded or collapsed         | Collapsed by default     | Replaced by bottom navigation and drawer | Primary catalogue navigation  |
+| Header       | Brand, global search, profile | Brand, search, profile   | Brand, search icon, menu                 | Global orientation and search |
+| Main content | Dense rows and grids          | Dense rows and grids     | Swipeable rows and compact grids         | Discovery and selection       |
+| Player state | Dedicated route or modal      | Dedicated route or modal | Full-screen route or bottom sheet        | Authorized playback only      |
 
 ### Sidebar navigation
 
 The expanded desktop sidebar is approximately **224–248 pixels wide**. It uses the existing dark surface and grayscale accent system. It should not visually dominate the catalogue.
 
-| Navigation item | Route | Visibility | Behavior |
-|---|---|---|---|
-| Home | `/` | Public | Personalized or general discovery landing page |
-| Movies | `/movies` | Public | Movie catalogue landing page |
-| TV Shows | `/tv` | Public when TV records exist | TV catalogue landing page; do not show an empty fake section |
-| New | `/recently-added` | Public | Recently ingested and approved records |
-| Popular | `/popular` | Public | Provider-backed popularity ordering |
-| Genres | `/genres` | Public | Genre directory with real counts only when counts exist |
-| Collections | `/collections` | Public | Curated collections containing real records |
-| My List | `/my-list` | Authenticated | Persisted watchlist; unauthenticated users see a sign-in explanation |
+| Navigation item | Route             | Visibility                   | Behavior                                                             |
+| --------------- | ----------------- | ---------------------------- | -------------------------------------------------------------------- |
+| Home            | `/`               | Public                       | Personalized or general discovery landing page                       |
+| Movies          | `/movies`         | Public                       | Movie catalogue landing page                                         |
+| TV Shows        | `/tv`             | Public when TV records exist | TV catalogue landing page; do not show an empty fake section         |
+| New             | `/recently-added` | Public                       | Recently ingested and approved records                               |
+| Popular         | `/popular`        | Public                       | Provider-backed popularity ordering                                  |
+| Genres          | `/genres`         | Public                       | Genre directory with real counts only when counts exist              |
+| Collections     | `/collections`    | Public                       | Curated collections containing real records                          |
+| My List         | `/my-list`        | Authenticated                | Persisted watchlist; unauthenticated users see a sign-in explanation |
 
 The sidebar includes no fabricated badges, watch counts, notification counts, or catalogue totals. If a destination has no records, the interface explains why and provides an appropriate next action.
 
@@ -101,13 +101,13 @@ Rows are populated from real provider or curated records. A row must be hidden, 
 
 Posters are the primary visual object. Cards use a consistent **2:3 poster ratio**, a restrained radius, and a dark surface behind missing artwork. Cards should not use oversized title typography.
 
-| Card element | Desktop | Tablet | Mobile |
-|---|---|---|---|
-| Poster width | 150–180px | 140–165px | 124–150px |
-| Poster ratio | 2:3 | 2:3 | 2:3 |
-| Visible metadata | Title, year, genre, score if available | Same | Title, year, score if available |
-| Hover/focus action | Details, save, trailer if available | Focus-visible actions | Tap opens details |
-| Motion | 150–220ms opacity/transform | Same | Minimal; respect reduced motion |
+| Card element       | Desktop                                | Tablet                | Mobile                          |
+| ------------------ | -------------------------------------- | --------------------- | ------------------------------- |
+| Poster width       | 150–180px                              | 140–165px             | 124–150px                       |
+| Poster ratio       | 2:3                                    | 2:3                   | 2:3                             |
+| Visible metadata   | Title, year, genre, score if available | Same                  | Title, year, score if available |
+| Hover/focus action | Details, save, trailer if available    | Focus-visible actions | Tap opens details               |
+| Motion             | 150–220ms opacity/transform            | Same                  | Minimal; respect reduced motion |
 
 Ratings are displayed only when the source, scale, and provenance are known. Missing values use labels such as **Rating unavailable**, not invented numeric values. Watch counts, popularity claims, and review summaries are excluded unless backed by real data.
 
@@ -115,12 +115,12 @@ Ratings are displayed only when the source, scale, and provenance are known. Mis
 
 The discovery experience is a dedicated route rather than a modal-only feature.
 
-| Route | Main controls | Result shape |
-|---|---|---|
-| `/discover` | Genre, year, country, language, runtime, score, release date | Dense poster grid with result count only when real |
-| `/search` | Query, result type, optional filters | Grouped results for movies, people, and genres |
-| `/genres` | Genre directory | Real genre records and real movie links |
-| `/collections` | Curated collection directory | Collection cards and real member titles |
+| Route          | Main controls                                                | Result shape                                       |
+| -------------- | ------------------------------------------------------------ | -------------------------------------------------- |
+| `/discover`    | Genre, year, country, language, runtime, score, release date | Dense poster grid with result count only when real |
+| `/search`      | Query, result type, optional filters                         | Grouped results for movies, people, and genres     |
+| `/genres`      | Genre directory                                              | Real genre records and real movie links            |
+| `/collections` | Curated collection directory                                 | Collection cards and real member titles            |
 
 Mood prompts such as **Something funny**, **Something scary**, **Something romantic**, **Something intense**, and **Under 90 minutes** are query shortcuts. They must resolve to documented filters or curated collections. A mood button must not pretend to use personalization when no behavioral model exists.
 
@@ -175,17 +175,17 @@ The mobile details surface may use a bottom sheet, but it must preserve an obvio
 
 ## State and trust requirements
 
-| State | Required interface behavior |
-|---|---|
-| Loading | Show stable skeletons that preserve row geometry |
-| Empty catalogue | Explain the missing provider or records; do not show fixtures |
-| Provider error | Preserve navigation and show retry guidance |
-| Missing artwork | Show an explicit artwork-unavailable surface |
-| Missing rating | Show “Rating unavailable” or omit the rating |
-| Trailer unavailable | Omit the player and state that no verified trailer was found |
-| Playback unavailable | Show a disabled or explanatory watch state; never simulate playback |
-| Unauthorized My List | Explain sign-in and do not claim persistence |
-| Deleted or expired record | Use redirect, 404, or 410 policy from the SEO specification |
+| State                     | Required interface behavior                                         |
+| ------------------------- | ------------------------------------------------------------------- |
+| Loading                   | Show stable skeletons that preserve row geometry                    |
+| Empty catalogue           | Explain the missing provider or records; do not show fixtures       |
+| Provider error            | Preserve navigation and show retry guidance                         |
+| Missing artwork           | Show an explicit artwork-unavailable surface                        |
+| Missing rating            | Show “Rating unavailable” or omit the rating                        |
+| Trailer unavailable       | Omit the player and state that no verified trailer was found        |
+| Playback unavailable      | Show a disabled or explanatory watch state; never simulate playback |
+| Unauthorized My List      | Explain sign-in and do not claim persistence                        |
+| Deleted or expired record | Use redirect, 404, or 410 policy from the SEO specification         |
 
 ## Implementation guardrails
 

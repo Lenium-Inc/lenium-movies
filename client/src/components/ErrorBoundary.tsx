@@ -39,8 +39,13 @@ export class ErrorBoundary extends Component<Props, State> {
       return (
         <div className="flex items-center justify-center min-h-[200px] p-8 bg-[#050505]">
           <div className="flex flex-col items-center w-full max-w-md p-6 text-center">
-            <AlertTriangle size={48} className="text-red-500 mb-4 flex-shrink-0" />
-            <h2 className="text-lg font-semibold text-white mb-2">Something went wrong</h2>
+            <AlertTriangle
+              size={48}
+              className="text-red-500 mb-4 flex-shrink-0"
+            />
+            <h2 className="text-lg font-semibold text-white mb-2">
+              Something went wrong
+            </h2>
             <p className="text-sm text-zinc-400 mb-6">
               We couldn't load this section. Please try again.
             </p>

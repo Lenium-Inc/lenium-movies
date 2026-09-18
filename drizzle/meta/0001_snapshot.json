@@ -81,17 +81,13 @@
       "compositePrimaryKeys": {
         "users_id": {
           "name": "users_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {
         "users_openId_unique": {
           "name": "users_openId_unique",
-          "columns": [
-            "openId"
-          ]
+          "columns": ["openId"]
         }
       },
       "checkConstraint": {}
@@ -219,18 +215,12 @@
       "indexes": {
         "videoAssets_movie_provider_video_unique": {
           "name": "videoAssets_movie_provider_video_unique",
-          "columns": [
-            "movieId",
-            "provider",
-            "providerVideoId"
-          ],
+          "columns": ["movieId", "provider", "providerVideoId"],
           "isUnique": true
         },
         "videoAssets_movie_id_idx": {
           "name": "videoAssets_movie_id_idx",
-          "columns": [
-            "movieId"
-          ],
+          "columns": ["movieId"],
           "isUnique": false
         }
       },
@@ -238,9 +228,7 @@
       "compositePrimaryKeys": {
         "videoAssets_id": {
           "name": "videoAssets_id",
-          "columns": [
-            "id"
-          ]
+          "columns": ["id"]
         }
       },
       "uniqueConstraints": {},

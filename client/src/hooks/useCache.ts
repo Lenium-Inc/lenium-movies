@@ -45,7 +45,7 @@ export function createCache<T>(options: CacheOptions = {}) {
     }
 
     const promise = fetcher().then(
-      (data) => {
+      data => {
         cache.set(key, { data, timestamp: Date.now() });
         if (cache.size > maxSize) {
           const firstKey = cache.keys().next().value;
@@ -54,7 +54,7 @@ export function createCache<T>(options: CacheOptions = {}) {
         inflight.delete(key);
         return data;
       },
-      (error) => {
+      error => {
         inflight.delete(key);
         throw error;
       }
@@ -91,19 +91,23 @@ export function createCache<T>(options: CacheOptions = {}) {
 export function useCache<T>(options: CacheOptions = {}) {
   const cacheRef = useRef(createCache<T>(options));
 
-  const get = useCallback(
-    (key: string) => cacheRef.current.get(key),
-    []
-  );
+  const get = useCallback((key: string) => cacheRef.current.get(key), []);
 
   const fetch = useCallback(
-    (key: string, fetcher: () => Promise<T>) => cacheRef.current.fetch(key, fetcher),
+    (key: string, fetcher: () => Promise<T>) =>
+      cacheRef.current.fetch(key, fetcher),
     []
   );
 
-  const set = useCallback((key: string, data: T) => cacheRef.current.set(key, data), []);
+  const set = useCallback(
+    (key: string, data: T) => cacheRef.current.set(key, data),
+    []
+  );
 
-  const invalidate = useCallback((key: string) => cacheRef.current.invalidate(key), []);
+  const invalidate = useCallback(
+    (key: string) => cacheRef.current.invalidate(key),
+    []
+  );
 
   const clear = useCallback(() => cacheRef.current.clear(), []);
 

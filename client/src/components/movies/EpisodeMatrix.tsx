@@ -57,7 +57,9 @@ export function EpisodeMatrix({ movie, onPlay }: EpisodeMatrixProps) {
   const [openSeasons, setOpenSeasons] = useState<Set<number>>(new Set());
 
   // Episode detail state - preloaded for all episodes
-  const [episodeDetails, setEpisodeDetails] = useState<Map<string, StreamEpisode>>(new Map());
+  const [episodeDetails, setEpisodeDetails] = useState<
+    Map<string, StreamEpisode>
+  >(new Map());
   const [loadingDetails, setLoadingDetails] = useState<Set<string>>(new Set());
 
   const fraction = getProgressFraction(movie.id);
@@ -75,21 +77,30 @@ export function EpisodeMatrix({ movie, onPlay }: EpisodeMatrixProps) {
   // Preload episode details for all episodes when component mounts
   useEffect(() => {
     if (!movie.id || !/^\d+$/.test(movie.id)) return;
-    
+
     const loadAllEpisodeDetails = async () => {
       for (const episode of episodes) {
         const key = `${episode.season}-${episode.number}`;
         if (episodeDetails.has(key) || loadingDetails.has(key)) continue;
-        
+
         setLoadingDetails(prev => new Set(prev).add(key));
-        
+
         try {
-          const details = await fetchEpisodeDetails(movie.id, episode.season, episode.number);
+          const details = await fetchEpisodeDetails(
+            movie.id,
+            episode.season,
+            episode.number
+          );
           if (details) {
-            setEpisodeDetails(prev => new Map(prev).set(key, { ...episode, ...details }));
+            setEpisodeDetails(prev =>
+              new Map(prev).set(key, { ...episode, ...details })
+            );
           }
         } catch (error) {
-          console.warn(`Failed to fetch episode details for S${episode.season}E${episode.number}:`, error);
+          console.warn(
+            `Failed to fetch episode details for S${episode.season}E${episode.number}:`,
+            error
+          );
         } finally {
           setLoadingDetails(prev => {
             const next = new Set(prev);
@@ -99,31 +110,40 @@ export function EpisodeMatrix({ movie, onPlay }: EpisodeMatrixProps) {
         }
       }
     };
-    
+
     loadAllEpisodeDetails();
   }, [movie.id, episodes]);
 
   // Also load details when a season is expanded (for any not yet loaded)
   useEffect(() => {
     if (!movie.id || !/^\d+$/.test(movie.id)) return;
-    
+
     const loadVisibleEpisodeDetails = async () => {
       for (const [season, list] of grouped) {
         if (!openSeasons.has(season)) continue;
-        
+
         for (const episode of list) {
           const key = `${episode.season}-${episode.number}`;
           if (episodeDetails.has(key) || loadingDetails.has(key)) continue;
-          
+
           setLoadingDetails(prev => new Set(prev).add(key));
-          
+
           try {
-            const details = await fetchEpisodeDetails(movie.id, episode.season, episode.number);
+            const details = await fetchEpisodeDetails(
+              movie.id,
+              episode.season,
+              episode.number
+            );
             if (details) {
-              setEpisodeDetails(prev => new Map(prev).set(key, { ...episode, ...details }));
+              setEpisodeDetails(prev =>
+                new Map(prev).set(key, { ...episode, ...details })
+              );
             }
           } catch (error) {
-            console.warn(`Failed to fetch episode details for S${episode.season}E${episode.number}:`, error);
+            console.warn(
+              `Failed to fetch episode details for S${episode.season}E${episode.number}:`,
+              error
+            );
           } finally {
             setLoadingDetails(prev => {
               const next = new Set(prev);
@@ -134,7 +154,7 @@ export function EpisodeMatrix({ movie, onPlay }: EpisodeMatrixProps) {
         }
       }
     };
-    
+
     loadVisibleEpisodeDetails();
   }, [openSeasons, movie.id, grouped, episodeDetails, loadingDetails]);
 
@@ -143,7 +163,9 @@ export function EpisodeMatrix({ movie, onPlay }: EpisodeMatrixProps) {
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-white/80">
           {episodes.length === 1 ? "Feature" : "Episodes"}
-          {episodes.length > 1 && <span className="ml-1 text-white/50">• {episodes.length}</span>}
+          {episodes.length > 1 && (
+            <span className="ml-1 text-white/50">• {episodes.length}</span>
+          )}
         </h2>
         {fraction > 0 && (
           <span
@@ -192,7 +214,7 @@ export function EpisodeMatrix({ movie, onPlay }: EpisodeMatrixProps) {
                     const key = `${season}-${episode.number}`;
                     const details = episodeDetails.get(key);
                     const isLoading = loadingDetails.has(key);
-                    
+
                     return (
                       <li
                         key={key}
@@ -230,7 +252,9 @@ export function EpisodeMatrix({ movie, onPlay }: EpisodeMatrixProps) {
                                     <span>⏱ {details.runtime}min</span>
                                   )}
                                   {details.vote_average && (
-                                    <span>⭐ {details.vote_average.toFixed(1)}</span>
+                                    <span>
+                                      ⭐ {details.vote_average.toFixed(1)}
+                                    </span>
                                   )}
                                 </div>
                               </div>
@@ -251,7 +275,9 @@ export function EpisodeMatrix({ movie, onPlay }: EpisodeMatrixProps) {
                               <div className="h-1 w-32 overflow-hidden rounded-full bg-white/10">
                                 <div
                                   className="h-full rounded-full bg-white"
-                                  style={{ width: `${Math.round(fraction * 100)}%` }}
+                                  style={{
+                                    width: `${Math.round(fraction * 100)}%`,
+                                  }}
                                 />
                               </div>
                             ) : (

@@ -1,8 +1,41 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import { useLocation, useParams } from "wouter";
-import { Bookmark, Check, ChevronDown, ChevronUp, Play, Star, X, MessageSquare, Clock, Tv, Film, Loader2, AlertCircle, RefreshCw, WifiOff, Server, Monitor, Zap, Wifi, Settings, ChevronDown as ChevronDownIcon, ArrowLeft, Share2, Heart, Download, Volume2, Plus, User, MapPin, Globe, Calendar } from "lucide-react";
+import {
+  Bookmark,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  Play,
+  Star,
+  X,
+  MessageSquare,
+  Clock,
+  Tv,
+  Film,
+  Loader2,
+  AlertCircle,
+  RefreshCw,
+  WifiOff,
+  Server,
+  Monitor,
+  Zap,
+  Wifi,
+  Settings,
+  ChevronDown as ChevronDownIcon,
+  ArrowLeft,
+  Share2,
+  Heart,
+  Download,
+  Volume2,
+  Plus,
+  User,
+  MapPin,
+  Globe,
+  Calendar,
+} from "lucide-react";
 import { getRating, setRating, subscribeRatings } from "@/services/ratings";
 import {
+  apiUrl,
   fetchTrailer,
   getStreamSource,
   resolveStream,
@@ -11,12 +44,16 @@ import {
   type StreamMovie,
   type TrailerInfo,
 } from "@/services/api";
-import { VideoPlayer, type PlaybackError, type EmbedProvider, type StreamMirror, type QualityOption, QUALITY_ORDER } from "@/components/stream/VideoPlayer";
-import { EpisodeMatrix } from "@/components/movies/EpisodeMatrix";
 import {
-  cancelInFlightPrefetch,
-  prefetchForOpen,
-} from "@/services/prefetch";
+  VideoPlayer,
+  type PlaybackError,
+  type EmbedProvider,
+  type StreamMirror,
+  type QualityOption,
+  QUALITY_ORDER,
+} from "@/components/stream/VideoPlayer";
+import { EpisodeMatrix } from "@/components/movies/EpisodeMatrix";
+import { cancelInFlightPrefetch, prefetchForOpen } from "@/services/prefetch";
 import { attemptPlay } from "@/services/capGate";
 import {
   getProgress,
@@ -25,7 +62,13 @@ import {
 } from "@/services/stats";
 import type { Movie } from "@/components/movies/types";
 import { TrailerEmbed } from "@/components/movies/MediaCard";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -48,109 +91,122 @@ interface ProviderConfig {
   qualityParam: string;
   supportsMirrors: boolean;
   defaultQuality: string;
-  buildUrl: (tmdbId: string, mediaType: "movie" | "tv", season?: number, episode?: number) => string;
+  buildUrl: (
+    tmdbId: string,
+    mediaType: "movie" | "tv",
+    season?: number,
+    episode?: number
+  ) => string;
 }
 
 const PROVIDER_CONFIGS: Record<EmbedProvider, ProviderConfig> = {
-  "vidsrc": { 
-    name: "VidSrc", 
-    supportsQuality: true, 
-    qualityParam: "quality", 
-    supportsMirrors: true, 
+  vidsrc: {
+    name: "VidSrc",
+    supportsQuality: true,
+    qualityParam: "quality",
+    supportsMirrors: true,
     defaultQuality: "480p",
-    buildUrl: (tmdbId, mediaType, season, episode) => 
-      mediaType === "movie" 
+    buildUrl: (tmdbId, mediaType, season, episode) =>
+      mediaType === "movie"
         ? `https://vidsrc.cc/v2/embed/movie/${tmdbId}`
-        : `https://vidsrc.cc/v2/embed/tv/${tmdbId}/${season || 1}/${episode || 1}`
+        : `https://vidsrc.cc/v2/embed/tv/${tmdbId}/${season || 1}/${episode || 1}`,
   },
-  "embed.su": { 
-    name: "Embed.su", 
-    supportsQuality: true, 
-    qualityParam: "quality", 
-    supportsMirrors: true, 
+  "embed.su": {
+    name: "Embed.su",
+    supportsQuality: true,
+    qualityParam: "quality",
+    supportsMirrors: true,
     defaultQuality: "480p",
-    buildUrl: (tmdbId, mediaType, season, episode) => 
-      mediaType === "movie" 
+    buildUrl: (tmdbId, mediaType, season, episode) =>
+      mediaType === "movie"
         ? `https://embed.su/embed/movie/${tmdbId}`
-        : `https://embed.su/embed/tv/${tmdbId}/${season || 1}/${episode || 1}`
+        : `https://embed.su/embed/tv/${tmdbId}/${season || 1}/${episode || 1}`,
   },
-  "autoembed": { 
-    name: "AutoEmbed", 
-    supportsQuality: true, 
-    qualityParam: "quality", 
-    supportsMirrors: true, 
+  autoembed: {
+    name: "AutoEmbed",
+    supportsQuality: true,
+    qualityParam: "quality",
+    supportsMirrors: true,
     defaultQuality: "480p",
-    buildUrl: (tmdbId, mediaType, season, episode) => 
-      mediaType === "movie" 
+    buildUrl: (tmdbId, mediaType, season, episode) =>
+      mediaType === "movie"
         ? `https://autoembed.cc/embed/movie/${tmdbId}`
-        : `https://autoembed.cc/embed/tv/${tmdbId}/${season || 1}/${episode || 1}`
+        : `https://autoembed.cc/embed/tv/${tmdbId}/${season || 1}/${episode || 1}`,
   },
-  "2embed": { 
-    name: "2Embed", 
-    supportsQuality: true, 
-    qualityParam: "q", 
-    supportsMirrors: false, 
+  "2embed": {
+    name: "2Embed",
+    supportsQuality: true,
+    qualityParam: "q",
+    supportsMirrors: false,
     defaultQuality: "480p",
-    buildUrl: (tmdbId, mediaType, season, episode) => 
-      mediaType === "movie" 
+    buildUrl: (tmdbId, mediaType, season, episode) =>
+      mediaType === "movie"
         ? `https://2embed.cc/embed/movie/${tmdbId}`
-        : `https://2embed.cc/embed/tv/${tmdbId}/${season || 1}/${episode || 1}`
+        : `https://2embed.cc/embed/tv/${tmdbId}/${season || 1}/${episode || 1}`,
   },
-  "multiembed": { 
-    name: "MultiEmbed", 
-    supportsQuality: true, 
-    qualityParam: "qual", 
-    supportsMirrors: false, 
+  multiembed: {
+    name: "MultiEmbed",
+    supportsQuality: true,
+    qualityParam: "qual",
+    supportsMirrors: false,
     defaultQuality: "480p",
-    buildUrl: (tmdbId, mediaType, season, episode) => 
-      mediaType === "movie" 
+    buildUrl: (tmdbId, mediaType, season, episode) =>
+      mediaType === "movie"
         ? `https://multiembed.mov/directstream.php?video_id=${tmdbId}&tmdb=1`
-        : `https://multiembed.mov/directstream.php?video_id=${tmdbId}&tmdb=1&s=${season || 1}&e=${episode || 1}`
+        : `https://multiembed.mov/directstream.php?video_id=${tmdbId}&tmdb=1&s=${season || 1}&e=${episode || 1}`,
   },
-  "goojara": { 
-    name: "Goojara", 
-    supportsQuality: false, 
-    qualityParam: "", 
-    supportsMirrors: false, 
+  goojara: {
+    name: "Goojara",
+    supportsQuality: false,
+    qualityParam: "",
+    supportsMirrors: false,
     defaultQuality: "auto",
-    buildUrl: (tmdbId, mediaType, season, episode) => 
-      mediaType === "movie" 
+    buildUrl: (tmdbId, mediaType, season, episode) =>
+      mediaType === "movie"
         ? `https://goojara.to/embed/movie/${tmdbId}`
-        : `https://goojara.to/embed/tv/${tmdbId}/${season || 1}/${episode || 1}`
+        : `https://goojara.to/embed/tv/${tmdbId}/${season || 1}/${episode || 1}`,
   },
-  "vidlink": { 
-    name: "VidLink", 
-    supportsQuality: true, 
-    qualityParam: "quality", 
-    supportsMirrors: true, 
+  vidlink: {
+    name: "VidLink",
+    supportsQuality: true,
+    qualityParam: "quality",
+    supportsMirrors: true,
     defaultQuality: "480p",
-    buildUrl: (tmdbId, mediaType, season, episode) => 
-      mediaType === "movie" 
+    buildUrl: (tmdbId, mediaType, season, episode) =>
+      mediaType === "movie"
         ? `https://vidlink.org/embed/movie/${tmdbId}`
-        : `https://vidlink.org/embed/tv/${tmdbId}/${season || 1}/${episode || 1}`
+        : `https://vidlink.org/embed/tv/${tmdbId}/${season || 1}/${episode || 1}`,
   },
-  "vidstream": { 
-    name: "VidStream", 
-    supportsQuality: true, 
-    qualityParam: "quality", 
-    supportsMirrors: true, 
+  vidstream: {
+    name: "VidStream",
+    supportsQuality: true,
+    qualityParam: "quality",
+    supportsMirrors: true,
     defaultQuality: "480p",
-    buildUrl: (tmdbId, mediaType, season, episode) => 
-      mediaType === "movie" 
+    buildUrl: (tmdbId, mediaType, season, episode) =>
+      mediaType === "movie"
         ? `https://vidstream.pro/embed/movie/${tmdbId}`
-        : `https://vidstream.pro/embed/tv/${tmdbId}/${season || 1}/${episode || 1}`
+        : `https://vidstream.pro/embed/tv/${tmdbId}/${season || 1}/${episode || 1}`,
   },
-  "unknown": { 
-    name: "Unknown", 
-    supportsQuality: false, 
-    qualityParam: "", 
-    supportsMirrors: false, 
+  unknown: {
+    name: "Unknown",
+    supportsQuality: false,
+    qualityParam: "",
+    supportsMirrors: false,
     defaultQuality: "auto",
-    buildUrl: () => ""
+    buildUrl: () => "",
   },
 };
 
-const FALLBACK_PROVIDER_ORDER: EmbedProvider[] = ["vidsrc", "embed.su", "autoembed", "vidlink", "vidstream", "2embed", "multiembed"];
+const FALLBACK_PROVIDER_ORDER: EmbedProvider[] = [
+  "vidsrc",
+  "embed.su",
+  "autoembed",
+  "vidlink",
+  "vidstream",
+  "2embed",
+  "multiembed",
+];
 
 function detectEmbedProvider(url: string): EmbedProvider {
   try {
@@ -169,8 +225,13 @@ function detectEmbedProvider(url: string): EmbedProvider {
   return "unknown";
 }
 
-function applyQualityToUrl(url: string, quality: string, provider: EmbedProvider): string {
-  if (provider === "unknown" || !PROVIDER_CONFIGS[provider]?.supportsQuality) return url;
+function applyQualityToUrl(
+  url: string,
+  quality: string,
+  provider: EmbedProvider
+): string {
+  if (provider === "unknown" || !PROVIDER_CONFIGS[provider]?.supportsQuality)
+    return url;
   try {
     const urlObj = new URL(url);
     const config = PROVIDER_CONFIGS[provider];
@@ -181,49 +242,123 @@ function applyQualityToUrl(url: string, quality: string, provider: EmbedProvider
   }
 }
 
-function buildFallbackUrls(tmdbId: string, mediaType: "movie" | "tv", season?: number, episode?: number): { provider: EmbedProvider; url: string }[] {
+function buildFallbackUrls(
+  tmdbId: string,
+  mediaType: "movie" | "tv",
+  season?: number,
+  episode?: number
+): { provider: EmbedProvider; url: string }[] {
   return FALLBACK_PROVIDER_ORDER.map(provider => ({
     provider,
-    url: PROVIDER_CONFIGS[provider].buildUrl(tmdbId, mediaType, season, episode)
+    url: PROVIDER_CONFIGS[provider].buildUrl(
+      tmdbId,
+      mediaType,
+      season,
+      episode
+    ),
   })).filter(item => item.url);
 }
 
-function classifyError(error: unknown, provider?: EmbedProvider): PlaybackError {
+function classifyError(
+  error: unknown,
+  provider?: EmbedProvider
+): PlaybackError {
   const message = error instanceof Error ? error.message : String(error);
   const lowerMessage = message.toLowerCase();
-  
+
   if (error instanceof StreamNotFoundError) {
-    return { type: "not_found", message: `"${error.message.replace('No playable stream found for "', '').replace('"', '')}" isn't available to stream yet.`, recoverable: false, provider, retryCount: 0 };
+    return {
+      type: "not_found",
+      message: `"${error.message.replace('No playable stream found for "', "").replace('"', "")}" isn't available to stream yet.`,
+      recoverable: false,
+      provider,
+      retryCount: 0,
+    };
   }
-  
+
   if (lowerMessage.includes("404") || lowerMessage.includes("not found")) {
-    return { type: "not_found", message: "This title isn't available to stream.", recoverable: false, provider, retryCount: 0 };
+    return {
+      type: "not_found",
+      message: "This title isn't available to stream.",
+      recoverable: false,
+      provider,
+      retryCount: 0,
+    };
   }
-  
-  if (lowerMessage.includes("403") || lowerMessage.includes("forbidden") || lowerMessage.includes("geo") || lowerMessage.includes("region")) {
-    return { type: "geo_blocked", message: "This content is not available in your region.", recoverable: false, provider, retryCount: 0 };
+
+  if (
+    lowerMessage.includes("403") ||
+    lowerMessage.includes("forbidden") ||
+    lowerMessage.includes("geo") ||
+    lowerMessage.includes("region")
+  ) {
+    return {
+      type: "geo_blocked",
+      message: "This content is not available in your region.",
+      recoverable: false,
+      provider,
+      retryCount: 0,
+    };
   }
-  
-  if (lowerMessage.includes("429") || lowerMessage.includes("rate limit") || lowerMessage.includes("too many requests")) {
-    return { type: "rate_limited", message: "Too many requests. Please wait a moment and try again.", recoverable: true, provider, retryCount: 0 };
+
+  if (
+    lowerMessage.includes("429") ||
+    lowerMessage.includes("rate limit") ||
+    lowerMessage.includes("too many requests")
+  ) {
+    return {
+      type: "rate_limited",
+      message: "Too many requests. Please wait a moment and try again.",
+      recoverable: true,
+      provider,
+      retryCount: 0,
+    };
   }
-  
-  if (lowerMessage.includes("network") || lowerMessage.includes("fetch") || lowerMessage.includes("connection") || lowerMessage.includes("timeout")) {
-    return { type: "network", message: "Network error. Please check your connection and try again.", recoverable: true, provider, retryCount: 0 };
+
+  if (
+    lowerMessage.includes("network") ||
+    lowerMessage.includes("fetch") ||
+    lowerMessage.includes("connection") ||
+    lowerMessage.includes("timeout")
+  ) {
+    return {
+      type: "network",
+      message: "Network error. Please check your connection and try again.",
+      recoverable: true,
+      provider,
+      retryCount: 0,
+    };
   }
-  
-  if (lowerMessage.includes("embed") || lowerMessage.includes("provider") || lowerMessage.includes("source")) {
-    return { type: "provider_unavailable", message: "The streaming provider is currently unavailable. Trying alternative sources...", recoverable: true, provider, retryCount: 0 };
+
+  if (
+    lowerMessage.includes("embed") ||
+    lowerMessage.includes("provider") ||
+    lowerMessage.includes("source")
+  ) {
+    return {
+      type: "provider_unavailable",
+      message:
+        "The streaming provider is currently unavailable. Trying alternative sources...",
+      recoverable: true,
+      provider,
+      retryCount: 0,
+    };
   }
-  
-  return { type: "unknown", message: "We couldn't load this stream. Please try again.", recoverable: true, provider, retryCount: 0 };
+
+  return {
+    type: "unknown",
+    message: "We couldn't load this stream. Please try again.",
+    recoverable: true,
+    provider,
+    retryCount: 0,
+  };
 }
 
 // Fetch full movie details from TMDB via backend resolve endpoint
 async function fetchMovieDetails(tmdbId: string): Promise<Movie | null> {
   try {
     // Use resolve endpoint with the TMDB ID as title to get full metadata
-    const response = await fetch(`/api/movies/resolve`, {
+    const response = await fetch(apiUrl("/api/movies/resolve"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: tmdbId }),
@@ -231,11 +366,11 @@ async function fetchMovieDetails(tmdbId: string): Promise<Movie | null> {
     if (!response.ok) return null;
     const data = await response.json();
     if (!data.movie) return null;
-    
+
     const m = data.movie;
     const mediaType = m.media_type === "tv" ? "tv" : "movie";
     const year = m.year ? parseInt(m.year) : null;
-    
+
     return {
       id: parseInt(m.id),
       providerId: m.id,
@@ -244,7 +379,9 @@ async function fetchMovieDetails(tmdbId: string): Promise<Movie | null> {
       runtime: "",
       rating: "Rating unavailable",
       score: m.vote_average ?? null,
-      genre: m.genres?.length ? m.genres : [mediaType === "tv" ? "Series" : "Movie"],
+      genre: m.genres?.length
+        ? m.genres
+        : [mediaType === "tv" ? "Series" : "Movie"],
       poster: m.poster_url,
       backdrop: m.backdrop_url || m.poster_url,
       synopsis: m.overview || "Loading...",
@@ -260,14 +397,16 @@ async function fetchMovieDetails(tmdbId: string): Promise<Movie | null> {
 export function WatchPage() {
   const [location, navigate] = useLocation();
   const params = useParams();
-  
+
   // Extract media info from URL: /watch/:id?season=1&episode=1&type=tv
   const tmdbId = params.id;
-  const searchParams = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
+  const searchParams = new URLSearchParams(
+    typeof window !== "undefined" ? window.location.search : ""
+  );
   const urlSeason = parseInt(searchParams.get("season") || "1", 10);
   const urlEpisode = parseInt(searchParams.get("episode") || "1", 10);
   const urlType = searchParams.get("type") || "movie";
-  
+
   const [movie, setMovie] = useState<Movie | null>(null);
   const [movieLoading, setMovieLoading] = useState(true);
   const [resolved, setResolved] = useState<ResolvedStream | null>(null);
@@ -283,25 +422,30 @@ export function WatchPage() {
   const [showEpisodeDetails, setShowEpisodeDetails] = useState(false);
   const [episodeDetails, setEpisodeDetails] = useState<any>(null);
   const [currentEpisodeTitle, setCurrentEpisodeTitle] = useState("");
-  
+
   // Multi-provider embed state
-  const [currentProvider, setCurrentProvider] = useState<EmbedProvider>("vidsrc");
+  const [currentProvider, setCurrentProvider] =
+    useState<EmbedProvider>("vidsrc");
   const [availableMirrors, setAvailableMirrors] = useState<StreamMirror[]>([]);
   const [currentMirrorIndex, setCurrentMirrorIndex] = useState(0);
   const [selectedQuality, setSelectedQuality] = useState<QualityOption>("480p");
   const [isRetrying, setIsRetrying] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
-  
+
   // Fallback provider system
-  const [fallbackProviders, setFallbackProviders] = useState<{ provider: EmbedProvider; url: string }[]>([]);
+  const [fallbackProviders, setFallbackProviders] = useState<
+    { provider: EmbedProvider; url: string }[]
+  >([]);
   const [currentFallbackIndex, setCurrentFallbackIndex] = useState(0);
   const [embedLoadFailed, setEmbedLoadFailed] = useState(false);
   const [showProviderSelector, setShowProviderSelector] = useState(false);
-  
+
   // Refs for retry logic
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const embedLoadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const embedLoadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
   const iframeLoadRef = useRef<boolean>(false);
 
   // Fetch movie details on mount
@@ -361,21 +505,28 @@ export function WatchPage() {
   }, [movie?.title, movie?.year]);
 
   // Fetch episode details when season/episode changes
-  const fetchEpisodeInfo = useCallback(async (s: number, e: number) => {
-    if (!resolved?.stream.id || !/^\d+$/.test(resolved.stream.id)) return;
-    try {
-      const details = await fetch(`/api/episodes?tmdb_id=${resolved.stream.id}&season=${s}&episode=${e}`);
-      if (details.ok) {
-        const data = await details.json();
-        if (data.success) {
-          setEpisodeDetails(data.episode);
-          setCurrentEpisodeTitle(data.episode.title || `S${s} E${e}`);
+  const fetchEpisodeInfo = useCallback(
+    async (s: number, e: number) => {
+      if (!resolved?.stream.id || !/^\d+$/.test(resolved.stream.id)) return;
+      try {
+        const details = await fetch(
+          apiUrl(
+            `/api/episodes?tmdb_id=${resolved.stream.id}&season=${s}&episode=${e}`
+          )
+        );
+        if (details.ok) {
+          const data = await details.json();
+          if (data.success) {
+            setEpisodeDetails(data.episode);
+            setCurrentEpisodeTitle(data.episode.title || `S${s} E${e}`);
+          }
         }
+      } catch (err) {
+        console.warn("Failed to fetch episode details:", err);
       }
-    } catch (err) {
-      console.warn("Failed to fetch episode details:", err);
-    }
-  }, [resolved]);
+    },
+    [resolved]
+  );
 
   useEffect(() => {
     if (movie?.mediaType === "tv" && resolved?.stream.id) {
@@ -399,16 +550,16 @@ export function WatchPage() {
         return stream;
       } catch (error) {
         const playbackError = classifyError(error, currentProvider);
-        
+
         // Don't retry non-recoverable errors
         if (!playbackError.recoverable || attempt >= MAX_RETRY_ATTEMPTS) {
           throw error;
         }
-        
+
         // Wait before retry with exponential backoff
         const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
         await new Promise(resolve => setTimeout(resolve, delay));
-        
+
         // Retry
         return resolveWithRetry(title, year, options, attempt + 1);
       }
@@ -424,7 +575,7 @@ export function WatchPage() {
       setPlayError(null);
       setRetryCount(0);
       setIsRetrying(false);
-      
+
       // Cancel any pending retry
       if (retryTimeoutRef.current) {
         clearTimeout(retryTimeoutRef.current);
@@ -434,7 +585,9 @@ export function WatchPage() {
       try {
         let base = resolved?.stream ?? null;
         if (!base) {
-          const stream = await resolveWithRetry(movie.title, movie.year, { tmdbId: movie.providerId });
+          const stream = await resolveWithRetry(movie.title, movie.year, {
+            tmdbId: movie.providerId,
+          });
           setResolved(stream);
           base = stream.stream;
         }
@@ -446,14 +599,16 @@ export function WatchPage() {
           base.media_type === "movie" || base.media_type === "tv"
             ? base.media_type
             : null;
-        
+
         // Initialize fallback providers if we have a valid TMDB ID
         if (mediaType && /^\d+$/.test(base.id)) {
-          initializeFallbackProviders(base.id, mediaType, 
+          initializeFallbackProviders(
+            base.id,
+            mediaType,
             mediaType === "tv" ? targetSeason : undefined,
             mediaType === "tv" ? targetEpisode : undefined
           );
-          
+
           // Use the first fallback provider as the primary stream URL
           // This ensures we always have a working embed URL even if the resolved stream fails
           if (fallbackProviders.length > 0) {
@@ -463,15 +618,18 @@ export function WatchPage() {
               ...base,
               stream_url: primaryFallback.url,
               mirrors: [
-                { name: `${PROVIDER_CONFIGS[primaryFallback.provider]?.name || primaryFallback.provider} Server`, url: primaryFallback.url },
-                ...(base.mirrors || [])
+                {
+                  name: `${PROVIDER_CONFIGS[primaryFallback.provider]?.name || primaryFallback.provider} Server`,
+                  url: primaryFallback.url,
+                },
+                ...(base.mirrors || []),
               ],
               season: targetSeason,
               episode: targetEpisode,
             };
             setAvailableMirrors(playable.mirrors || []);
             setCurrentMirrorIndex(0);
-            
+
             const config = PROVIDER_CONFIGS[primaryFallback.provider];
             if (config?.supportsQuality) {
               setSelectedQuality(config.defaultQuality as QualityOption);
@@ -481,15 +639,18 @@ export function WatchPage() {
           // Detect provider from stream URL for non-TMDB content
           const provider = detectEmbedProvider(base.stream_url);
           setCurrentProvider(provider);
-          
+
           // Collect all mirrors
           const allMirrors: StreamMirror[] = [
-            { name: `${PROVIDER_CONFIGS[provider]?.name || "Primary"} Server`, url: base.stream_url },
+            {
+              name: `${PROVIDER_CONFIGS[provider]?.name || "Primary"} Server`,
+              url: base.stream_url,
+            },
             ...(base.mirrors || []),
           ];
           setAvailableMirrors(allMirrors);
           setCurrentMirrorIndex(0);
-          
+
           // Set default quality based on provider
           const config = PROVIDER_CONFIGS[provider];
           if (config?.supportsQuality) {
@@ -506,23 +667,26 @@ export function WatchPage() {
               season: mediaType === "tv" ? targetSeason : undefined,
               episode: mediaType === "tv" ? targetEpisode : undefined,
             });
-            
+
             // Update provider detection with the actual stream URL
             const actualProvider = detectEmbedProvider(source.url);
             setCurrentProvider(actualProvider);
-            
+
             const updatedMirrors: StreamMirror[] = [
-              { name: `${PROVIDER_CONFIGS[actualProvider]?.name || "Primary"} Server`, url: source.url },
+              {
+                name: `${PROVIDER_CONFIGS[actualProvider]?.name || "Primary"} Server`,
+                url: source.url,
+              },
               ...(source.mirrors || []),
             ];
             setAvailableMirrors(updatedMirrors);
             setCurrentMirrorIndex(0);
-            
+
             const actualConfig = PROVIDER_CONFIGS[actualProvider];
             if (actualConfig?.supportsQuality) {
               setSelectedQuality(actualConfig.defaultQuality as QualityOption);
             }
-            
+
             playable = {
               ...base,
               stream_url: source.url,
@@ -530,12 +694,12 @@ export function WatchPage() {
               season: targetSeason,
               episode: targetEpisode,
             };
-            
+
             // Re-initialize fallbacks with the actual provider as first option
             if (fallbackProviders.length > 0) {
               const reorderedFallbacks = [
                 { provider: actualProvider, url: source.url },
-                ...fallbackProviders.filter(f => f.provider !== actualProvider)
+                ...fallbackProviders.filter(f => f.provider !== actualProvider),
               ];
               setFallbackProviders(reorderedFallbacks);
               setCurrentFallbackIndex(0);
@@ -563,7 +727,7 @@ export function WatchPage() {
 
         setResolved({ stream: playable, exact: true });
         prefetchForOpen(playable);
-        
+
         // Update URL without navigation
         const isSeries = playable.media_type === "tv";
         const newUrl = `/watch/${movie.providerId}${isSeries ? `?season=${targetSeason}&episode=${targetEpisode}&type=tv` : ""}`;
@@ -575,7 +739,7 @@ export function WatchPage() {
           error
         );
         setPlayError({ ...playbackError, retryCount });
-        
+
         // Auto-retry for recoverable errors
         if (playbackError.recoverable && retryCount < MAX_RETRY_ATTEMPTS) {
           setIsRetrying(true);
@@ -589,7 +753,15 @@ export function WatchPage() {
         setResolving(false);
       }
     },
-    [movie, resolved, resolving, navigate, resolveWithRetry, currentProvider, retryCount]
+    [
+      movie,
+      resolved,
+      resolving,
+      navigate,
+      resolveWithRetry,
+      currentProvider,
+      retryCount,
+    ]
   );
 
   const play = useCallback(async () => {
@@ -632,7 +804,7 @@ export function WatchPage() {
     setCurrentProvider(nextProvider.provider);
     setEmbedLoadFailed(false);
     iframeLoadRef.current = false;
-    
+
     // Update the resolved stream with the new fallback URL
     if (resolved) {
       setResolved({
@@ -641,13 +813,16 @@ export function WatchPage() {
           ...resolved.stream,
           stream_url: nextProvider.url,
           mirrors: [
-            { name: `${PROVIDER_CONFIGS[nextProvider.provider]?.name || nextProvider.provider} Server`, url: nextProvider.url },
-            ...(resolved.stream.mirrors || [])
-          ]
-        }
+            {
+              name: `${PROVIDER_CONFIGS[nextProvider.provider]?.name || nextProvider.provider} Server`,
+              url: nextProvider.url,
+            },
+            ...(resolved.stream.mirrors || []),
+          ],
+        },
       });
     }
-    
+
     // Reset the 8-second timeout for the new provider
     if (embedLoadTimeoutRef.current) {
       clearTimeout(embedLoadTimeoutRef.current);
@@ -670,28 +845,43 @@ export function WatchPage() {
   }, []);
 
   // Initialize fallback providers for a given TMDB ID and media type
-  const initializeFallbackProviders = useCallback((tmdbId: string, mediaType: "movie" | "tv", season?: number, episode?: number) => {
-    const fallbacks = buildFallbackUrls(tmdbId, mediaType, season, episode);
-    setFallbackProviders(fallbacks);
-    setCurrentFallbackIndex(0);
-    if (fallbacks.length > 0) {
-      setCurrentProvider(fallbacks[0].provider);
-    }
-  }, []);
+  const initializeFallbackProviders = useCallback(
+    (
+      tmdbId: string,
+      mediaType: "movie" | "tv",
+      season?: number,
+      episode?: number
+    ) => {
+      const fallbacks = buildFallbackUrls(tmdbId, mediaType, season, episode);
+      setFallbackProviders(fallbacks);
+      setCurrentFallbackIndex(0);
+      if (fallbacks.length > 0) {
+        setCurrentProvider(fallbacks[0].provider);
+      }
+    },
+    []
+  );
 
   // Switch mirror/server
-  const switchMirror = useCallback((index: number) => {
-    if (index === currentMirrorIndex || index >= availableMirrors.length) return;
-    setCurrentMirrorIndex(index);
-    setPlayError(null);
-  }, [currentMirrorIndex, availableMirrors.length]);
+  const switchMirror = useCallback(
+    (index: number) => {
+      if (index === currentMirrorIndex || index >= availableMirrors.length)
+        return;
+      setCurrentMirrorIndex(index);
+      setPlayError(null);
+    },
+    [currentMirrorIndex, availableMirrors.length]
+  );
 
   // Change quality
-  const changeQuality = useCallback((quality: QualityOption) => {
-    if (quality === selectedQuality) return;
-    setSelectedQuality(quality);
-    setPlayError(null);
-  }, [selectedQuality]);
+  const changeQuality = useCallback(
+    (quality: QualityOption) => {
+      if (quality === selectedQuality) return;
+      setSelectedQuality(quality);
+      setPlayError(null);
+    },
+    [selectedQuality]
+  );
 
   // Cleanup on unmount
   useEffect(() => {
@@ -718,9 +908,9 @@ export function WatchPage() {
 
     void (async () => {
       try {
-        const stream = await resolveStream(movie.title, movie.year, { 
+        const stream = await resolveStream(movie.title, movie.year, {
           tmdbId: movie.providerId,
-          ...(movie.mediaType === "tv" ? { season, episode } : {})
+          ...(movie.mediaType === "tv" ? { season, episode } : {}),
         });
         if (disposed) return;
         setResolved(stream);
@@ -752,13 +942,14 @@ export function WatchPage() {
   };
 
   // Determine what to show as episode title
-  const displayTitle = movie?.mediaType === "tv" && episodeDetails?.title 
-    ? `${movie.title} — ${episodeDetails.title}` 
-    : movie?.mediaType === "tv" 
-      ? `${movie.title} — S${season} E${episode}`
-      : movie?.title || "Loading...";
+  const displayTitle =
+    movie?.mediaType === "tv" && episodeDetails?.title
+      ? `${movie.title} — ${episodeDetails.title}`
+      : movie?.mediaType === "tv"
+        ? `${movie.title} — S${season} E${episode}`
+        : movie?.title || "Loading...";
 
-// Show loading state with skeleton
+  // Show loading state with skeleton
   if (movieLoading) {
     return (
       <div className="min-h-screen bg-[#050505] text-white">
@@ -779,7 +970,9 @@ export function WatchPage() {
               <div className="absolute inset-0 flex items-center justify-center">
                 <div className="relative z-20 flex flex-col items-center gap-4">
                   <div className="w-12 h-12 border-4 border-white/20 border-t-white rounded-full animate-spin" />
-                  <p className="text-white/80 font-medium text-sm tracking-wider">Loading movie details...</p>
+                  <p className="text-white/80 font-medium text-sm tracking-wider">
+                    Loading movie details...
+                  </p>
                 </div>
               </div>
             </div>
@@ -821,7 +1014,12 @@ export function WatchPage() {
       <div className="min-h-screen bg-[#050505] text-white flex items-center justify-center">
         <div className="text-center">
           <p className="text-white/60">Movie not found</p>
-          <button onClick={() => navigate("/")} className="mt-4 text-white underline">Go Home</button>
+          <button
+            onClick={() => navigate("/")}
+            className="mt-4 text-white underline"
+          >
+            Go Home
+          </button>
         </div>
       </div>
     );
@@ -885,7 +1083,13 @@ export function WatchPage() {
                       movie={resolved.stream}
                       onClose={handleClose}
                       streamUrl={resolved.stream.stream_url}
-                      poster={movie.backdrop ? getImageUrl(movie.backdrop, "original") : movie.poster ? getImageUrl(movie.poster, "w780") : ""}
+                      poster={
+                        movie.backdrop
+                          ? getImageUrl(movie.backdrop, "original")
+                          : movie.poster
+                            ? getImageUrl(movie.poster, "w780")
+                            : ""
+                      }
                       mirrors={resolved.stream.mirrors}
                       season={resolved.stream.season}
                       episode={resolved.stream.episode}
@@ -898,7 +1102,11 @@ export function WatchPage() {
                       onMirrorChange={switchMirror}
                       selectedQuality={selectedQuality}
                       onQualityChange={changeQuality}
-                      availableQualities={PROVIDER_CONFIGS[currentProvider]?.supportsQuality ? QUALITY_ORDER : undefined}
+                      availableQualities={
+                        PROVIDER_CONFIGS[currentProvider]?.supportsQuality
+                          ? QUALITY_ORDER
+                          : undefined
+                      }
                       isLoading={resolving}
                       playbackError={playError}
                       onRetry={handleRetry}
@@ -910,13 +1118,21 @@ export function WatchPage() {
                   <div className="absolute inset-0 flex items-center justify-center">
                     <div className="relative w-full h-full max-w-6xl max-h-[85vh] flex items-center justify-center">
                       <img
-                        src={movie.backdrop ? getImageUrl(movie.backdrop, "original") : movie.poster ? getImageUrl(movie.poster, "w780") : ""}
+                        src={
+                          movie.backdrop
+                            ? getImageUrl(movie.backdrop, "original")
+                            : movie.poster
+                              ? getImageUrl(movie.poster, "w780")
+                              : ""
+                        }
                         alt={movie.title}
                         className="absolute inset-0 w-full h-full object-cover opacity-40 blur-sm"
                       />
                       <div className="relative z-20 flex flex-col items-center gap-4">
                         <div className="w-12 h-12 border-4 border-white/20 border-t-white rounded-full animate-spin" />
-                        <p className="text-white/80 font-medium text-sm tracking-wider">Preparing stream...</p>
+                        <p className="text-white/80 font-medium text-sm tracking-wider">
+                          Preparing stream...
+                        </p>
                         {resolving && (
                           <p className="text-xs text-white/50 flex items-center gap-1">
                             <Loader2 className="w-3 h-3 animate-spin" />
@@ -934,18 +1150,28 @@ export function WatchPage() {
             <aside className="lg:sticky lg:top-24 space-y-6 max-h-[calc(100vh-6rem)] overflow-y-auto pr-2">
               {/* Show/Movie Title & Metadata */}
               <div className="space-y-4">
-                <h1 className="text-xl sm:text-2xl font-bold text-white truncate">{movie.title}</h1>
-                
+                <h1 className="text-xl sm:text-2xl font-bold text-white truncate">
+                  {movie.title}
+                </h1>
+
                 <div className="flex flex-wrap items-center gap-2 text-xs text-[#aaa9ae]">
-                  {movie.year && <span className="px-2 py-1 bg-white/5 border border-white/10 rounded">{movie.year}</span>}
+                  {movie.year && (
+                    <span className="px-2 py-1 bg-white/5 border border-white/10 rounded">
+                      {movie.year}
+                    </span>
+                  )}
                   {movie.runtime && (
                     <>
                       <span>·</span>
-                      <span className="px-2 py-1 bg-white/5 border border-white/10 rounded">{movie.runtime}</span>
+                      <span className="px-2 py-1 bg-white/5 border border-white/10 rounded">
+                        {movie.runtime}
+                      </span>
                     </>
                   )}
                   <span>·</span>
-                  <span className="px-2 py-1 bg-white/5 border border-white/10 rounded">{movie.genre.slice(0, 3).join(" · ")}</span>
+                  <span className="px-2 py-1 bg-white/5 border border-white/10 rounded">
+                    {movie.genre.slice(0, 3).join(" · ")}
+                  </span>
                   {movie.score !== null && (
                     <span className="flex items-center gap-1 px-2 py-1 bg-amber-500/20 border border-amber-500/30 rounded text-amber-400">
                       <Star className="h-3.5 w-3.5 fill-current" />
@@ -961,14 +1187,18 @@ export function WatchPage() {
                 </div>
 
                 {/* Synopsis */}
-                <p className="text-sm leading-6 text-[#c5c5c1] line-clamp-4">{movie.synopsis}</p>
+                <p className="text-sm leading-6 text-[#c5c5c1] line-clamp-4">
+                  {movie.synopsis}
+                </p>
 
                 {/* Action Buttons */}
                 <div className="flex flex-wrap items-center gap-2">
                   <Button
                     variant="outline"
                     className="flex items-center gap-2 px-4 py-3"
-                    onClick={() => { /* Add to library */ }}
+                    onClick={() => {
+                      /* Add to library */
+                    }}
                   >
                     <Plus className="h-5 w-5" />
                     <span className="hidden sm:inline">My Library</span>
@@ -992,10 +1222,12 @@ export function WatchPage() {
                   {/* Season Selector */}
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
-                      <h2 className="text-sm font-semibold text-white/80 uppercase tracking-wide">Season</h2>
+                      <h2 className="text-sm font-semibold text-white/80 uppercase tracking-wide">
+                        Season
+                      </h2>
                       <Select
                         value={season.toString()}
-                        onValueChange={(value) => {
+                        onValueChange={value => {
                           const newSeason = parseInt(value, 10);
                           if (newSeason !== season) {
                             setSeason(newSeason);
@@ -1008,7 +1240,10 @@ export function WatchPage() {
                           <SelectValue placeholder="Select season" />
                         </SelectTrigger>
                         <SelectContent className="bg-zinc-900 border border-white/10 text-white">
-                          {Array.from({ length: resolved.stream.seasons || 1 }, (_, i) => i + 1).map((s) => (
+                          {Array.from(
+                            { length: resolved.stream.seasons || 1 },
+                            (_, i) => i + 1
+                          ).map(s => (
                             <SelectItem key={s} value={s.toString()}>
                               Season {s}
                             </SelectItem>
@@ -1016,7 +1251,7 @@ export function WatchPage() {
                         </SelectContent>
                       </Select>
                     </div>
-                    
+
                     {/* Episode List */}
                     <div className="space-y-1 max-h-[50vh] overflow-y-auto">
                       {resolved.stream.episodes
@@ -1035,7 +1270,9 @@ export function WatchPage() {
                               E{String(ep.number).padStart(2, "0")}
                             </span>
                             <div className="flex-1 min-w-0">
-                              <p className="text-sm font-medium truncate">{ep.title || `Episode ${ep.number}`}</p>
+                              <p className="text-sm font-medium truncate">
+                                {ep.title || `Episode ${ep.number}`}
+                              </p>
                               <p className="text-xs text-white/50 flex items-center gap-2">
                                 {ep.runtime && `${ep.runtime}m`}
                                 {ep.air_date && ep.air_date}
@@ -1048,7 +1285,9 @@ export function WatchPage() {
                               </p>
                             </div>
                             {ep.season === season && ep.number === episode && (
-                              <span className="text-xs text-green-400 font-medium">Playing</span>
+                              <span className="text-xs text-green-400 font-medium">
+                                Playing
+                              </span>
                             )}
                           </button>
                         ))}
@@ -1060,7 +1299,9 @@ export function WatchPage() {
                 <div className="space-y-6">
                   {/* Details & Unavailable Info */}
                   <div className="space-y-4">
-                    <h2 className="text-sm font-semibold text-white/80 uppercase tracking-wide">Details</h2>
+                    <h2 className="text-sm font-semibold text-white/80 uppercase tracking-wide">
+                      Details
+                    </h2>
                     <div className="grid grid-cols-2 gap-3 text-sm">
                       <div>
                         <p className="text-white/50">Director</p>
@@ -1140,12 +1381,19 @@ export function WatchPage() {
                   {/* Stream Provider Selector */}
                   {resolved && fallbackProviders.length > 1 && (
                     <div className="space-y-2">
-                      <h2 className="text-sm font-semibold text-white/80 uppercase tracking-wide">Stream Source</h2>
+                      <h2 className="text-sm font-semibold text-white/80 uppercase tracking-wide">
+                        Stream Source
+                      </h2>
                       <Select
-                        value={fallbackProviders[currentFallbackIndex]?.provider || currentProvider}
+                        value={
+                          fallbackProviders[currentFallbackIndex]?.provider ||
+                          currentProvider
+                        }
                         onValueChange={(value: string) => {
                           const providerValue = value as EmbedProvider;
-                          const index = fallbackProviders.findIndex(f => f.provider === providerValue);
+                          const index = fallbackProviders.findIndex(
+                            f => f.provider === providerValue
+                          );
                           if (index !== -1 && index !== currentFallbackIndex) {
                             setCurrentFallbackIndex(index);
                             setCurrentProvider(providerValue);
@@ -1159,10 +1407,13 @@ export function WatchPage() {
                                   ...resolved.stream,
                                   stream_url: nextProvider.url,
                                   mirrors: [
-                                    { name: `${PROVIDER_CONFIGS[nextProvider.provider]?.name || nextProvider.provider} Server`, url: nextProvider.url },
-                                    ...(resolved.stream.mirrors || [])
-                                  ]
-                                }
+                                    {
+                                      name: `${PROVIDER_CONFIGS[nextProvider.provider]?.name || nextProvider.provider} Server`,
+                                      url: nextProvider.url,
+                                    },
+                                    ...(resolved.stream.mirrors || []),
+                                  ],
+                                },
                               });
                             }
                             if (embedLoadTimeoutRef.current) {
@@ -1182,31 +1433,46 @@ export function WatchPage() {
                         </SelectTrigger>
                         <SelectContent className="bg-zinc-900 border border-white/10 text-white">
                           {fallbackProviders.map((fp, idx) => (
-                            <SelectItem key={fp.provider} value={fp.provider} className="flex items-center justify-between">
-                              <span className="capitalize">{PROVIDER_CONFIGS[fp.provider]?.name || fp.provider}</span>
+                            <SelectItem
+                              key={fp.provider}
+                              value={fp.provider}
+                              className="flex items-center justify-between"
+                            >
+                              <span className="capitalize">
+                                {PROVIDER_CONFIGS[fp.provider]?.name ||
+                                  fp.provider}
+                              </span>
                               {idx === currentFallbackIndex && (
-                                <span className="text-green-400 text-xs font-medium">Active</span>
+                                <span className="text-green-400 text-xs font-medium">
+                                  Active
+                                </span>
                               )}
-                              {embedLoadFailed && idx === currentFallbackIndex && (
-                                <span className="text-amber-400 text-xs font-medium">Loading failed</span>
-                              )}
+                              {embedLoadFailed &&
+                                idx === currentFallbackIndex && (
+                                  <span className="text-amber-400 text-xs font-medium">
+                                    Loading failed
+                                  </span>
+                                )}
                             </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
-                      {embedLoadFailed && currentFallbackIndex < fallbackProviders.length - 1 && (
-                        <p className="text-xs text-amber-400 flex items-center gap-1 animate-pulse">
-                          <Loader2 className="w-3 h-3 animate-spin" />
-                          Auto-switching to next provider...
-                        </p>
-                      )}
+                      {embedLoadFailed &&
+                        currentFallbackIndex < fallbackProviders.length - 1 && (
+                          <p className="text-xs text-amber-400 flex items-center gap-1 animate-pulse">
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                            Auto-switching to next provider...
+                          </p>
+                        )}
                     </div>
                   )}
 
                   {/* Rating */}
                   {canRate && detailsLoaded && (
                     <div className="space-y-2">
-                      <h2 className="text-sm font-semibold text-white/80 uppercase tracking-wide">Your Rating</h2>
+                      <h2 className="text-sm font-semibold text-white/80 uppercase tracking-wide">
+                        Your Rating
+                      </h2>
                       <div className="flex items-center justify-center gap-1">
                         {[1, 2, 3, 4, 5].map(star => (
                           <button
@@ -1222,14 +1488,18 @@ export function WatchPage() {
                           >
                             <Star
                               className={`h-5 w-5 ${
-                                star <= myRating ? "fill-[#d7d7d3] text-[#d7d7d3]" : "text-white/30"
+                                star <= myRating
+                                  ? "fill-[#d7d7d3] text-[#d7d7d3]"
+                                  : "text-white/30"
                               }`}
                             />
                           </button>
                         ))}
                       </div>
                       {myRating > 0 && (
-                        <p className="text-xs text-center text-white/50">{myRating}/5</p>
+                        <p className="text-xs text-center text-white/50">
+                          {myRating}/5
+                        </p>
                       )}
                     </div>
                   )}
@@ -1239,27 +1509,46 @@ export function WatchPage() {
                     <div className="rounded-md border border-white/10 bg-white/[0.03] px-3 py-3">
                       <div className="flex items-start gap-3">
                         <div className="flex-shrink-0 mt-0.5">
-                          {playError.type === "not_found" && <AlertCircle className="w-5 h-5 text-amber-400" />}
-                          {playError.type === "geo_blocked" && <WifiOff className="w-5 h-5 text-red-400" />}
-                          {playError.type === "network" && <Wifi className="w-5 h-5 text-blue-400" />}
-                          {playError.type === "rate_limited" && <Zap className="w-5 h-5 text-amber-400" />}
-                          {playError.type === "provider_unavailable" && <Server className="w-5 h-5 text-orange-400" />}
-                          {playError.type === "unknown" && <AlertCircle className="w-5 h-5 text-white/60" />}
+                          {playError.type === "not_found" && (
+                            <AlertCircle className="w-5 h-5 text-amber-400" />
+                          )}
+                          {playError.type === "geo_blocked" && (
+                            <WifiOff className="w-5 h-5 text-red-400" />
+                          )}
+                          {playError.type === "network" && (
+                            <Wifi className="w-5 h-5 text-blue-400" />
+                          )}
+                          {playError.type === "rate_limited" && (
+                            <Zap className="w-5 h-5 text-amber-400" />
+                          )}
+                          {playError.type === "provider_unavailable" && (
+                            <Server className="w-5 h-5 text-orange-400" />
+                          )}
+                          {playError.type === "unknown" && (
+                            <AlertCircle className="w-5 h-5 text-white/60" />
+                          )}
                         </div>
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm leading-5 text-[#c5c5c1]">{playError.message}</p>
-                          {playError.provider && playError.provider !== "unknown" && (
-                            <p className="mt-1 text-xs text-white/50">
-                              Provider: {PROVIDER_CONFIGS[playError.provider]?.name || playError.provider}
-                            </p>
-                          )}
+                          <p className="text-sm leading-5 text-[#c5c5c1]">
+                            {playError.message}
+                          </p>
+                          {playError.provider &&
+                            playError.provider !== "unknown" && (
+                              <p className="mt-1 text-xs text-white/50">
+                                Provider:{" "}
+                                {PROVIDER_CONFIGS[playError.provider]?.name ||
+                                  playError.provider}
+                              </p>
+                            )}
                           {playError.recoverable && (
                             <button
                               onClick={handleRetry}
                               className="mt-2 flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white/80 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded transition-colors"
                             >
                               <RefreshCw className="w-3 h-3" />
-                              {isRetrying ? "Retrying..." : `Retry (attempt ${retryCount + 1}/${MAX_RETRY_ATTEMPTS})`}
+                              {isRetrying
+                                ? "Retrying..."
+                                : `Retry (attempt ${retryCount + 1}/${MAX_RETRY_ATTEMPTS})`}
                             </button>
                           )}
                         </div>

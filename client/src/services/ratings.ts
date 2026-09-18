@@ -20,7 +20,9 @@ function loadRatings(): Record<number, RatingEntry> {
     const raw = localStorage.getItem(KEY);
     if (!raw) return {};
     const map: Record<number, RatingEntry> = {};
-    for (const [, value] of Object.entries(JSON.parse(raw) as Record<string, RatingEntry>)) {
+    for (const [, value] of Object.entries(
+      JSON.parse(raw) as Record<string, RatingEntry>
+    )) {
       if (value && typeof value.id === "number") map[value.id] = value;
     }
     return map;

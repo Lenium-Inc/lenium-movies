@@ -1,4 +1,16 @@
-import { Compass, Film, Tv, Sparkles, Download, Bookmark, Home as HomeIcon, UserRound, Zap, Heart, Film as FilmIcon } from "lucide-react";
+import {
+  Compass,
+  Film,
+  Tv,
+  Sparkles,
+  Download,
+  Bookmark,
+  Home as HomeIcon,
+  UserRound,
+  Zap,
+  Heart,
+  Film as FilmIcon,
+} from "lucide-react";
 
 /**
  * Available catalog views.

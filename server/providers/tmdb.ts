@@ -236,15 +236,15 @@ export async function getMovieTrailer(id: number): Promise<string | null> {
     official: boolean;
   };
   type TmdbVideoResponse = { results?: TmdbVideo[] };
-  
+
   const payload = await tmdbFetch<TmdbVideoResponse>(`/movie/${id}/videos`);
   const videos = payload.results ?? [];
-  
+
   // Find official YouTube trailer
   const trailer = videos.find(
     v => v.site === "YouTube" && v.type === "Trailer" && v.official
   );
-  
+
   // Fallback: any YouTube trailer/teaser
   if (!trailer) {
     const anyTrailer = videos.find(
@@ -252,6 +252,6 @@ export async function getMovieTrailer(id: number): Promise<string | null> {
     );
     return anyTrailer?.key ?? null;
   }
-  
+
   return trailer.key;
 }

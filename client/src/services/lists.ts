@@ -100,9 +100,7 @@ export function removeFromList(id: number): void {
 }
 
 /** Saved titles newest-first, with the picked tag or a default. */
-export function sortedEntries(
-  filter: ListTag | "all" = "all"
-): ListEntry[] {
+export function sortedEntries(filter: ListTag | "all" = "all"): ListEntry[] {
   return Object.values(loadList())
     .filter(e => filter === "all" || e.tag === filter)
     .sort((a, b) => b.addedAt.localeCompare(a.addedAt));

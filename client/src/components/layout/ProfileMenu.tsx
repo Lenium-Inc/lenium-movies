@@ -1,13 +1,17 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronRight, Clock3, Lock, UserRound, LogOut, Bookmark, User } from "lucide-react";
+import {
+  ChevronRight,
+  Clock3,
+  Lock,
+  UserRound,
+  LogOut,
+  Bookmark,
+  User,
+} from "lucide-react";
 import { Link } from "wouter";
 import { useAuth } from "@/context/AuthContext";
 import { useStatsRevision } from "@/hooks/useStats";
-import {
-  capLimit,
-  dayCount,
-  dayLocked,
-} from "@/services/capGate";
+import { capLimit, dayCount, dayLocked } from "@/services/capGate";
 import {
   ACHIEVEMENTS,
   earnedAchievements,
@@ -114,8 +118,12 @@ export function ProfileMenu() {
                 </span>
               )}
               <div className="min-w-0">
-                <p className="text-sm font-semibold text-white truncate">{user.name}</p>
-                <p className="text-[11px] text-white/50 truncate">{user.email}</p>
+                <p className="text-sm font-semibold text-white truncate">
+                  {user.name}
+                </p>
+                <p className="text-[11px] text-white/50 truncate">
+                  {user.email}
+                </p>
               </div>
             </div>
           </div>
@@ -125,7 +133,10 @@ export function ProfileMenu() {
               Mindful viewer
             </p>
             <div className="mt-3 flex items-center gap-4">
-              <svg viewBox="0 0 100 100" className="h-16 w-16 -rotate-90 shrink-0">
+              <svg
+                viewBox="0 0 100 100"
+                className="h-16 w-16 -rotate-90 shrink-0"
+              >
                 <circle
                   cx="50"
                   cy="50"

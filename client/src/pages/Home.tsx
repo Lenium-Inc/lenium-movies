@@ -125,14 +125,17 @@ export default function Home() {
               ) : !isClientSearch ? (
                 <CatalogEmptyState loading={false} configured={configured} />
               ) : null}
-              {isClientSearch && filtered.length === 0 && !loading && !searchLoading && (
-                <CatalogEmptyState
-                  loading={false}
-                  configured={true}
-                  query={search}
-                  searchLoading={searchLoading}
-                />
-              )}
+              {isClientSearch &&
+                filtered.length === 0 &&
+                !loading &&
+                !searchLoading && (
+                  <CatalogEmptyState
+                    loading={false}
+                    configured={true}
+                    query={search}
+                    searchLoading={searchLoading}
+                  />
+                )}
               <div className="mt-8">
                 {loading ? (
                   <SkeletonMovieGrid count={12} />

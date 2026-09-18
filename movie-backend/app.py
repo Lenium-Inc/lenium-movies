@@ -80,26 +80,6 @@ def add_cors_headers(response):
     return response
 
 
-@app.route("/", methods=["GET"])
-def root():
-    return jsonify({
-        "status": "online",
-        "service": "Lenium Movies API",
-        "version": "1.0.0",
-        "endpoints": {
-            "search": "/api/search?q=<query>",
-            "resolve": "POST /api/movies/resolve",
-            "stream": "/api/get-stream",
-            "trailer": "/api/catalog/movieTrailer?id=<tmdb_id>",
-            "feeds": "/api/movies/feeds",
-            "trending": "/api/movies/trending",
-            "popular": "/api/movies/popular",
-            "now_playing": "/api/movies/now_playing",
-            "on_the_air": "/api/movies/on_the_air"
-        }
-    })
-
-
 @app.route("/api/search", methods=["GET", "OPTIONS"])
 def search_catalog():
     if request.method == "OPTIONS":
@@ -149,6 +129,9 @@ def search_suggest():
 
     return jsonify(suggestions)
 
+@app.route('/')
+def health_check():
+    return {"status": "online", "service": "vy-backend"}, 200
 
 @app.route("/api/movies/resolve", methods=["GET", "POST", "OPTIONS"])
 def resolve_movie():
@@ -451,31 +434,6 @@ def get_trailer():
 
     tmdb_id = target.get("id")
     media_type = target.get("media_type", "movie")
-
-    trailer_key = tmdb.get_trailer_key(tmdb_id, media_type)
-
-    if not trailer_key:
-        return jsonify({"trailer": None})
-
-    return jsonify({"trailer": {"provider": "youtube", "id": trailer_key}})
-
-
-@app.route("/api/catalog/movieTrailer", methods=["GET", "OPTIONS"])
-def get_movie_trailer_by_id():
-    """Fetch trailer by TMDB ID directly (used by frontend fetchTrailerByTmdbId)."""
-    if request.method == "OPTIONS":
-        return ("", 204)
-
-    tmdb_id = request.args.get("id")
-    media_type = request.args.get("media_type", "movie")
-
-    if not tmdb_id:
-        return jsonify({"trailer": None}), 400
-
-    try:
-        tmdb_id = int(tmdb_id)
-    except (ValueError, TypeError):
-        return jsonify({"trailer": None}), 400
 
     trailer_key = tmdb.get_trailer_key(tmdb_id, media_type)
 

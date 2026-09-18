@@ -1,7 +1,12 @@
 import { Link } from "wouter";
 import { Bookmark, Film, UserRound, Plus } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
-import { sortedEntries, subscribeList, type ListTag, type ListEntry } from "@/services/lists";
+import {
+  sortedEntries,
+  subscribeList,
+  type ListTag,
+  type ListEntry,
+} from "@/services/lists";
 import { LIST_TAGS } from "@/services/lists";
 import { useEffect, useState } from "react";
 
@@ -41,7 +46,8 @@ export default function MyList() {
               My List
             </h1>
             <p className="mt-4 text-lg text-white/60 max-w-md mx-auto">
-              Sign in to save movies and shows to your personal list. Your saved titles sync across devices and are always ready to watch.
+              Sign in to save movies and shows to your personal list. Your saved
+              titles sync across devices and are always ready to watch.
             </p>
             <div className="mt-8 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
               <button
@@ -167,7 +173,8 @@ export default function MyList() {
                       )}
                     </div>
                     <p className="mt-1 text-sm text-white/50">
-                      {entry.tag && LIST_TAGS.find(t => t.value === entry.tag)?.label}
+                      {entry.tag &&
+                        LIST_TAGS.find(t => t.value === entry.tag)?.label}
                     </p>
                   </div>
                   <div className="mt-4 flex items-center gap-2">
