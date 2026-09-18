@@ -1078,7 +1078,7 @@ export function WatchPage() {
                       </button>
                     </div>
 
-                    <VideoPlayer
+<VideoPlayer
                       title={displayTitle}
                       movie={resolved.stream}
                       onClose={handleClose}
@@ -1087,8 +1087,8 @@ export function WatchPage() {
                         movie.backdrop
                           ? getImageUrl(movie.backdrop, "original")
                           : movie.poster
-                            ? getImageUrl(movie.poster, "w780")
-                            : ""
+                          ? getImageUrl(movie.poster, "w780")
+                          : ""
                       }
                       mirrors={resolved.stream.mirrors}
                       season={resolved.stream.season}
@@ -1111,6 +1111,7 @@ export function WatchPage() {
                       playbackError={playError}
                       onRetry={handleRetry}
                       onIframeLoad={handleIframeLoad}
+                      hideCloseButton
                     />
                   </>
                 )}

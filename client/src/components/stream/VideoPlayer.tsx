@@ -91,6 +91,8 @@ export interface VideoPlayerProps {
   onRetry?: () => void;
   // Callback when iframe successfully loads
   onIframeLoad?: () => void;
+  // Hide the close button in header (parent handles close/share)
+  hideCloseButton?: boolean;
 }
 
 export const QUALITY_ORDER = ["4K", "1080p", "720p", "480p", "320p"] as const;
@@ -184,6 +186,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   playbackError: externalPlaybackError = null,
   onRetry,
   onIframeLoad,
+  hideCloseButton = false,
 }) => {
   const [isPlaying, setIsPlaying] = useState<boolean>(true);
   const [isMuted, setIsMuted] = useState<boolean>(false);
@@ -639,12 +642,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             </span>
           )}
         </div>
-        <button
-          onClick={onClose}
-          className="w-9 h-9 rounded-full bg-black/40 hover:bg-white/20 border border-white/10 flex items-center justify-center text-white transition-all flex-shrink-0"
-        >
-          <X className="w-4 h-4" />
-        </button>
+        {!hideCloseButton && (
+          <button
+            onClick={onClose}
+            className="w-9 h-9 rounded-full bg-black/40 hover:bg-white/20 border border-white/10 flex items-center justify-center text-white transition-all flex-shrink-0"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
       {/* Bottom Controls */}
