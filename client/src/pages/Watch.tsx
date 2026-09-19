@@ -778,6 +778,15 @@ export function WatchPage() {
                             Resolving playback sources...
                           </p>
                         )}
+                        <button
+                          type="button"
+                          onClick={() => play()}
+                          disabled={resolving || !movie}
+                          className="inline-flex items-center gap-2 rounded-xl bg-violet-500 px-6 py-3 text-sm font-medium text-white transition hover:bg-violet-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <Play className="h-5 w-5" />
+                          Play
+                        </button>
                       </div>
                     </div>
                   </div>
