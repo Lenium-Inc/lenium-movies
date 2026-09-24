@@ -14,9 +14,6 @@ import {
   VolumeX,
   Maximize,
   Settings,
-  Subtitles,
-  Loader2,
-  AlertCircle,
   RefreshCw,
   Languages,
   Volume2 as Volume2Icon,
@@ -84,8 +81,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const playerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const canvasCtxRef = useRef<CanvasRenderingContext2D | null>(null);
+  const posterImgRef = useRef<HTMLImageElement | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const controlsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hlsRef = useRef<any>(null);
 
   const effectiveIsLoading = externalIsLoading || isLoading;
@@ -150,27 +149,89 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const initAmbientCanvas = useCallback(() => {
     const canvas = canvasRef.current;
-    const video = videoRef.current;
-    if (!canvas || !video) return;
+    if (!canvas) return;
 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     canvasCtxRef.current = ctx;
 
-    const drawFrame = () => {
-      if (!video || video.paused || video.ended) {
-        animationFrameRef.current = requestAnimationFrame(drawFrame);
+    const fitCover = (
+      source: CanvasImageSource,
+      sw: number,
+      sh: number
+    ) => {
+      const w = canvas.width;
+      const h = canvas.height;
+      const scale = Math.max(w / sw, h / sh);
+      const dw = sw * scale;
+      const dh = sh * scale;
+      ctx.drawImage(
+        source,
+        0,
+        0,
+        sw,
+        sh,
+        (w - dw) / 2,
+        (h - dh) / 2,
+        dw,
+        dh
+      );
+    };
+
+    const paintPoster = () => {
+      const posterImg = posterImgRef.current;
+      if (!posterImg || !posterImg.complete || posterImg.naturalWidth === 0) {
         return;
       }
+      const playerRect = playerRef.current?.getBoundingClientRect();
+      if (!playerRect) return;
+      canvas.width = playerRect.width;
+      canvas.height = playerRect.height;
+      fitCover(
+        posterImg,
+        posterImg.naturalWidth,
+        posterImg.naturalHeight
+      );
+      ctx.filter = "blur(80px)";
+      ctx.globalAlpha = 0.55;
+      ctx.drawImage(
+        canvas,
+        0,
+        0,
+        canvas.width,
+        canvas.height,
+        0,
+        0,
+        canvas.width,
+        canvas.height
+      );
+      ctx.filter = "none";
+      ctx.globalAlpha = 1;
+    };
 
+    const drawFrame = () => {
+      const video = videoRef.current;
       const playerRect = playerRef.current?.getBoundingClientRect();
       if (!playerRect) {
         animationFrameRef.current = requestAnimationFrame(drawFrame);
         return;
       }
-
+      if (!video) {
+        paintPoster();
+        animationFrameRef.current = requestAnimationFrame(drawFrame);
+        return;
+      }
       canvas.width = playerRect.width;
       canvas.height = playerRect.height;
+
+      // No decodable video frame yet (loading / buffering / switched source):
+      // keep the ambient canvas alive with the poster art instead of a black
+      // void, so source changes never flash the player to pure black.
+      if (!video.videoWidth || video.paused || video.ended) {
+        if (!video.videoWidth) paintPoster();
+        animationFrameRef.current = requestAnimationFrame(drawFrame);
+        return;
+      }
 
       const videoAspect = video.videoWidth / video.videoHeight;
       const canvasAspect = canvas.width / canvas.height;
@@ -200,6 +261,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       animationFrameRef.current = requestAnimationFrame(drawFrame);
     };
 
+    paintPoster();
     animationFrameRef.current = requestAnimationFrame(drawFrame);
 
     return () => {
@@ -217,6 +279,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setPlaybackError(null);
     setIsLoading(true);
 
+    // If the source stalls (no progress for a while) it is treated as a dead
+    // source and handed back to the page so the failover loop can switch
+    // mirrors/servers in the background.
+    const STALL_TIMEOUT_MS = 12000;
+    const startStallWatch = () => {
+      if (stallTimerRef.current) return;
+      stallTimerRef.current = setTimeout(() => {
+        stallTimerRef.current = null;
+        if (videoRef.current && videoRef.current.readyState < 3) {
+          onSourceError?.();
+        }
+      }, STALL_TIMEOUT_MS);
+    };
+    const clearStallWatch = () => {
+      if (stallTimerRef.current) {
+        clearTimeout(stallTimerRef.current);
+        stallTimerRef.current = null;
+      }
+    };
+
     const cleanup = () => {
       hls?.destroy();
       video.pause();
@@ -227,11 +309,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const handleLoadedMetadata = () => {
       setDuration(video.duration);
       setIsLoading(false);
+      clearStallWatch();
       initAmbientCanvas();
       attemptAutoplay();
     };
 
     const handleError = () => {
+      clearStallWatch();
       setPlaybackError(
         "Stream currently unavailable. Click to retry source."
       );
@@ -239,17 +323,31 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       onSourceError?.();
     };
 
-    const handleWaiting = () => setIsLoading(true);
+    const handleWaiting = () => {
+      setIsLoading(true);
+      startStallWatch();
+    };
+    const handleStalled = () => {
+      setIsLoading(true);
+      startStallWatch();
+    };
     const handlePlaying = () => {
+      clearStallWatch();
       setIsLoading(false);
       setIsPlaying(true);
+    };
+    const handleCanPlay = () => {
+      clearStallWatch();
+      setIsLoading(false);
     };
     const handleEnded = () => setIsPlaying(false);
 
     video.addEventListener("loadedmetadata", handleLoadedMetadata);
     video.addEventListener("error", handleError);
     video.addEventListener("waiting", handleWaiting);
+    video.addEventListener("stalled", handleStalled);
     video.addEventListener("playing", handlePlaying);
+    video.addEventListener("canplay", handleCanPlay);
     video.addEventListener("ended", handleEnded);
 
     if (streamType === "hls") {
@@ -301,10 +399,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     return () => {
       cleanup();
+      clearStallWatch();
       video.removeEventListener("loadedmetadata", handleLoadedMetadata);
       video.removeEventListener("error", handleError);
       video.removeEventListener("waiting", handleWaiting);
+      video.removeEventListener("stalled", handleStalled);
       video.removeEventListener("playing", handlePlaying);
+      video.removeEventListener("canplay", handleCanPlay);
       video.removeEventListener("ended", handleEnded);
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
@@ -325,6 +426,24 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     video.addEventListener("timeupdate", handleTimeUpdate);
     return () => video.removeEventListener("timeupdate", handleTimeUpdate);
   }, []);
+
+  // Preload the poster so the ambient canvas always has art to paint, even
+  // before the first video frame decodes.
+  useEffect(() => {
+    const img = new Image();
+    posterImgRef.current = img;
+    img.src = poster;
+    img.onload = () => {
+      posterImgRef.current = img;
+      initAmbientCanvas();
+    };
+    img.onerror = () => {
+      posterImgRef.current = null;
+    };
+    return () => {
+      posterImgRef.current = null;
+    };
+  }, [poster, initAmbientCanvas]);
 
   const handleMouseMove = useCallback(() => {
     if (!hasUserInteracted) setHasUserInteracted(true);
@@ -502,35 +621,27 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       />
 
       {effectiveIsLoading && (
-        <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/80 backdrop-blur-md">
-          <div className="relative w-full h-full max-w-6xl max-h-[85vh] flex items-center justify-center">
-            <img
-              src={poster}
-              alt={title}
-              className="absolute inset-0 w-full h-full object-cover opacity-40 blur-sm"
-            />
-            <div className="relative z-20 flex flex-col items-center gap-4">
-              <div className="w-12 h-12 border-4 border-white/20 border-t-white rounded-full animate-spin" />
-              {playbackError ? (
-                <div className="text-center max-w-md px-4">
-                  <AlertCircle className="w-10 h-10 text-amber-400 mx-auto mb-3" />
-                  <p className="text-white/80 font-medium text-sm tracking-wider mb-3">
-                    {playbackError}
-                  </p>
-                  <button
-                    onClick={handleRetry}
-                    className="flex items-center gap-2 mx-auto px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-white text-sm font-medium transition-colors"
-                  >
-                    <RefreshCw className="w-4 h-4" />
-                    Retry
-                  </button>
-                </div>
-              ) : (
-                <p className="text-white/80 font-medium text-sm tracking-wider">
-                  Buffering video...
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+          <div className="pointer-events-auto flex flex-col items-center gap-4 rounded-2xl bg-black/45 px-8 py-6 text-center backdrop-blur-md">
+            <div className="h-10 w-10 animate-spin rounded-full border-[3px] border-white/20 border-t-white" />
+            {playbackError ? (
+              <div className="max-w-md px-4">
+                <p className="mb-3 text-sm font-medium tracking-wider text-white/90">
+                  {playbackError}
                 </p>
-              )}
-            </div>
+                <button
+                  onClick={handleRetry}
+                  className="mx-auto flex items-center gap-2 rounded-lg border border-white/20 bg-white/10 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-white/20"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  Retry
+                </button>
+              </div>
+            ) : (
+              <p className="text-sm font-medium tracking-wider text-white/90">
+                Buffering video...
+              </p>
+            )}
           </div>
         </div>
       )}

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import { useLocation, useParams } from "wouter";
 import {
   Bookmark,
-  Check,
   ChevronDown,
   ChevronUp,
   Play,
@@ -13,7 +12,6 @@ import {
   Tv,
   Film,
   Loader2,
-  AlertCircle,
   RefreshCw,
   WifiOff,
   Server,
@@ -29,7 +27,6 @@ import {
   MapPin,
   Globe,
   Calendar,
-  Download,
 } from "lucide-react";
 import { getRating, setRating, subscribeRatings } from "@/services/ratings";
 import {
@@ -67,12 +64,6 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { isExternalEmbedUrl } from "@/lib/streamUtils";
 import { useAuth } from "@/context/AuthContext";
 import { apiHistoryAdd } from "@/services/auth";
-import {
-  addDownload,
-  canDownload,
-  downloadFile,
-  getDownloads,
-} from "@/services/downloads";
 
 const TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p";
 
@@ -257,10 +248,6 @@ export function WatchPage() {
   const { isInMyList, toggleMyList, addToHistory } = useLocalSession();
 
   const { user: authUser } = useAuth();
-
-  const [downloadQuality, setDownloadQuality] = useState("");
-  const [downloading, setDownloading] = useState(false);
-  const [downloadStarted, setDownloadStarted] = useState(false);
 
   // Fetch movie details on mount
   useEffect(() => {
@@ -572,43 +559,6 @@ export function WatchPage() {
     }
   };
 
-  const handleDownload = useCallback(async () => {
-    const stream = resolved?.stream;
-    if (!stream || !movie) return;
-
-    let selectedUrl = stream.stream_url;
-    let selectedQuality: string | null = null;
-    const variant = downloadQuality
-      ? stream.streams?.find((s) => s.quality === downloadQuality)
-      : stream.streams?.[0];
-    if (variant?.url) {
-      selectedUrl = variant.url;
-      selectedQuality = variant.quality ?? null;
-    }
-    if (!canDownload(selectedUrl)) return;
-
-    setDownloading(true);
-    try {
-      addDownload({
-        key: String(stream.id),
-        title: movie.title,
-        year: movie.year,
-        poster: movie.poster,
-        quality: selectedQuality,
-        streamUrl: selectedUrl,
-      });
-      const entry = getDownloads().find((e) => e.key === String(stream.id));
-      if (entry) {
-        await downloadFile(entry);
-        setDownloadStarted(true);
-      }
-    } catch (err) {
-      console.error("[WatchPage] download failed", err);
-    } finally {
-      setDownloading(false);
-    }
-  }, [resolved, movie, downloadQuality]);
-
   // Determine what to show as episode title
   const displayTitle =
     movie?.mediaType === "tv" && episodeDetails?.title
@@ -829,11 +779,6 @@ export function WatchPage() {
       });
   }, [resolved]);
 
-  const downloadVariants = useMemo(() => {
-    if (!resolved?.stream?.streams) return [];
-    return resolved.stream.streams.filter((s) => s.url && canDownload(s.url));
-  }, [resolved]);
-
   // Show loading state with skeleton
   if (movieLoading) {
     return (
@@ -976,20 +921,19 @@ export function WatchPage() {
                           <img
                             src={streamPoster}
                             alt={movie.title}
-                            className="absolute inset-0 w-full h-full object-cover opacity-30 blur-sm"
+                            className="absolute inset-0 w-full h-full object-cover opacity-40 blur-2xl scale-110"
                           />
-                          <div className="relative z-20 text-center px-6 max-w-lg">
-                            <AlertCircle className="w-12 h-12 text-amber-400 mx-auto mb-4" />
+                          <div className="relative z-20 rounded-2xl bg-black/50 px-8 py-6 text-center backdrop-blur-md max-w-lg">
                             <p className="text-lg font-semibold text-white">
                               Stream currently unavailable. Click to retry source.
                             </p>
                             <button
                               type="button"
                               onClick={() => void runStreamFallback(true)}
-                              className="mt-6 inline-flex items-center gap-2 rounded-xl bg-white/10 border border-white/20 px-6 py-3 text-sm font-semibold text-white transition hover:bg-white/20"
+                              className="mt-5 inline-flex items-center gap-2 rounded-xl bg-white/10 border border-white/20 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-white/20"
                             >
                               <RefreshCw className="h-4 w-4" />
-                              Click to retry source
+                              Retry source
                             </button>
                           </div>
                         </div>
@@ -1000,11 +944,11 @@ export function WatchPage() {
                           <img
                             src={streamPoster}
                             alt={movie.title}
-                            className="absolute inset-0 w-full h-full object-cover opacity-30 blur-sm"
+                            className="absolute inset-0 w-full h-full object-cover opacity-40 blur-2xl scale-110"
                           />
-                          <div className="relative z-20 flex flex-col items-center gap-4 px-6 text-center">
-                            <div className="w-12 h-12 border-4 border-white/20 border-t-white rounded-full animate-spin" />
-                            <p className="text-white/80 font-medium text-sm tracking-wider">
+                          <div className="relative z-20 flex flex-col items-center gap-4 rounded-2xl bg-black/45 px-8 py-6 text-center backdrop-blur-md">
+                            <div className="h-10 w-10 animate-spin rounded-full border-[3px] border-white/20 border-t-white" />
+                            <p className="text-white/90 font-medium text-sm tracking-wider">
                               Reconnecting to stream server...
                             </p>
                             <div className="flex items-center gap-3">
@@ -1041,7 +985,7 @@ export function WatchPage() {
                           <img
                             src={streamPoster}
                             alt={movie.title}
-                            className="absolute inset-0 w-full h-full object-cover opacity-40 blur-sm"
+                            className="absolute inset-0 w-full h-full object-cover opacity-40 blur-2xl scale-110"
                           />
                           <div className="relative z-20 flex flex-col items-center gap-4">
                             <div className="w-12 h-12 border-4 border-white/20 border-t-white rounded-full animate-spin" />
@@ -1168,43 +1112,6 @@ export function WatchPage() {
                       {isInMyList(movie.id) ? "In My List" : "Add to My List"}
                     </span>
                   </Button>
-
-                  {resolved && canDownload(resolved.stream.stream_url) && (
-                    <div className="flex items-center gap-2">
-                      {downloadVariants.length > 1 && (
-                        <Select value={downloadQuality} onValueChange={(value) => { setDownloadQuality(value); setDownloadStarted(false); }}>
-                          <SelectTrigger className="w-[110px] bg-white/5 border border-white/10 text-white/80 text-xs">
-                            <SelectValue placeholder="Quality" />
-                          </SelectTrigger>
-                          <SelectContent className="bg-zinc-900 border border-white/10 text-white">
-                            {downloadVariants.map((v) => (
-                              <SelectItem key={v.quality || "source"} value={v.quality || "source"}>
-                                {v.quality || "Source"}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      )}
-                      <Button
-                        variant="outline"
-                        onClick={() => void handleDownload()}
-                        disabled={downloading}
-                        className="flex items-center gap-2 px-4 py-3"
-                        aria-label="Download"
-                      >
-                        {downloading ? (
-                          <Loader2 className="h-5 w-5 animate-spin" />
-                        ) : downloadStarted ? (
-                          <Check className="h-5 w-5" />
-                        ) : (
-                          <Download className="h-5 w-5" />
-                        )}
-                        <span className="hidden sm:inline">
-                          {downloading ? "Preparing…" : downloadStarted ? "Saved" : "Download"}
-                        </span>
-                      </Button>
-                    </div>
-                  )}
                 </div>
               </div>
 

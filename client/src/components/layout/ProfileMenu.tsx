@@ -1,37 +1,20 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  ChevronRight,
-  Clock3,
-  Lock,
-  UserRound,
-  LogOut,
-  Bookmark,
-  User,
-} from "lucide-react";
-import { Link } from "wouter";
-import { useLocalSession } from "@/context/LocalSessionContext";
-import { useStatsRevision } from "@/hooks/useStats";
-import { capLimit, dayCount, dayLocked } from "@/services/capGate";
-import {
-  ACHIEVEMENTS,
-  earnedAchievements,
-  hoursWatched,
-  nextMilestone,
-} from "@/services/stats";
+import { LogOut, Plus, Settings, Users, UserRound } from "lucide-react";
+import { Link, useLocation } from "wouter";
+import { useAuth } from "@/context/AuthContext";
+import { useActiveProfile } from "@/context/ActiveProfileContext";
 
-const RADIUS = 30;
-const CIRC = 2 * Math.PI * RADIUS;
-
+/**
+ * Top-right profile entry point: renders the active profile avatar and opens a
+ * Netflix-style floating dropdown with a profile switcher, manage/account
+ * links, and sign out.
+ */
 export function ProfileMenu() {
-  const {
-    user,
-    isAuthenticated,
-    signInDemo,
-    signOut: logout,
-  } = useLocalSession();
+  const { user, logout } = useAuth();
+  const { profiles, activeProfile, selectProfile } = useActiveProfile();
+  const [, navigate] = useLocation();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
-  useStatsRevision();
 
   useEffect(() => {
     if (!open) return;
@@ -47,205 +30,143 @@ export function ProfileMenu() {
     };
   }, [open]);
 
-  if (!isAuthenticated || !user) {
+  if (!user) {
     return (
-      <button
-        type="button"
-        onClick={signInDemo}
+      <Link
+        href="/login"
         aria-label="Sign In"
         className="grid h-9 w-9 place-items-center rounded-full border border-white/15 bg-white/[0.08] text-white transition hover:bg-white/20 hover:border-white/30"
       >
         <UserRound className="h-4 w-4" />
-      </button>
+      </Link>
     );
   }
 
-  const hours = hoursWatched();
-  const milestone = nextMilestone();
-  const count = dayCount();
-  const limit = capLimit();
-  const locked = dayLocked();
-  const earned = earnedAchievements();
-  const learned = new Set(earned.map(a => a.id));
+  const displayName = activeProfile?.name ?? user.name;
+  const avatar = activeProfile?.avatar;
+
+  const handleSwitch = (profileId: string) => {
+    const profile = profiles.find((p) => p.id === profileId);
+    if (!profile || profile.isLocked) return;
+    selectProfile(profile);
+    setOpen(false);
+  };
 
   const handleSignOut = () => {
-    logout();
     setOpen(false);
+    void logout().then(() => navigate("/"));
   };
 
   return (
     <div ref={rootRef} className="relative">
       <button
         type="button"
-        onClick={() => setOpen(v => !v)}
-        aria-label="Profile"
-        className="grid h-9 w-9 place-items-center rounded-full border border-white/15 bg-white/[0.08] text-white transition hover:bg-white/20"
+        onClick={() => setOpen((v) => !v)}
+        aria-label={open ? "Close profile menu" : "Profile menu"}
+        className="grid h-9 w-9 place-items-center overflow-hidden rounded-full border border-white/15 bg-white/[0.08] text-white transition hover:bg-white/20"
       >
-        {user.avatarUrl ? (
-          <img
-            src={user.avatarUrl}
-            alt=""
-            className="h-9 w-9 rounded-full object-cover"
-          />
+        {avatar ? (
+          <img src={avatar} alt="" className="h-full w-full object-cover" />
         ) : (
-          <span className="grid h-9 w-9 place-items-center rounded-full bg-indigo-600 text-white font-bold text-sm">
-            {user.displayName.charAt(0).toUpperCase()}
+          <span className="grid h-full w-full place-items-center bg-white text-base font-black text-black">
+            {displayName.charAt(0).toUpperCase()}
           </span>
         )}
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full z-50 mt-2 w-[19rem] overflow-hidden rounded-xl border border-white/10 bg-[#121212] shadow-2xl">
+        <div className="absolute right-0 top-full z-50 mt-3 w-[19rem] overflow-hidden rounded-2xl border border-white/10 bg-[#0d0d0f]/95 shadow-2xl backdrop-blur-xl">
+          {/* Active identity */}
           <div className="border-b border-white/10 px-4 py-3">
             <div className="flex items-center gap-3">
-              {user.avatarUrl ? (
+              {avatar ? (
                 <img
-                  src={user.avatarUrl}
+                  src={avatar}
                   alt=""
-                  className="h-10 w-10 rounded-full object-cover"
+                  className="h-10 w-10 rounded-lg object-cover"
                 />
               ) : (
-                <span className="grid h-10 w-10 place-items-center rounded-full bg-indigo-600 text-white font-bold">
-                  {user.displayName.charAt(0).toUpperCase()}
+                <span className="grid h-10 w-10 place-items-center rounded-lg bg-white text-base font-black text-black">
+                  {displayName.charAt(0).toUpperCase()}
                 </span>
               )}
               <div className="min-w-0">
-                <p className="text-sm font-semibold text-white truncate">
-                  {user.displayName}
+                <p className="truncate text-sm font-semibold text-white">
+                  {displayName}
                 </p>
-                <p className="text-[11px] text-white/50 truncate">
-                  {user.email}
-                </p>
-                <p className="mt-1 text-[10px] font-bold uppercase tracking-[0.1em] text-indigo-400">
-                  Local demo profile
-                </p>
+                <p className="truncate text-[11px] text-white/50">{user.email}</p>
               </div>
             </div>
           </div>
 
-          <div className="border-b border-white/10 px-4 py-3">
-            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/50">
-              Mindful viewer
-            </p>
-            <div className="mt-3 flex items-center gap-4">
-              <svg
-                viewBox="0 0 100 100"
-                className="h-16 w-16 -rotate-90 shrink-0"
-              >
-                <circle
-                  cx="50"
-                  cy="50"
-                  r={RADIUS}
-                  fill="none"
-                  stroke="rgba(255,255,255,0.08)"
-                  strokeWidth="7"
-                />
-                <circle
-                  cx="50"
-                  cy="50"
-                  r={RADIUS}
-                  fill="none"
-                  stroke="#FFFFFF"
-                  strokeWidth="7"
-                  strokeLinecap="round"
-                  strokeDasharray={CIRC}
-                  strokeDashoffset={CIRC * (1 - (milestone?.fraction ?? 1))}
-                />
-              </svg>
-              <div>
-                <p className="text-2xl font-bold tabular-nums text-white">
-                  {hours.toFixed(1)}
-                  <span className="ml-1 text-xs font-semibold text-white/50">
-                    hrs
-                  </span>
-                </p>
-                <p className="mt-0.5 text-[11px] text-[#9a9aa0]">
-                  {milestone
-                    ? `To your next badge: ${(milestone.target / 3600).toFixed(0)}h`
-                    : "All badges earned — truly immersed."}
-                </p>
-              </div>
-            </div>
-
-            <div className="mt-3 flex items-center gap-2">
-              <Clock3 className="h-3.5 w-3.5 text-white/50" />
-              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/10">
-                <div
-                  className="h-full rounded-full bg-white transition-all"
-                  style={{ width: `${Math.min(100, (count / limit) * 100)}%` }}
-                />
-              </div>
-              <span className="text-[11px] tabular-nums text-white/70">
-                {Math.min(count, limit)}/{limit}
-              </span>
-              {locked && <Lock className="h-3 w-3 text-white/70" />}
-            </div>
-          </div>
-
-          <div className="p-4">
-            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/50">
-              Achievements
-            </p>
-            <div className="mt-3 grid grid-cols-3 gap-2">
-              {ACHIEVEMENTS.map(achievement => {
-                const isEarned = learned.has(achievement.id);
-                const Icon = achievement.icon;
-                return (
-                  <div
-                    key={achievement.id}
-                    title={isEarned ? achievement.copy : achievement.hint}
-                    className={`flex flex-col items-center gap-1.5 rounded-lg border px-1 py-2 text-center ${
-                      isEarned
-                        ? "border-white/15 bg-white/[0.05]"
-                        : "border-white/5 bg-black/20"
-                    }`}
-                  >
-                    <span
-                      className={`grid h-8 w-8 place-items-center rounded-full ${
-                        isEarned
-                          ? "bg-white text-black"
-                          : "bg-white/[0.06] text-white/30"
-                      }`}
+          {/* Profile switcher */}
+          {profiles.length > 0 && (
+            <div className="border-b border-white/10 px-4 py-3">
+              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/40">
+                Switch profile
+              </p>
+              <div className="mt-3 grid grid-cols-3 gap-2">
+                {profiles.slice(0, 6).map((profile) => {
+                  const isActive = profile.id === activeProfile?.id;
+                  return (
+                    <button
+                      key={profile.id}
+                      type="button"
+                      onClick={() => handleSwitch(profile.id)}
+                      disabled={profile.isLocked}
+                      className={`flex flex-col items-center gap-1 rounded-lg border p-2 transition ${
+                        isActive
+                          ? "border-white/40 bg-white/[0.08]"
+                          : "border-white/10 bg-black/20 hover:border-white/30 hover:bg-white/[0.05]"
+                      } disabled:cursor-not-allowed disabled:opacity-40`}
                     >
-                      <Icon className="h-4 w-4" />
-                    </span>
-                    <span
-                      className={`text-[9px] leading-3 ${
-                        isEarned ? "text-white" : "text-white/30"
-                      }`}
-                    >
-                      {achievement.title}
-                    </span>
-                  </div>
-                );
-              })}
+                      <img
+                        src={profile.avatar}
+                        alt=""
+                        className="h-9 w-9 rounded-md object-cover"
+                      />
+                      <span className="w-full truncate text-center text-[10px] leading-3 text-white/80">
+                        {profile.name}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-          </div>
+          )}
 
-          <nav className="px-2 py-1 space-y-1">
+          <nav className="px-2 py-2">
             <Link
               href="/profile"
               onClick={() => setOpen(false)}
               className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-white/80 transition hover:bg-white/10 hover:text-white"
             >
-              <User className="h-4 w-4" />
-              Profile
+              <Users className="h-4 w-4" />
+              Manage Profiles
             </Link>
             <Link
-              href="/my-list"
+              href="/profile"
               onClick={() => setOpen(false)}
               className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-white/80 transition hover:bg-white/10 hover:text-white"
             >
-              <Bookmark className="h-4 w-4" />
-              My List
+              <Settings className="h-4 w-4" />
+              Account Settings
             </Link>
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-white/80 transition hover:bg-white/10 hover:text-white"
+            >
+              <Plus className="h-4 w-4" />
+              Add Profile
+            </button>
           </nav>
 
           <div className="border-t border-white/10 px-4 py-3">
             <button
               type="button"
               onClick={handleSignOut}
-              className="flex items-center gap-3 w-full rounded-lg px-3 py-2 text-sm font-medium text-red-400 transition hover:bg-red-500/10 hover:text-red-300"
+              className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-red-400 transition hover:bg-red-500/10 hover:text-red-300"
             >
               <LogOut className="h-4 w-4" />
               Sign Out

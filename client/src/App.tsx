@@ -9,12 +9,17 @@ import HeroPreview from "./pages/HeroPreview";
 import Profile from "./pages/Profile";
 import { WatchPage } from "./pages/Watch";
 import MyList from "./pages/MyList";
+import ProfilesPage from "./pages/ProfilesPage";
+import AuthPage from "./pages/AuthPage";
 
 function Router() {
   return (
     <Switch>
       <Route path="/" component={Home} />
       <Route path="/hero" component={HeroPreview} />
+      <Route path="/profiles" component={ProfilesPage} />
+      <Route path="/login" component={() => <AuthPage mode="login" />} />
+      <Route path="/signup" component={() => <AuthPage mode="signup" />} />
       <Route path="/profile" component={Profile} />
       <Route path="/my-list" component={MyList} />
       <Route path="/watch/:id" component={WatchPage} />

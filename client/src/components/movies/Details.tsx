@@ -7,8 +7,6 @@ import {
   X,
   MessageSquare,
   Clock,
-  Download,
-  Loader2,
 } from "lucide-react";
 import { useLocation } from "wouter";
 import { getRating, setRating, subscribeRatings } from "@/services/ratings";
@@ -32,12 +30,6 @@ import {
 } from "@/services/stats";
 import type { Movie } from "./types";
 import { TrailerEmbed } from "./MediaCard";
-import {
-  addDownload,
-  canDownload,
-  downloadFile,
-  getDownloads,
-} from "@/services/downloads";
 
 const TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p";
 
@@ -72,31 +64,6 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
   const [watchedSeconds, setWatchedSeconds] = useState(0);
   const [trailer, setTrailer] = useState<TrailerInfo | null>(null);
   const [detailsLoaded, setDetailsLoaded] = useState(false);
-  const [downloading, setDownloading] = useState(false);
-
-  const handleDownload = async () => {
-    const stream = resolved?.stream;
-    if (!stream || !canDownload(stream.stream_url)) return;
-    setDownloading(true);
-    try {
-      const variant = stream.streams?.find((s) => s.url) ?? undefined;
-      const streamUrl = variant?.url ?? stream.stream_url;
-      addDownload({
-        key: String(stream.id),
-        title: movie.title,
-        year: movie.year,
-        poster: movie.poster,
-        quality: variant?.quality ?? null,
-        streamUrl,
-      });
-      const entry = getDownloads().find((e) => e.key === String(stream.id));
-      if (entry) await downloadFile(entry);
-    } catch (error) {
-      console.error("[Details] download failed", error);
-    } finally {
-      setDownloading(false);
-    }
-  };
 
   useEffect(
     () =>
@@ -446,18 +413,6 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
                 <Bookmark className="h-4 w-4" />
               )}
               <span>{saved ? "In My List" : "Add to My List"}</span>
-            </button>
-            <button
-              onClick={() => void handleDownload()}
-              disabled={downloading || !resolved || !canDownload(resolved?.stream.stream_url)}
-              className="flex items-center gap-2 rounded-md border border-white/15 bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {downloading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Download className="h-4 w-4" />
-              )}
-              <span>{downloading ? "Preparing…" : "Download"}</span>
             </button>
             <button className="flex items-center gap-2 rounded-md border border-white/15 bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/10 transition-colors">
               <MessageSquare className="h-4 w-4" />

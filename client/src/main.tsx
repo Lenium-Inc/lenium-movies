@@ -9,6 +9,7 @@ import { startLogin } from "./const";
 import { applyTheme } from "./services/settings";
 import { AuthProvider } from "./context/AuthContext";
 import { LocalSessionProvider } from "./context/LocalSessionContext";
+import { ActiveProfileProvider } from "./context/ActiveProfileContext";
 import "./index.css";
 
 applyTheme();
@@ -77,7 +78,9 @@ createRoot(document.getElementById("root")!).render(
     <QueryClientProvider client={queryClient}>
       <LocalSessionProvider>
         <AuthProvider>
-          <App />
+          <ActiveProfileProvider>
+            <App />
+          </ActiveProfileProvider>
         </AuthProvider>
       </LocalSessionProvider>
     </QueryClientProvider>

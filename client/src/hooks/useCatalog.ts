@@ -296,8 +296,6 @@ export function useCatalog(): UseCatalog {
             items: filtered.filter(movie => savedIds.includes(movie.id)),
           },
         ];
-      case "downloads":
-        return [{ title: "Downloads", items: filtered.slice(0, cap) }];
       default: {
         const trendingItems = filtered.slice(0, cap);
         const trendingIds = new Set(trendingItems.map(m => String(m.providerId ?? m.id ?? "")));

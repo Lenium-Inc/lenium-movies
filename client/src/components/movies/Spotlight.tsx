@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Bookmark,
   Check,
@@ -7,10 +7,13 @@ import {
   Play,
   Star,
   Clock,
+  Volume2,
+  VolumeX,
   type LucideIcon,
 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useLocation } from "wouter";
+import { fetchTrailerByTmdbId, type TrailerInfo } from "@/services/api";
 import type { Movie } from "./types";
 
 const TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p";
@@ -20,6 +23,8 @@ interface SpotlightProps {
   savedIds?: ReadonlyArray<Movie["id"]>;
   onSave?: (movie: Movie) => void;
   rotateSeconds?: number;
+  /** Called whenever the active featured title changes (for page-level ambient). */
+  onActiveChange?: (movie: Movie) => void;
 }
 
 const EASE = [0.32, 0.72, 0, 1] as const;
@@ -28,6 +33,14 @@ function getBackdropUrl(backdrop: string | null | undefined): string | null {
   if (!backdrop) return null;
   if (backdrop.startsWith("http")) return backdrop;
   return `${TMDB_IMAGE_BASE_URL}/original${backdrop}`;
+}
+
+function embedUrl(trailer: TrailerInfo, muted: boolean): string {
+  const base =
+    trailer.provider === "dailymotion"
+      ? `https://www.dailymotion.com/embed/video/${trailer.id}?autoplay=1&loop=1&controls=0&muted=${muted ? 1 : 0}`
+      : `https://www.youtube-nocookie.com/embed/${trailer.id}?autoplay=1&controls=0&loop=1&playlist=${trailer.id}&playsinline=1&iv_load_policy=3&modestbranding=1&rel=0${muted ? "&mute=1" : ""}`;
+  return base;
 }
 
 function formatRuntime(minutes: string | number | undefined): string {
@@ -94,21 +107,26 @@ const SecondaryActionButton = ({
 );
 
 /**
- * Dynamic featured "Movie-of-the-Day" / Spotlight. Renders the full-bleed hero
- * media (Ken Burns backdrop dissolved into void black `#050505`), the title
- * block, consolidated metadata row, and the high-contrast monochrome
- * Play / My List CTA cluster.
+ * Dynamic featured "Movie-of-the-Day" / Spotlight. Full-bleed hero with the
+ * active title's official trailer auto-playing (muted by default, toggled via
+ * the volume control), dissolvable into the void-black `#050505` gradient
+ * architecture when no trailer exists.
  */
 export function Spotlight({
   items,
   savedIds = [],
   onSave,
   rotateSeconds = 8,
+  onActiveChange,
 }: SpotlightProps) {
   const [, navigate] = useLocation();
   const count = items.length;
   const [index, setIndex] = useState(0);
   const [paused, setPaused] = useState(false);
+  const [muted, setMuted] = useState(true);
+  const [trailer, setTrailer] = useState<TrailerInfo | null>(null);
+  const trailerCache = useRef(new Map<string, TrailerInfo | null>());
+  const loaderSeq = useRef(0);
 
   useEffect(() => {
     if (count === 0) return;
@@ -118,7 +136,7 @@ export function Spotlight({
   useEffect(() => {
     if (count < 2 || paused || rotateSeconds <= 0) return;
     const timer = window.setInterval(() => {
-      setIndex(i => (i + 1) % count);
+      setIndex((i) => (i + 1) % count);
     }, rotateSeconds * 1000);
     return () => window.clearInterval(timer);
   }, [count, paused, rotateSeconds]);
@@ -127,6 +145,39 @@ export function Spotlight({
   const saved = current ? savedIds.includes(current.id) : false;
 
   const backdropUrl = getBackdropUrl(current?.backdrop);
+
+  // Fetch the active title's trailer once (cached per title).
+  useEffect(() => {
+    if (!current?.providerId) {
+      setTrailer(null);
+      return;
+    }
+    const key = String(current.providerId);
+    const cached = trailerCache.current.get(key);
+    if (cached !== undefined) {
+      setTrailer(cached);
+      return;
+    }
+    const seq = ++loaderSeq.current;
+    setTrailer(null);
+    fetchTrailerByTmdbId(key)
+      .then((info) => {
+        if (seq !== loaderSeq.current) return;
+        trailerCache.current.set(key, info ?? null);
+        setTrailer(info);
+      })
+      .catch(() => {
+        if (seq !== loaderSeq.current) return;
+        trailerCache.current.set(key, null);
+        setTrailer(null);
+      });
+  }, [current?.providerId]);
+
+  // Report the active title so the page can drive its ambient glow.
+  useEffect(() => {
+    if (current) onActiveChange?.(current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current?.id]);
 
   const handlePlay = (movie: Movie) => {
     if (!movie.providerId) {
@@ -148,7 +199,7 @@ export function Spotlight({
       aria-label="Featured spotlight"
       className="relative isolate -mx-4 h-[560px] w-[calc(100%+2rem)] overflow-hidden bg-[#050505] sm:-mx-6 sm:w-[calc(100%+3rem)] sm:h-[600px] lg:-mx-8 lg:w-[calc(100%+4rem)] lg:h-[660px]"
     >
-      {/* Cross-fading media layer */}
+      {/* Cross-fading media layer — trailer when available, backdrop otherwise */}
       <div className="absolute inset-0">
         <AnimatePresence initial={false}>
           {current ? (
@@ -160,7 +211,20 @@ export function Spotlight({
               exit={{ opacity: 0, scale: 1.02 }}
               transition={{ duration: 0.7, ease: EASE }}
             >
-              {backdropUrl ? (
+              {trailer ? (
+                <div className="absolute inset-0 overflow-hidden">
+                  <iframe
+                    key={`${trailer.id}-${muted ? "m" : "u"}`}
+                    src={embedUrl(trailer, muted)}
+                    title={`${current.title} trailer`}
+                    allow="autoplay"
+                    tabIndex={-1}
+                    aria-hidden
+                    className="absolute left-1/2 top-1/2 min-h-full min-w-full -translate-x-1/2 -translate-y-1/2"
+                    style={{ aspectRatio: "16 / 9", width: "max(100%, 177.78vh)" }}
+                  />
+                </div>
+              ) : backdropUrl ? (
                 <img
                   src={backdropUrl}
                   alt=""
@@ -273,13 +337,25 @@ export function Spotlight({
         </div>
       </div>
 
+      {/* Trailer mute toggle (bottom-right control cluster) */}
+      {current && trailer && (
+        <button
+          type="button"
+          onClick={() => setMuted((m) => !m)}
+          aria-label={muted ? "Unmute trailer" : "Mute trailer"}
+          className="absolute bottom-5 right-36 z-10 grid h-9 w-9 place-items-center rounded-full border border-white/15 bg-black/40 text-white/80 backdrop-blur-md transition hover:border-white/40 hover:bg-white/10 hover:text-white active:scale-95"
+        >
+          {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+        </button>
+      )}
+
       {/* Rotation controls */}
       {count > 1 && (
         <>
           <button
             type="button"
             aria-label="Previous featured title"
-            onClick={() => setIndex(i => (i - 1 + count) % count)}
+            onClick={() => setIndex((i) => (i - 1 + count) % count)}
             className="absolute bottom-5 right-20 z-10 grid h-8 w-8 place-items-center rounded-full border border-white/15 bg-black/40 text-white/70 backdrop-blur-md transition hover:border-white/40 hover:bg-white/10 hover:text-white active:scale-95"
           >
             <ChevronLeft className="h-4 w-4" />
@@ -287,7 +363,7 @@ export function Spotlight({
           <button
             type="button"
             aria-label="Next featured title"
-            onClick={() => setIndex(i => (i + 1) % count)}
+            onClick={() => setIndex((i) => (i + 1) % count)}
             className="absolute bottom-5 right-12 z-10 grid h-8 w-8 place-items-center rounded-full border border-white/15 bg-black/40 text-white/70 backdrop-blur-md transition hover:border-white/40 hover:bg-white/10 hover:text-white active:scale-95"
           >
             <ChevronRight className="h-4 w-4" />
@@ -306,7 +382,7 @@ export function Spotlight({
                 type="button"
                 aria-label={`Show slide ${dot + 1}`}
                 onClick={() =>
-                  setIndex(current =>
+                  setIndex((current) =>
                     count > 8 ? current - (current % 8) + dot : dot
                   )
                 }
