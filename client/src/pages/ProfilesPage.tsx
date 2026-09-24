@@ -72,7 +72,7 @@ export default function ProfilesPage() {
               placeholder="Profile name"
               maxLength={20}
               autoFocus
-              className="mt-6 w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white placeholder-white/30 outline-none transition focus:border-white/40 focus:ring-1 focus:ring-white/30"
+              className="mt-6 w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white placeholder-white/30 outline-none transition focus:border-red-500/60 focus:ring-1 focus:ring-red-500/30"
             />
             <label className="mt-4 flex cursor-pointer items-center gap-3 text-sm text-white/70">
               <input
@@ -173,7 +173,7 @@ export default function ProfilesPage() {
               className="inline-flex items-center gap-2 text-xs text-white/40 transition hover:text-white"
             >
               <LogOut className="h-3.5 w-3.5" />
-              Sign Out of {user?.name ?? "Lenium"}
+              Sign Out of {user?.name ?? "Stream Vy"}
             </button>
           </div>
         </div>

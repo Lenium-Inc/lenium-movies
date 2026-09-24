@@ -75,7 +75,7 @@ const PrimaryActionButton = ({
     type="button"
     onClick={onClick}
     disabled={disabled}
-    className={`inline-flex items-center gap-2 rounded-full px-7 py-3.5 text-sm font-semibold transition-all duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white disabled:opacity-50 disabled:cursor-not-allowed ${className}`}
+    className={`inline-flex items-center gap-2 rounded-full px-7 py-3.5 text-sm font-semibold transition-all duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 disabled:opacity-50 disabled:cursor-not-allowed ${className}`}
   >
     <Icon className="h-5 w-5" />
     {label}
@@ -99,7 +99,7 @@ const SecondaryActionButton = ({
     type="button"
     onClick={onClick}
     disabled={disabled}
-    className={`inline-flex items-center gap-2 rounded-full px-7 py-3.5 text-sm font-semibold transition-all duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white disabled:opacity-50 disabled:cursor-not-allowed ${className}`}
+    className={`inline-flex items-center gap-2 rounded-full px-7 py-3.5 text-sm font-semibold transition-all duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 disabled:opacity-50 disabled:cursor-not-allowed ${className}`}
   >
     <Icon className="h-5 w-5" />
     {label}
@@ -251,14 +251,19 @@ export function Spotlight({
         aria-hidden
         className="absolute inset-0 bg-[linear-gradient(90deg,#050505_0%,rgba(5,5,5,0.80)_44%,rgba(5,5,5,0.20)_72%,transparent_100%)]"
       />
+      {/* Cinematic zinc fade from the bottom so the centered content reads against a theatrical backdrop */}
+      <div
+        aria-hidden
+        className="absolute inset-x-0 bottom-0 h-[70%] bg-gradient-to-t from-zinc-950 via-zinc-950/50 to-transparent"
+      />
       <div
         aria-hidden
         className="absolute inset-x-0 bottom-0 h-48 bg-[linear-gradient(180deg,transparent_0%,#050505_92%)]"
       />
 
-      {/* Cross-fading content block - positioned higher for better visibility */}
-      <div className="absolute inset-0 z-10 flex items-center px-5 pb-16 sm:px-8 lg:px-14">
-        <div className="max-w-2xl w-full">
+      {/* Cross-fading content block - centered, docked toward the bottom */}
+      <div className="absolute inset-0 z-10 flex items-end justify-center px-5 pb-20 sm:px-8 lg:px-14">
+        <div className="w-full max-w-3xl text-center">
           {current ? (
             <AnimatePresence initial={false} mode="popLayout">
               <motion.div
@@ -269,12 +274,12 @@ export function Spotlight({
                 transition={{ duration: 0.5, ease: EASE }}
               >
                 {/* Title */}
-                <h1 className="text-4xl font-black leading-[0.95] tracking-[-0.03em] text-[#FFFFFF] drop-shadow-[0_4px_24px_rgba(0,0,0,0.8)] sm:text-5xl lg:text-6xl xl:text-7xl">
+                <h1 className="text-5xl font-black leading-[0.95] tracking-[-0.03em] text-[#FFFFFF] drop-shadow-[0_4px_24px_rgba(0,0,0,0.8)] md:text-7xl">
                   {current.title}
                 </h1>
 
                 {/* Consolidated Inline Metadata Row */}
-                <div className="mt-4 flex flex-wrap items-center gap-2.5">
+                <div className="mt-4 flex flex-wrap items-center justify-center gap-2.5">
                   {current.year ? (
                     <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/5 px-3 py-1 text-xs font-semibold text-white backdrop-blur-sm">
                       {current.year}
@@ -311,18 +316,18 @@ export function Spotlight({
 
                 {/* Plot Overview / Synopsis */}
                 {current.synopsis ? (
-                  <p className="mt-4 line-clamp-3 max-w-2xl text-base leading-7 text-zinc-300">
+                  <p className="mx-auto mt-4 line-clamp-3 max-w-2xl text-base leading-7 text-zinc-300">
                     {current.synopsis}
                   </p>
                 ) : null}
 
                 {/* Action Buttons - Only Play and My List */}
-                <div className="mt-8 flex flex-wrap items-center gap-4">
+                <div className="mt-8 flex flex-wrap items-center justify-center gap-4">
                   <PrimaryActionButton
                     icon={Play}
                     label="Play"
                     onClick={() => handlePlay(current)}
-                    className="bg-white font-black text-black ring-1 ring-inset ring-white/40 shadow-[0_16px_40px_rgba(0,0,0,0.6)] hover:bg-white/95 hover:shadow-[0_20px_48px_rgba(0,0,0,0.7)] active:scale-[0.97] active:shadow-[0_8px_24px_rgba(0,0,0,0.5)]"
+                    className="bg-red-600 font-black text-white ring-1 ring-inset ring-red-400/40 shadow-[0_16px_40px_rgba(220,38,38,0.35)] hover:bg-red-500 hover:shadow-[0_20px_48px_rgba(220,38,38,0.45)] active:scale-[0.97] active:bg-red-700"
                   />
                   <SecondaryActionButton
                     icon={saved ? Check : Bookmark}

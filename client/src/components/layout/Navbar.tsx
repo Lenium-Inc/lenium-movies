@@ -68,10 +68,10 @@ export function Navbar({ view, onNavigate, search, onSearchChange }: NavbarProps
           href="/"
           onClick={() => window.scrollTo({ top: 0 })}
           className="flex shrink-0 items-center gap-1.5 text-white"
-          aria-label="Lenium home"
+          aria-label="Stream Vy home"
         >
           <Play className="h-5 w-5" />
-          <span className="text-lg font-black tracking-tight">LENIUM</span>
+          <span className="text-lg font-black tracking-tight">STREAM VY</span>
         </Link>
 
         {/* Core navigation (desktop) */}
@@ -95,7 +95,7 @@ export function Navbar({ view, onNavigate, search, onSearchChange }: NavbarProps
 
         <div className="ml-auto flex items-center gap-2.5">
           {/* Desktop search */}
-          <div className="hidden items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-3.5 py-2 transition focus-within:border-white/40 sm:flex">
+          <div className="hidden items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-3.5 py-2 transition focus-within:border-red-500/60 sm:flex">
             <Search className="h-3.5 w-3.5 text-white/50" />
             {renderInput()}
             <kbd className="rounded border border-white/10 bg-white/5 px-1.5 py-px text-[9px] font-semibold text-white/40">

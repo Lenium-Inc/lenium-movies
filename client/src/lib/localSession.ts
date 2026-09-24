@@ -81,7 +81,7 @@ function writeStorage<T>(key: string, value: T): void {
       })
     );
   } catch (error) {
-    console.error("Failed to persist local FreeStream state", error);
+    console.error("Failed to persist local Stream Vy state", error);
   }
 }
 

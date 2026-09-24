@@ -10,6 +10,21 @@ interface AuthPageProps {
   mode: "login" | "signup";
 }
 
+function normalizeAuthError(error: unknown): string {
+  if (error instanceof Error) {
+    const message = error.message;
+    if (
+      /failed to fetch|networkerror|network request failed|load failed/i.test(
+        message
+      )
+    ) {
+      return "We couldn't reach our servers. Check your connection and try again.";
+    }
+    return message;
+  }
+  return "Something went wrong. Try again.";
+}
+
 /**
  * Full-screen sign-in / sign-up. Renders a dimmed, blurred ambient backdrop
  * pulled from the live catalog, a frosted-glass auth card, and routes to the
@@ -72,7 +87,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
       }
       navigate("/profiles");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong. Try again.");
+      setError(normalizeAuthError(err));
     } finally {
       setSubmitting(false);
     }
@@ -104,14 +119,14 @@ export default function AuthPage({ mode }: AuthPageProps) {
         <div className="w-full max-w-md">
           <div className="mb-8 text-center">
             <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-white to-white/70 text-xl font-black text-black shadow-[0_12px_40px_rgba(255,255,255,0.25)]">
-              L
+              S
             </div>
             <h1 className="mt-5 text-3xl font-bold tracking-tight">
               {isSignup ? "Create your account" : "Welcome back"}
             </h1>
             <p className="mt-2 text-sm text-white/50">
               {isSignup
-                ? "Join Lenium to stream movies and shows."
+                ? "Join Stream Vy to stream movies and shows."
                 : "Sign in to start watching."}
             </p>
           </div>
@@ -132,7 +147,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
                     autoComplete="name"
                     autoFocus
                     maxLength={40}
-                    className="w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-white placeholder-white/30 outline-none transition focus:border-white/40 focus:ring-1 focus:ring-white/30"
+                    className="w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-white placeholder-white/30 outline-none transition focus:border-red-500/60 focus:ring-1 focus:ring-red-500/30"
                   />
                 </div>
               )}
@@ -149,7 +164,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
                   autoComplete="email"
                   autoFocus={!isSignup}
                   maxLength={254}
-                  className="w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-white placeholder-white/30 outline-none transition focus:border-white/40 focus:ring-1 focus:ring-white/30"
+                  className="w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-white placeholder-white/30 outline-none transition focus:border-red-500/60 focus:ring-1 focus:ring-red-500/30"
                 />
               </div>
               <div>
@@ -164,7 +179,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
                   placeholder="At least 8 characters"
                   autoComplete={isSignup ? "new-password" : "current-password"}
                   maxLength={128}
-                  className="w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-white placeholder-white/30 outline-none transition focus:border-white/40 focus:ring-1 focus:ring-white/30"
+                  className="w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-white placeholder-white/30 outline-none transition focus:border-red-500/60 focus:ring-1 focus:ring-red-500/30"
                 />
               </div>
 
@@ -202,7 +217,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
                 </>
               ) : (
                 <>
-                  New to Lenium?{" "}
+                  New to Stream Vy?{" "}
                   <Link href="/signup" className="font-semibold text-white hover:underline">
                     Sign up now
                   </Link>

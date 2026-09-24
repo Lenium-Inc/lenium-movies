@@ -14,7 +14,6 @@ import {
   Loader2,
   RefreshCw,
   WifiOff,
-  Server,
   Zap,
   Wifi,
   Settings,
@@ -567,9 +566,9 @@ export function WatchPage() {
         ? `${movie.title} — S${season} E${episode}`
         : movie?.title || "Loading...";
 
-  const DEFAULT_TAB_TITLE = "Lenium Movies";
+  const DEFAULT_TAB_TITLE = "Stream Vy";
   useEffect(() => {
-    document.title = movie?.title ? `${movie.title} — Lenium` : DEFAULT_TAB_TITLE;
+    document.title = movie?.title ? `${movie.title} — Stream Vy` : DEFAULT_TAB_TITLE;
     return () => {
       document.title = DEFAULT_TAB_TITLE;
     };
@@ -923,14 +922,14 @@ export function WatchPage() {
                             alt={movie.title}
                             className="absolute inset-0 w-full h-full object-cover opacity-40 blur-2xl scale-110"
                           />
-                          <div className="relative z-20 rounded-2xl bg-black/50 px-8 py-6 text-center backdrop-blur-md max-w-lg">
+                          <div className="relative z-20 rounded-xl border border-white/10 bg-black/60 px-8 py-6 text-center backdrop-blur-md max-w-lg">
                             <p className="text-lg font-semibold text-white">
                               Stream currently unavailable. Click to retry source.
                             </p>
                             <button
                               type="button"
                               onClick={() => void runStreamFallback(true)}
-                              className="mt-5 inline-flex items-center gap-2 rounded-xl bg-white/10 border border-white/20 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-white/20"
+                              className="mt-5 inline-flex items-center gap-2 rounded-xl bg-white/10 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-white/20"
                             >
                               <RefreshCw className="h-4 w-4" />
                               Retry source
@@ -946,36 +945,11 @@ export function WatchPage() {
                             alt={movie.title}
                             className="absolute inset-0 w-full h-full object-cover opacity-40 blur-2xl scale-110"
                           />
-                          <div className="relative z-20 flex flex-col items-center gap-4 rounded-2xl bg-black/45 px-8 py-6 text-center backdrop-blur-md">
+                          <div className="relative z-20 flex flex-col items-center gap-4 rounded-xl border border-white/10 bg-black/60 px-8 py-6 text-center backdrop-blur-md">
                             <div className="h-10 w-10 animate-spin rounded-full border-[3px] border-white/20 border-t-white" />
                             <p className="text-white/90 font-medium text-sm tracking-wider">
-                              Reconnecting to stream server...
+                              Finding the best stream…
                             </p>
-                            <div className="flex items-center gap-3">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (playableCandidates.length > 0) {
-                                    playerKeyRef.current += 1;
-                                    setReconnecting(false);
-                                  } else {
-                                    void runStreamFallback(true);
-                                  }
-                                }}
-                                className="inline-flex items-center gap-2 rounded-xl bg-white/10 border border-white/20 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/20"
-                              >
-                                <RefreshCw className="h-4 w-4" />
-                                Retry
-                              </button>
-                              <button
-                                type="button"
-                                onClick={handleSourceError}
-                                className="inline-flex items-center gap-2 rounded-xl bg-white/10 border border-white/20 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/20"
-                              >
-                                <Server className="h-4 w-4" />
-                                Switch Server
-                              </button>
-                            </div>
                           </div>
                         </div>
                       </div>
@@ -1103,8 +1077,14 @@ export function WatchPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   <Button
                     variant="outline"
-                    className="flex items-center gap-2 px-4 py-3"
-                    onClick={() => toggleMyList(movie)}
+                    className="flex items-center gap-2 px-4 py-3 focus-visible:ring-red-600/50"
+                    onClick={() => {
+                      if (!authUser) {
+                        navigate("/login");
+                        return;
+                      }
+                      toggleMyList(movie);
+                    }}
                     aria-pressed={isInMyList(movie.id)}
                   >
                     <Plus className="h-5 w-5" />

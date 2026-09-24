@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { LogOut, Plus, Settings, Users, UserRound } from "lucide-react";
+import { LogOut, Plus, Settings, Users } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/context/AuthContext";
 import { useActiveProfile } from "@/context/ActiveProfileContext";
@@ -34,10 +34,9 @@ export function ProfileMenu() {
     return (
       <Link
         href="/login"
-        aria-label="Sign In"
-        className="grid h-9 w-9 place-items-center rounded-full border border-white/15 bg-white/[0.08] text-white transition hover:bg-white/20 hover:border-white/30"
+        className="rounded-md bg-red-600 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-red-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-400"
       >
-        <UserRound className="h-4 w-4" />
+        Sign In
       </Link>
     );
   }

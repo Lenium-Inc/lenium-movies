@@ -116,9 +116,9 @@ export default function ProfilePage() {
 
       <header className="sticky top-0 z-40 border-b border-white/10 bg-[#050505]/70 backdrop-blur-[16px]">
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4 sm:px-6 lg:px-8">
-          <Link href="/" className="flex items-center gap-1.5 text-white" aria-label="Lenium home">
+          <Link href="/" className="flex items-center gap-1.5 text-white" aria-label="Stream Vy home">
             <Play className="h-4 w-4" />
-            <span className="text-base font-black tracking-tight">LENIUM</span>
+            <span className="text-base font-black tracking-tight">STREAM VY</span>
           </Link>
           <div className="flex items-center gap-3">
             <Link
@@ -206,7 +206,7 @@ export default function ProfilePage() {
                   placeholder="Profile name"
                   autoFocus
                   maxLength={20}
-                  className="mt-4 w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white placeholder-white/30 outline-none transition focus:border-white/40 focus:ring-1 focus:ring-white/30"
+                  className="mt-4 w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white placeholder-white/30 outline-none transition focus:border-red-500/60 focus:ring-1 focus:ring-red-500/30"
                 />
                 <label
                   htmlFor="profile-kids"

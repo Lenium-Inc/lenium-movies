@@ -60,7 +60,7 @@ export function GlassHeader({
         >
           <CirclePlay className="h-4 w-4 text-white" />
           <span className="text-sm font-black tracking-tight text-white">
-            FreeStream
+            Stream Vy
           </span>
         </Link>
 

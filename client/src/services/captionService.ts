@@ -34,7 +34,7 @@ export interface MediaMetadata {
 
 // OpenSubtitles API configuration
 const OPENSUBTITLES_BASE_URL = "https://rest.opensubtitles.org";
-const OPENSUBTITLES_USER_AGENT = "FreeStream/1.0";
+const OPENSUBTITLES_USER_AGENT = "StreamVy/1.0";
 
 /**
  * Search for subtitles on OpenSubtitles

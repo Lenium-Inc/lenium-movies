@@ -110,15 +110,6 @@ export default function Home() {
           </section>
         ) : (
           <>
-            <section className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <DiscoverDropdown
-                genre={genre}
-                setGenre={setGenre}
-                setView={setView}
-                filteredCount={filtered.length}
-                isLoading={loading || searchLoading}
-              />
-            </section>
             {isClientSearch ? (
               <SearchStatusBar query={search} onClear={() => setSearch("")} />
             ) : null}
@@ -129,7 +120,7 @@ export default function Home() {
                 onSave={toggleSave}
                 onActiveChange={setHeroActive}
               />
-            ) : !isClientSearch && !loading ? (
+            ) : !isClientSearch && !loading && filtered.length === 0 ? (
               <CatalogEmptyState loading={false} configured={configured} />
             ) : null}
             {isClientSearch &&
@@ -143,6 +134,21 @@ export default function Home() {
                   searchLoading={searchLoading}
                 />
               )}
+            <section className="mt-8 flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#8b8b90]">
+                  Browse the catalogue
+                </p>
+                <h1 className="mt-1 text-2xl font-bold">Discover</h1>
+              </div>
+              <DiscoverDropdown
+                genre={genre}
+                setGenre={setGenre}
+                setView={setView}
+                filteredCount={filtered.length}
+                isLoading={loading || searchLoading}
+              />
+            </section>
             <div className="mt-8">
               {loading ? (
                 <SkeletonMovieGrid count={12} />

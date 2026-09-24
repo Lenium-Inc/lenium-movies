@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Bookmark,
   Check,
+  Download,
   Play,
   Star,
   X,
@@ -9,7 +10,14 @@ import {
   Clock,
 } from "lucide-react";
 import { useLocation } from "wouter";
+import { useAuth } from "@/context/AuthContext";
 import { getRating, setRating, subscribeRatings } from "@/services/ratings";
+import {
+  addDownload,
+  canDownload,
+  isDownloaded,
+  subscribeDownloads,
+} from "@/services/downloads";
 import {
   fetchTrailer,
   fetchTrailerByTmdbId,
@@ -53,6 +61,7 @@ interface DetailsProps {
  */
 export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
   const [, navigate] = useLocation();
+  const { user: authUser } = useAuth();
   const [resolved, setResolved] = useState<ResolvedStream | null>(null);
   const [resolving, setResolving] = useState(false);
   const [playError, setPlayError] = useState<string | null>(null);
@@ -64,6 +73,56 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
   const [watchedSeconds, setWatchedSeconds] = useState(0);
   const [trailer, setTrailer] = useState<TrailerInfo | null>(null);
   const [detailsLoaded, setDetailsLoaded] = useState(false);
+  const [offline, setOffline] = useState<boolean>(() =>
+    isDownloaded(String(movie.id))
+  );
+
+  // Keep the offline indicator in sync with the shared download store.
+  useEffect(() => {
+    if (!authUser) return;
+    const unsubscribe = subscribeDownloads(() =>
+      setOffline(isDownloaded(String(movie.id)))
+    );
+    return unsubscribe;
+  }, [authUser, movie.id]);
+
+  // Save the resolved title for offline viewing. Guests are directed to the
+  // login screen first; the stream is resolved on demand if still pending.
+  const handleOffline = async () => {
+    if (!authUser) {
+      navigate("/login");
+      return;
+    }
+    setPlayError(null);
+    if (offline) return;
+    try {
+      let playable = resolved?.stream ?? null;
+      if (!playable) {
+        const stream = await resolveStream(
+          movie.title,
+          movie.year,
+          movie.mediaType === "tv" ? { season, episode } : undefined
+        );
+        setResolved(stream);
+        playable = stream.stream;
+      }
+      const streamUrl = playable.stream_url;
+      if (!streamUrl || !canDownload(streamUrl)) {
+        setPlayError("This title isn't available to save for offline yet.");
+        return;
+      }
+      addDownload({
+        key: String(movie.id),
+        title: movie.title,
+        year: movie.year ?? null,
+        poster: movie.poster ?? null,
+        streamUrl,
+      });
+      setOffline(true);
+    } catch {
+      setPlayError("We couldn't find a stream to save for this title.");
+    }
+  };
 
   useEffect(
     () =>
@@ -404,8 +463,14 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
               </button>
             )}
             <button
-              onClick={onSave}
-              className="flex items-center gap-2 rounded-md border border-white/15 bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/10 transition-colors"
+              onClick={() => {
+                if (!authUser) {
+                  navigate("/login");
+                  return;
+                }
+                onSave();
+              }}
+              className="flex items-center gap-2 rounded-md border border-white/15 bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600 focus-visible:ring-offset-2 focus-visible:ring-offset-black"
             >
               {saved ? (
                 <Check className="h-4 w-4" />
@@ -414,6 +479,26 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
               )}
               <span>{saved ? "In My List" : "Add to My List"}</span>
             </button>
+            <span
+              title={!authUser ? "Sign in to save for offline" : undefined}
+              className={!authUser ? "cursor-not-allowed" : undefined}
+            >
+              <button
+                onClick={() => void handleOffline()}
+                disabled={offline}
+                aria-disabled={!authUser || offline}
+                className={`flex items-center gap-2 rounded-md border px-4 py-2.5 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600 focus-visible:ring-offset-2 focus-visible:ring-offset-black ${
+                  offline
+                    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
+                    : authUser
+                      ? "border-white/15 bg-white/[0.05] text-white hover:bg-white/10"
+                      : "pointer-events-none border-white/10 bg-white/[0.02] text-white/40 opacity-50"
+                }`}
+              >
+                <Download className="h-4 w-4" />
+                <span>{offline ? "Saved for Offline" : "Save for Offline"}</span>
+              </button>
+            </span>
             <button className="flex items-center gap-2 rounded-md border border-white/15 bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/10 transition-colors">
               <MessageSquare className="h-4 w-4" />
               <span>Comments</span>
