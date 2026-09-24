@@ -212,6 +212,19 @@ def resolve_movie():
         except (ValueError, TypeError):
             runtime = None
 
+    # Extract director/cast from details (may come from credits append_to_response)
+    director = details.get("director")
+    cast = details.get("cast", [])
+    if not director and details.get("credits"):
+        director, cast = tmdb.extract_director_and_cast(details.get("credits", {}))
+    genres = details.get("genres", [])
+    country = details.get("country")
+    language = details.get("language")
+    if not country or not language:
+        extracted_country, extracted_language = tmdb.extract_country_and_language(details)
+        country = country or extracted_country
+        language = language or extracted_language
+
     movie_data = {
         "id": str(tmdb_id),
         "title": details.get("title") or title,
@@ -230,12 +243,12 @@ def resolve_movie():
         "overview": details.get("overview", ""),
         "vote_average": details.get("vote_average"),
         "popularity": details.get("popularity"),
-        "genres": details.get("genres", []),
+        "genres": genres,
         "runtime": runtime,
-        "director": details.get("director"),
-        "cast": details.get("cast", []),
-        "country": details.get("country"),
-        "language": details.get("language"),
+        "director": director,
+        "cast": cast,
+        "country": country,
+        "language": language,
         "release_date": details.get("release_date"),
     }
 

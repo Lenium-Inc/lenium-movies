@@ -92,7 +92,7 @@ def fetch_media_details(media_id: int, media_type: str = "movie") -> Optional[Di
         return None
 
     release_date = data.get("release_date") or data.get("first_air_date", "")
-    release_year = release_date.split("-")[0] if release_date else "N/A"
+    release_year = release_date.split("-")[0] if release_date else ""
 
     # Extract YouTube trailer key
     trailer_key = None
@@ -120,22 +120,30 @@ def fetch_media_details(media_id: int, media_type: str = "movie") -> Optional[Di
     # Extract country and language
     country, language = extract_country_and_language(data)
 
+    # Extract runtime
+    runtime = data.get("runtime")
+    if runtime is not None:
+        try:
+            runtime = int(runtime)
+        except (ValueError, TypeError):
+            runtime = None
+
     result = {
         "id": data.get("id"),
         "title": data.get("title") or data.get("name"),
-        "overview": data.get("overview"),
+        "overview": data.get("overview") or "",
         "release_year": release_year,
         "release_date": release_date,
-        "vote_average": round(data.get("vote_average", 0.0), 1),
+        "vote_average": round(data.get("vote_average", 0.0), 1) if data.get("vote_average") else None,
         "imdb_id": data.get("external_ids", {}).get("imdb_id"),
         "genres": genres,
         "poster_path": poster_path,
-        "poster_url": f"{TMDB_IMAGE_BASE}/w500{poster_path}" if poster_path else None,
+        "poster_url": f"{TMDB_IMAGE_BASE}/w500{poster_path}" if poster_path else "",
         "backdrop_path": backdrop_path,
-        "backdrop_url": f"{TMDB_IMAGE_BASE}/w1280{backdrop_path}" if backdrop_path else None,
+        "backdrop_url": f"{TMDB_IMAGE_BASE}/w1280{backdrop_path}" if backdrop_path else "",
         "trailer_key": trailer_key,
         "popularity": data.get("popularity"),
-        "runtime": data.get("runtime"),
+        "runtime": runtime,
         "media_type": media_type,
         "director": director,
         "cast": cast,
@@ -147,7 +155,6 @@ def fetch_media_details(media_id: int, media_type: str = "movie") -> Optional[Di
     if media_type == "tv":
         result["number_of_seasons"] = data.get("number_of_seasons", 1)
         result["number_of_episodes"] = data.get("number_of_episodes", 0)
-        # Don't fetch all episodes here - do it on demand
         result["seasons"] = data.get("seasons", [])
 
     return result

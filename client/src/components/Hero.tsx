@@ -300,7 +300,7 @@ export function Hero({
                   ) : (
                     <Film className="h-5 w-5" />
                   )}
-                  {saved ? "In My Library" : "My Library"}
+                  {saved ? "In My List" : "Add to My List"}
                 </button>
               </div>
             </div>

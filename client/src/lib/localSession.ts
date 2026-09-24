@@ -23,7 +23,17 @@ export type MovieSummary = {
   backdrop?: string | null;
   mediaType?: "movie" | "tv";
   score?: number | null;
+  tag?: "plan" | "favorites" | "watched";
+  addedAt?: string;
 };
+
+export type ListTag = "plan" | "favorites" | "watched";
+
+export const LIST_TAGS: { value: ListTag; label: string }[] = [
+  { value: "plan", label: "Plan to Watch" },
+  { value: "favorites", label: "Favorites" },
+  { value: "watched", label: "Watched" },
+];
 
 export type WatchHistoryItem = MovieSummary & {
   watchedAt: number;
@@ -94,11 +104,12 @@ function saveSession(state: SessionState): void {
   writeStorage(STORAGE_KEYS.session, state);
 }
 
-function loadList(): MovieSummary[] {
-  return readStorage<MovieSummary[]>(STORAGE_KEYS.list, []);
+function loadList(): Record<string, MovieSummary> {
+  const raw = readStorage<Record<string, MovieSummary>>(STORAGE_KEYS.list, {});
+  return raw || {};
 }
 
-function saveList(list: MovieSummary[]): void {
+function saveList(list: Record<string, MovieSummary>): void {
   writeStorage(STORAGE_KEYS.list, list);
 }
 
@@ -176,15 +187,19 @@ function migrateLegacyKeys(): void {
     if (oldList && !localStorage.getItem(STORAGE_KEYS.list)) {
       try {
         const parsed = JSON.parse(oldList) as Record<string, any>;
-        const movies: MovieSummary[] = Object.values(parsed).map((entry) => ({
-          id: entry.id,
-          providerId: String(entry.id),
-          title: entry.title,
-          year: entry.year,
-          poster: entry.poster,
-          mediaType: "movie",
-          score: null,
-        }));
+        const movies: Record<string, MovieSummary> = {};
+        Object.values(parsed).forEach((entry) => {
+          const key = String(entry.id);
+          movies[key] = {
+            id: entry.id,
+            providerId: String(entry.id),
+            title: entry.title,
+            year: entry.year,
+            poster: entry.poster,
+            mediaType: "movie",
+            score: null,
+          };
+        });
         saveList(movies);
       } catch {
         // ignore parse errors
@@ -208,19 +223,6 @@ export function initializeSession(): SessionState {
 
   if (!session.hydrated) {
     return { user: null, isAuthenticated: false, hydrated: false };
-  }
-
-  if (!session.user && !session.isAuthenticated) {
-    saveSession({
-      user: DEFAULT_LOCAL_USER,
-      isAuthenticated: true,
-      hydrated: true,
-    });
-    return {
-      user: DEFAULT_LOCAL_USER,
-      isAuthenticated: true,
-      hydrated: true,
-    };
   }
 
   return session;
@@ -251,38 +253,65 @@ export function getSession(): SessionState {
 export function isInMyList(movieId: string | number): boolean {
   const list = loadList();
   const key = getMovieKey({ id: movieId, providerId: movieId });
-  return list.some((m) => getMovieKey(m) === key);
+  return key in list;
 }
 
 export function addToMyList(movie: MovieSummary): void {
   const list = loadList();
   const key = getMovieKey(movie);
-  if (list.some((m) => getMovieKey(m) === key)) return;
-  saveList([movie, ...list]);
+  if (key in list) return;
+  list[key] = { ...movie, tag: "plan", addedAt: new Date().toISOString() };
+  saveList(list);
   notify();
 }
 
 export function removeFromMyList(movieId: string | number): void {
   const list = loadList();
   const key = getMovieKey({ id: movieId, providerId: movieId });
-  saveList(list.filter((m) => getMovieKey(m) !== key));
-  notify();
+  if (key in list) {
+    delete list[key];
+    saveList(list);
+    notify();
+  }
+}
+
+export function setEntryTag(movieId: string | number, tag: ListTag): void {
+  const list = loadList();
+  const key = getMovieKey({ id: movieId, providerId: movieId });
+  if (key in list) {
+    list[key] = { ...list[key], tag };
+    saveList(list);
+    notify();
+  }
 }
 
 export function toggleMyList(movie: MovieSummary): boolean {
   const list = loadList();
   const key = getMovieKey(movie);
-  const exists = list.some((m) => getMovieKey(m) === key);
-  if (exists) {
-    removeFromMyList(movie.id);
+  if (key in list) {
+    delete list[key];
+    saveList(list);
+    notify();
     return false;
   }
-  addToMyList(movie);
+  list[key] = { ...movie, tag: "plan", addedAt: new Date().toISOString() };
+  saveList(list);
+  notify();
   return true;
 }
 
 export function getMyList(): MovieSummary[] {
-  return loadList();
+  const list = loadList();
+  return Object.values(list).sort((a, b) => {
+    const aTime = a.addedAt ? new Date(a.addedAt).getTime() : 0;
+    const bTime = b.addedAt ? new Date(b.addedAt).getTime() : 0;
+    return bTime - aTime;
+  });
+}
+
+export function clearMyList(): void {
+  saveList({});
+  notify();
 }
 
 export function addToHistory(item: WatchHistoryItem): void {

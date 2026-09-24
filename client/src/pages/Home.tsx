@@ -122,7 +122,7 @@ export default function Home() {
                   savedIds={savedIds}
                   onSave={toggleSave}
                 />
-              ) : !isClientSearch ? (
+              ) : !isClientSearch && !loading ? (
                 <CatalogEmptyState loading={false} configured={configured} />
               ) : null}
               {isClientSearch &&

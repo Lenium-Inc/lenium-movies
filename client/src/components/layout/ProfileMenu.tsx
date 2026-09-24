@@ -23,7 +23,12 @@ const RADIUS = 30;
 const CIRC = 2 * Math.PI * RADIUS;
 
 export function ProfileMenu() {
-  const { user, isAuthenticated, signInDemo, signOut: logout } = useLocalSession();
+  const {
+    user,
+    isAuthenticated,
+    signInDemo,
+    signOut: logout,
+  } = useLocalSession();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   useStatsRevision();

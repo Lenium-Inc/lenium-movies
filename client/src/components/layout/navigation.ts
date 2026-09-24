@@ -59,6 +59,6 @@ export const navItems: NavItem[] = [
   { id: "tv", label: "TV Series", icon: Tv, color: "#7c3aed" },
   { id: "trending", label: "Trending", icon: Sparkles, color: "#f59e0b" },
   { id: "downloads", label: "Downloads", icon: Download, color: "#10b981" },
-  { id: "my-list", label: "My Library", icon: Bookmark, color: "#ec4899" },
+  { id: "my-list", label: "My List", icon: Bookmark, color: "#ec4899" },
   { id: "profile", label: "Profile", icon: UserRound, color: "#06b6d4" },
 ];

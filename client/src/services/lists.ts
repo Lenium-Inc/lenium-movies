@@ -1,66 +1,40 @@
 /**
  * Tagged "My List" store. Each saved title carries a curation tag
  * (Plan to Watch / Favorites / Watched) that the profile hub sorts on.
- * Persisted under `freestream-list-v1` and broadcast via a DOM event.
+ * Uses the canonical localSession store under `freestream-list-v1`.
  */
+import {
+  getMyList as coreGetMyList,
+  toggleMyList as coreToggleMyList,
+  removeFromMyList as coreRemoveFromMyList,
+  isInMyList as coreIsInMyList,
+  setEntryTag as coreSetEntryTag,
+  type MovieSummary,
+  type ListTag,
+  LIST_TAGS,
+} from "@/lib/localSession";
 
-export type ListTag = "plan" | "favorites" | "watched";
+export type { ListTag, MovieSummary };
+export { LIST_TAGS };
 
-export interface ListEntry {
-  id: number;
-  tag: ListTag;
-  addedAt: string;
-  title: string;
-  year: number | null;
-  poster: string | null;
-}
-
-const KEY = "freestream-list-v1";
-
-export const LIST_TAGS: { value: ListTag; label: string }[] = [
-  { value: "plan", label: "Plan to Watch" },
-  { value: "favorites", label: "Favorites" },
-  { value: "watched", label: "Watched" },
-];
-
-function loadList(): Record<number, ListEntry> {
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as Record<string, ListEntry>;
-    const map: Record<number, ListEntry> = {};
-    for (const [key, value] of Object.entries(parsed)) {
-      if (value && typeof value.id === "number") map[value.id] = value;
-    }
-    return map;
-  } catch {
-    return {};
-  }
-}
-
-function saveList(entries: Record<number, ListEntry>): void {
-  try {
-    localStorage.setItem(KEY, JSON.stringify(entries));
-    window.dispatchEvent(new CustomEvent("freestream:list"));
-  } catch {
-    /* storage unavailable */
-  }
-}
+import { subscribe } from "@/lib/localSession";
 
 export function savedListIds(): number[] {
-  return Object.keys(loadList()).map(Number);
+  return coreGetMyList().map(m => Number(m.id));
 }
 
 export function isSaved(id: number): boolean {
-  return id in loadList();
+  return coreIsInMyList(id);
 }
 
 export function entryTag(id: number): ListTag | undefined {
-  return loadList()[id]?.tag;
+  const list = coreGetMyList();
+  const item = list.find(m => getMovieKey(m) === String(id));
+  return item?.tag;
 }
 
 export function isEmptyList(): boolean {
-  return Object.keys(loadList()).length === 0;
+  return coreGetMyList().length === 0;
 }
 
 /** Toggle a title in the list, defaulting to "Plan to Watch" on add. */
@@ -69,44 +43,52 @@ export function toggleListSave(entry: {
   title: string;
   year: number | null;
   poster: string | null;
+  providerId?: string;
+  backdrop?: string | null;
+  mediaType?: "movie" | "tv";
+  score?: number | null;
 }): { saved: boolean; tag: ListTag } {
-  const entries = loadList();
-  if (entries[entry.id]) {
-    delete entries[entry.id];
-    saveList(entries);
-    return { saved: false, tag: "plan" };
-  }
-  entries[entry.id] = {
-    ...entry,
-    tag: "plan",
-    addedAt: new Date().toISOString(),
+  const movie = {
+    id: entry.id,
+    providerId: entry.providerId ?? String(entry.id),
+    title: entry.title,
+    year: entry.year,
+    poster: entry.poster,
+    backdrop: entry.backdrop,
+    mediaType: entry.mediaType,
+    score: entry.score,
   };
-  saveList(entries);
-  return { saved: true, tag: "plan" };
+  const saved = coreToggleMyList(movie);
+  return { saved, tag: saved ? "plan" : "plan" };
 }
 
 export function setEntryTag(id: number, tag: ListTag): void {
-  const entries = loadList();
-  if (entries[id]) {
-    entries[id] = { ...entries[id], tag };
-    saveList(entries);
-  }
+  coreSetEntryTag(id, tag);
 }
 
 export function removeFromList(id: number): void {
-  const entries = loadList();
-  delete entries[id];
-  saveList(entries);
+  coreRemoveFromMyList(id);
 }
 
 /** Saved titles newest-first, with the picked tag or a default. */
-export function sortedEntries(filter: ListTag | "all" = "all"): ListEntry[] {
-  return Object.values(loadList())
+export function sortedEntries(filter: ListTag | "all" = "all"): MovieSummary[] {
+  const list = coreGetMyList();
+  return list
     .filter(e => filter === "all" || e.tag === filter)
-    .sort((a, b) => b.addedAt.localeCompare(a.addedAt));
+    .sort((a, b) => {
+      const aTime = a.addedAt ? new Date(a.addedAt).getTime() : 0;
+      const bTime = b.addedAt ? new Date(b.addedAt).getTime() : 0;
+      return bTime - aTime;
+    });
 }
 
 export function subscribeList(listener: () => void): () => void {
-  window.addEventListener("freestream:list", listener);
-  return () => window.removeEventListener("freestream:list", listener);
+  return subscribe(listener);
+}
+
+function getMovieKey(movie: {
+  id?: string | number | null;
+  providerId?: string | number | null;
+}): string {
+  return String(movie.providerId ?? movie.id ?? "");
 }

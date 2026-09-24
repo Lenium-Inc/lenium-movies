@@ -42,8 +42,7 @@ import {
   type StreamMovie,
   type TrailerInfo,
 } from "@/services/api";
-import { ExternalEmbedPlayer } from "@/components/stream/ExternalEmbedPlayer";
-import { AuthorizedVideoPlayer, type StreamVariant } from "@/components/stream/AuthorizedVideoPlayer";
+import { VideoPlayer, type StreamVariant } from "@/components/stream/VideoPlayer";
 import { EpisodeMatrix } from "@/components/movies/EpisodeMatrix";
 import { cancelInFlightPrefetch, prefetchForOpen } from "@/services/prefetch";
 import { attemptPlay } from "@/services/capGate";
@@ -65,7 +64,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { isExternalEmbedUrl, getStreamType, getEmbedHostName } from "@/lib/streamUtils";
+import { isExternalEmbedUrl, getEmbedHostName } from "@/lib/streamUtils";
 
 const TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p";
 
@@ -243,6 +242,9 @@ export function WatchPage() {
   // Refs for retry logic
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Cache for resolveStream results to avoid duplicate API calls
+  const resolveCacheRef = useRef<Map<string, ResolvedStream>>(new Map());
+
   // Local session for My List and History
   const { isInMyList, toggleMyList, addToHistory } = useLocalSession();
 
@@ -332,7 +334,7 @@ export function WatchPage() {
     }
   }, [season, episode, movie?.mediaType, resolved, fetchEpisodeInfo]);
 
-  // Helper to resolve stream with retry logic
+  // Helper to resolve stream with retry logic and caching
   const resolveWithRetry = useCallback(
     async (
       title: string,
@@ -340,8 +342,18 @@ export function WatchPage() {
       options?: { season?: number; episode?: number; tmdbId?: string },
       attempt = 1
     ): Promise<ResolvedStream> => {
+      const cacheKey = options?.tmdbId ?? title;
+
+      // Check cache first
+      const cached = resolveCacheRef.current.get(cacheKey);
+      if (cached) {
+        return cached;
+      }
+
       try {
         const stream = await resolveStream(title, year, options);
+        // Cache successful result
+        resolveCacheRef.current.set(cacheKey, stream);
         return stream;
       } catch (error) {
         const playbackError = classifyError(error);
@@ -494,10 +506,15 @@ export function WatchPage() {
 
     void (async () => {
       try {
-        const stream = await resolveStream(movie.title, movie.year, {
-          tmdbId: movie.providerId,
-          ...(movie.mediaType === "tv" ? { season, episode } : {}),
-        });
+        const cacheKey = movie.providerId;
+        let stream = resolveCacheRef.current.get(cacheKey);
+        if (!stream) {
+          stream = await resolveStream(movie.title, movie.year, {
+            tmdbId: movie.providerId,
+            ...(movie.mediaType === "tv" ? { season, episode } : {}),
+          });
+          resolveCacheRef.current.set(cacheKey, stream);
+        }
         if (disposed) return;
         setResolved(stream);
         prefetchForOpen(stream.stream);
@@ -512,7 +529,7 @@ export function WatchPage() {
       disposed = true;
       clearTimeout(loadTimer);
     };
-  }, [movie?.id, movie?.title, movie?.year, movie?.mediaType, season, episode]);
+  }, [movie?.id, movie?.title, movie?.year, movie?.mediaType, movie?.providerId, season, episode]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -569,7 +586,6 @@ export function WatchPage() {
   // Determine if stream is external embed
   const streamUrl = resolved?.stream?.stream_url ?? "";
   const isEmbed = isExternalEmbedUrl(streamUrl);
-  const streamType = getStreamType(streamUrl);
   const embedHostName = getEmbedHostName(streamUrl);
 
   // Determine quality variants for direct streams
@@ -593,8 +609,6 @@ export function WatchPage() {
         };
       });
   }, [resolved, isEmbed]);
-
-  const canChangeQuality = !isEmbed && qualityVariants.length > 1;
 
   // Show loading state with skeleton
   if (movieLoading) {
@@ -704,53 +718,25 @@ export function WatchPage() {
                       </button>
                     </div>
 
-                    {isEmbed ? (
-                      <ExternalEmbedPlayer
-                        streamUrl={streamUrl!}
-                        title={displayTitle}
-                        poster={
-                          movie.backdrop
-                            ? getImageUrl(movie.backdrop, "original")
-                            : movie.poster
-                            ? getImageUrl(movie.poster, "w780")
-                            : ""
-                        }
-                        onClose={handleClose}
-                        movie={{
-                          id: resolved.stream.id,
-                          title: movie.title,
-                          media_type: resolved.stream.media_type,
-                          season: resolved.stream.season,
-                          episode: resolved.stream.episode,
-                        }}
-                        mediaType={resolved.stream.media_type}
-                        season={resolved.stream.season}
-                        episode={resolved.stream.episode}
-                        isLoading={resolving}
-                        playbackError={playError?.message || null}
-                        onRetry={handleRetry}
-                      />
-                    ) : (
-                      <AuthorizedVideoPlayer
-                        streamUrl={streamUrl!}
-                        title={displayTitle}
-                        poster={
-                          movie.backdrop
-                            ? getImageUrl(movie.backdrop, "original")
-                            : movie.poster
-                            ? getImageUrl(movie.poster, "w780")
-                            : ""
-                        }
-                        onClose={handleClose}
-                        variants={qualityVariants}
-                        currentQuality={qualityVariants.find(v => v.quality)?.quality || "Auto"}
-                        onQualityChange={(q) => {}}
-                        isLoading={resolving}
-                        playbackError={playError?.message || null}
-                        onRetry={handleRetry}
-                        hideCloseButton
-                      />
-                    )}
+                    <VideoPlayer
+                      streamUrl={streamUrl!}
+                      title={displayTitle}
+                      poster={
+                        movie.backdrop
+                          ? getImageUrl(movie.backdrop, "original")
+                          : movie.poster
+                          ? getImageUrl(movie.poster, "w780")
+                          : ""
+                      }
+                      onClose={handleClose}
+                      variants={qualityVariants}
+                      currentQuality={qualityVariants.find(v => v.quality)?.quality || "Auto"}
+                      onQualityChange={(q) => {}}
+                      isLoading={resolving}
+                      playbackError={playError?.message || null}
+                      onRetry={handleRetry}
+                      hideCloseButton
+                    />
                   </>
                 )}
                 {!resolved && (
@@ -855,7 +841,7 @@ export function WatchPage() {
                   >
                     <Plus className="h-5 w-5" />
                     <span className="hidden sm:inline">
-                      {isInMyList(movie.id) ? "In My List" : "My Library"}
+                      {isInMyList(movie.id) ? "In My List" : "Add to My List"}
                     </span>
                   </Button>
                 </div>

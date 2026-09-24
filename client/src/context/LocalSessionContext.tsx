@@ -15,6 +15,7 @@ import {
   removeFromMyList,
   toggleMyList,
   getMyList,
+  clearMyList,
   addToHistory,
   removeFromHistory,
   clearHistory,
@@ -37,6 +38,7 @@ export type LocalSessionContextValue = {
   removeFromMyList: (movieId: string | number) => void;
   toggleMyList: (movie: MovieSummary) => boolean;
   getMyList: () => MovieSummary[];
+  clearMyList: () => void;
   addToHistory: (item: WatchHistoryItem) => void;
   removeFromHistory: (movieId: string | number) => void;
   clearHistory: () => void;
@@ -78,6 +80,7 @@ export function LocalSessionProvider({ children }: LocalSessionProviderProps) {
     removeFromMyList,
     toggleMyList,
     getMyList,
+    clearMyList,
     addToHistory,
     removeFromHistory,
     clearHistory,

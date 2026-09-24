@@ -262,6 +262,16 @@ export function useCatalog(): UseCatalog {
     return base;
   }, [genre, movies, searching, view]);
 
+  function dedupeMovies(movies: Movie[]): Movie[] {
+  const seen = new Set<string>();
+  return movies.filter((movie) => {
+    const key = String(movie.providerId ?? movie.id ?? "");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
   const rows: CatalogRows[] = useMemo(() => {
     const byYearDesc = [...filtered].sort(
       (a, b) => (b.year ?? 0) - (a.year ?? 0)
@@ -282,17 +292,21 @@ export function useCatalog(): UseCatalog {
       case "my-list":
         return [
           {
-            title: "My Library",
+            title: "My List",
             items: filtered.filter(movie => savedIds.includes(movie.id)),
           },
         ];
       case "downloads":
         return [{ title: "Downloads", items: filtered.slice(0, cap) }];
-      default:
+      default: {
+        const trendingItems = filtered.slice(0, cap);
+        const trendingIds = new Set(trendingItems.map(m => String(m.providerId ?? m.id ?? "")));
+        const recentItems = byYearDesc.filter(m => !trendingIds.has(String(m.providerId ?? m.id ?? ""))).slice(0, cap);
         return [
-          { title: "Trending Now", items: filtered.slice(0, cap) },
-          { title: "Recently Added", items: byYearDesc.slice(0, cap) },
+          { title: "Trending Now", items: trendingItems },
+          { title: "Recently Added", items: recentItems },
         ];
+      }
     }
   }, [view, filtered, savedIds]);
 
