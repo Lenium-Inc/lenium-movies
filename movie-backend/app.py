@@ -23,8 +23,10 @@ import urllib.parse
 import urllib.request
 
 import certifi
-from flask import Flask, jsonify, request
+from flask import Flask, Response, jsonify, request
 
+import authdb
+import catalog_lib
 import tmdb_service as tmdb
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -33,6 +35,60 @@ TMDB_BASE_URL = "https://api.themoviedb.org/3"
 TMDB_API_KEY = os.environ.get("TMDB_API_KEY") or "100868d1fc3966ca832b3a5457e1edb9"
 
 app = Flask(__name__)
+
+# Direct-playable (non-embed) catalog from Archive.org. Titles here resolve to
+# real MP4 streams the HTML5 player can start instantly; everything else falls
+# back to a third-party embed URL (which the player surfaces explicitly).
+def _load_direct_catalog() -> list[dict]:
+    try:
+        with open(os.path.join(HERE, "movies.json"), "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+            return data if isinstance(data, list) else []
+    except Exception as error:  # noqa: BLE001 - missing/unreadable catalog degrades to empty
+        print(f"[Catalog] could not load movies.json: {error}")
+        return []
+
+_DIRECT_CATALOG = _load_direct_catalog()
+_direct_source_cache: dict[str, dict | None] = {}
+
+
+def _find_catalog_entry(title: str, year) -> dict | None:
+    """Best local (movies.json) match for the requested title/year."""
+    requested_year = None
+    try:
+        requested_year = int(year) if year else None
+    except (TypeError, ValueError):
+        requested_year = None
+    best: tuple[float, dict] | None = None
+    for entry in _DIRECT_CATALOG:
+        score = catalog_lib.match_title(title, entry.get("title", ""))
+        if score < 0.7:
+            continue
+        if not catalog_lib.accept_candidate(requested_year, entry.get("year")):
+            continue
+        if best is None or score > best[0]:
+            best = (score, entry)
+    return best[1] if best else None
+
+
+def _direct_source_for(title: str, year=None) -> dict | None:
+    """Prefer a direct, playable Archive.org source for a title; fall back to a
+    live on-demand scrape when the local catalog has no confident match."""
+    if not title:
+        return None
+    key = catalog_lib.normalize_title(title) or title.lower().strip()
+    cached = _direct_source_cache.get(key)
+    if key in _direct_source_cache:
+        return cached
+    entry = _find_catalog_entry(title, year)
+    if entry is None:
+        try:
+            entry = catalog_lib.scrape_title(title, requested_year=year)
+        except Exception as error:  # noqa: BLE001
+            print(f"[Catalog] on-demand scrape failed for {title!r}: {error}")
+            entry = None
+    _direct_source_cache[key] = entry
+    return entry
 
 
 def _tmdb_get(path: str, params: dict) -> dict | None:
@@ -75,9 +131,25 @@ def _get_tv_metadata(tmdb_id: int | str, current_season: int = 1) -> tuple[int, 
 @app.after_request
 def add_cors_headers(response):
     response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
+    response.headers["Access-Control-Expose-Headers"] = "Content-Length, Accept-Ranges, Content-Type"
     return response
+
+
+def _auth_user() -> dict | None:
+    """Resolve the Authorization: Bearer <token> header to a user row, if any."""
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Bearer "):
+        return None
+    token = header[len("Bearer "):].strip()
+    if not token:
+        return None
+    return authdb.get_store().user_by_token(token)
+
+
+def _normalize_media_type(value) -> str:
+    return value if value in ("movie", "tv") else "movie"
 
 
 @app.route("/api/search", methods=["GET", "OPTIONS"])
@@ -197,12 +269,19 @@ def resolve_movie():
             year = details["release_date"][:4]
         
         stream_url = f"https://vidsrc.me/embed/tv?tmdb={tmdb_id}&season={season}&episode={episode}"
+        direct = None
     else:
         seasons_count = 1
         episodes_count = 1
         if not year and details.get("release_date"):
             year = details["release_date"][:4]
-        stream_url = f"https://vidsrc.me/embed/movie?tmdb={tmdb_id}"
+        title_for_direct = details.get("title") or title
+        direct = _direct_source_for(title_for_direct, year)
+        stream_url = (
+            direct.get("stream_url")
+            if direct
+            else f"https://vidsrc.me/embed/movie?tmdb={tmdb_id}"
+        )
 
     # Extract runtime as number
     runtime = details.get("runtime")
@@ -231,14 +310,14 @@ def resolve_movie():
         "stream_url": stream_url,
         "is_available": True,
         "available": True,
-        "is_embed": True,
+        "is_embed": not bool(direct),
         "year": str(year) if year else "",
         "media_type": media_type,
         "season": season if media_type == "tv" else 1,
         "episode": episode if media_type == "tv" else 1,
         "seasons": seasons_count,
         "episodes_per_season": episodes_count,
-        "poster_url": details.get("poster_url", ""),
+        "poster_url": details.get("poster_url", "") or (direct or {}).get("poster_url", ""),
         "backdrop_url": details.get("backdrop_url", ""),
         "overview": details.get("overview", ""),
         "vote_average": details.get("vote_average"),
@@ -251,6 +330,16 @@ def resolve_movie():
         "language": language,
         "release_date": details.get("release_date"),
     }
+
+    if direct:
+        movie_data["streams"] = direct.get("streams", [])
+        if direct.get("subtitles"):
+            movie_data["subtitles"] = direct["subtitles"]
+        movie_data["topics"] = direct.get("topics", [])
+        if direct.get("_downloads") is not None:
+            movie_data["_downloads"] = direct["_downloads"]
+        if direct.get("_addeddate"):
+            movie_data["_addeddate"] = direct["_addeddate"]
 
     # Include full episode list for TV shows
     if media_type == "tv" and details.get("episodes"):
@@ -272,7 +361,37 @@ def get_stream_direct():
     if not tmdb_id:
         return jsonify({"success": False, "error": "Invalid ID"}), 400
 
-    if media_type in ("tv", "series"):
+    media_type = _normalize_media_type(media_type)
+    is_tv = media_type == "tv"
+
+    # Prefer a direct, ad-free Archive.org MP4 for movies when one exists. The
+    # viewer gets a real stream immediately; quality variants become mirrors.
+    direct = None
+    if not is_tv:
+        details = _tmdb_get(f"/movie/{tmdb_id}", {}) or {}
+        title = details.get("title") or ""
+        year = None
+        if details.get("release_date"):
+            year = details["release_date"][:4]
+        if title:
+            direct = _direct_source_for(title, year)
+
+    if direct:
+        streams = direct.get("streams") or []
+        default = direct.get("stream_url", "")
+        mirrors = [
+            {"name": s.get("quality", "Auto"), "url": s["url"]}
+            for s in streams
+            if s.get("url") and s["url"] != default
+        ]
+        return jsonify({
+            "success": True,
+            "activeSource": default,
+            "mirrors": mirrors,
+            "is_embed": False,
+        })
+
+    if is_tv:
         stream_url = f"https://vidsrc.me/embed/tv?tmdb={tmdb_id}&season={season}&episode={episode}"
         fallback = f"https://vidsrc.cc/v2/embed/tv/{tmdb_id}/{season}/{episode}"
         goojara = f"https://goojara.to/embed/tv?tmdb={tmdb_id}&season={season}&episode={episode}"
@@ -284,12 +403,41 @@ def get_stream_direct():
     return jsonify({
         "success": True,
         "activeSource": stream_url,
+        "is_embed": True,
         "mirrors": [
             {"name": "Server Alpha (VidSrc Me)", "url": stream_url},
             {"name": "Server Beta (VidSrc CC)", "url": fallback},
             {"name": "Server Gamma (Goojara)", "url": goojara}
         ]
     })
+
+
+@app.route("/api/movies/stream", methods=["GET", "OPTIONS"])
+def stream_relay():
+    """Same-origin relay for Archive.org movie bytes (CORS + range safe)."""
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    url = request.args.get("url", "").strip()
+    if not url:
+        return jsonify({"error": "Missing url parameter"}), 400
+
+    try:
+        status, headers, body = catalog_lib.open_archive_stream(
+            url, request.headers.get("Range")
+        )
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception as error:  # noqa: BLE001 - upstream failure is not ours
+        return jsonify({"error": f"Stream unavailable: {error}"}), 502
+
+    response = Response(body or "", status=status)
+    for key, value in headers.items():
+        response.headers[key] = value
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Accept-Ranges"] = "bytes"
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    return response
 
 
 @app.route("/api/movies/feeds", methods=["GET", "OPTIONS"])
@@ -575,3 +723,117 @@ def get_media_by_id(id: str):
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
+
+
+# ---------------------------------------------------------------------------
+# Accounts & per-account watch history
+# ---------------------------------------------------------------------------
+
+def _auth_error(message: str, code: int = 401):
+    return jsonify({"error": message}), code
+
+
+@app.route("/api/auth/signup", methods=["POST", "OPTIONS"])
+def api_signup():
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    payload = request.get_json(silent=True) or {}
+    email = str(payload.get("email") or "").strip().lower()
+    name = str(payload.get("name") or "").strip()
+    password = str(payload.get("password") or "")
+
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        return _auth_error("Please enter a valid email address.", 400)
+    if len(password) < 8:
+        return _auth_error("Password must be at least 8 characters.", 400)
+    if not name:
+        return _auth_error("Please enter your name.", 400)
+
+    store = authdb.get_store()
+    if store.user_by_email(email):
+        return _auth_error("An account with this email already exists.", 409)
+
+    user = store.create_user(email, name[:80], password)
+    if not user:
+        return _auth_error("Could not create the account. Try again.", 500)
+
+    token = store.create_session(user["id"])
+    return jsonify({"token": token, "user": authdb.serialize_user(user)}), 201
+
+
+@app.route("/api/auth/login", methods=["POST", "OPTIONS"])
+def api_login():
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    payload = request.get_json(silent=True) or {}
+    email = str(payload.get("email") or "").strip().lower()
+    password = str(payload.get("password") or "")
+
+    store = authdb.get_store()
+    user = store.user_by_email(email)
+    if not user or not store.verify_password(user, password):
+        return _auth_error("Incorrect email or password.")
+
+    token = store.create_session(user["id"])
+    return jsonify({"token": token, "user": authdb.serialize_user(user)})
+
+
+@app.route("/api/auth/me", methods=["GET", "OPTIONS"])
+def api_me():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    user = _auth_user()
+    if not user:
+        return _auth_error("Not signed in.")
+    return jsonify({"user": authdb.serialize_user(user)})
+
+
+@app.route("/api/auth/logout", methods=["POST", "OPTIONS"])
+def api_logout():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    header = request.headers.get("Authorization", "")
+    if header.startswith("Bearer "):
+        authdb.get_store().revoke_token(header[len("Bearer "):].strip())
+    return jsonify({"success": True})
+
+
+@app.route("/api/auth/history", methods=["GET", "POST", "DELETE", "OPTIONS"])
+def api_history():
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    user = _auth_user()
+    if not user:
+        return _auth_error("Sign in to sync your watch history.")
+
+    store = authdb.get_store()
+    user_id = user["id"]
+
+    if request.method == "DELETE":
+        store.clear_history(user_id)
+        return jsonify({"success": True})
+
+    if request.method == "POST":
+        payload = request.get_json(silent=True) or {}
+        movie_key = str(payload.get("movie_key") or payload.get("id") or "").strip()
+        if not movie_key:
+            return _auth_error("Missing movie key.", 400)
+        store.add_history(user_id, movie_key, payload)
+        return jsonify({"success": True})
+
+    history = store.history(user_id)
+    return jsonify({"history": history})
+
+
+@app.route("/api/auth/history/<path:movie_key>", methods=["DELETE", "OPTIONS"])
+def api_history_remove(movie_key: str):
+    if request.method == "OPTIONS":
+        return ("", 204)
+    user = _auth_user()
+    if not user:
+        return _auth_error("Sign in to manage your watch history.")
+    authdb.get_store().remove_history(user["id"], movie_key)
+    return jsonify({"success": True})

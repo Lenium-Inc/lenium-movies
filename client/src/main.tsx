@@ -7,6 +7,7 @@ import superjson from "superjson";
 import App from "./App";
 import { startLogin } from "./const";
 import { applyTheme } from "./services/settings";
+import { AuthProvider } from "./context/AuthContext";
 import { LocalSessionProvider } from "./context/LocalSessionContext";
 import "./index.css";
 
@@ -75,7 +76,9 @@ createRoot(document.getElementById("root")!).render(
   <trpc.Provider client={trpcClient} queryClient={queryClient}>
     <QueryClientProvider client={queryClient}>
       <LocalSessionProvider>
-        <App />
+        <AuthProvider>
+          <App />
+        </AuthProvider>
       </LocalSessionProvider>
     </QueryClientProvider>
   </trpc.Provider>

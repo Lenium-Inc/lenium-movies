@@ -88,6 +88,39 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const effectiveIsLoading = externalIsLoading || isLoading;
 
+  const attemptAutoplay = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const tryPlay = (muted: boolean) => {
+      if (muted) {
+        video.muted = true;
+        setIsMuted(true);
+      }
+      const promise = video.play();
+      if (promise) {
+        promise
+          .then(() => {
+            setIsPlaying(true);
+            setIsLoading(false);
+          })
+          .catch((err: unknown) => {
+            const name = err instanceof DOMException ? err.name : "";
+            if (!muted && name === "NotAllowedError") {
+              // Autoplay is blocked without a user gesture — retry muted so the
+              // video at least starts; the viewer can unmute from the overlay.
+              tryPlay(true);
+            } else {
+              setIsPlaying(false);
+              setIsLoading(false);
+            }
+          });
+      }
+    };
+
+    tryPlay(false);
+  }, []);
+
   useEffect(() => {
     if (externalPlaybackError) {
       setPlaybackError(externalPlaybackError);
@@ -193,6 +226,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setDuration(video.duration);
       setIsLoading(false);
       initAmbientCanvas();
+      attemptAutoplay();
     };
 
     const handleError = () => {
@@ -202,7 +236,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
 
     const handleWaiting = () => setIsLoading(true);
-    const handlePlaying = () => setIsLoading(false);
+    const handlePlaying = () => {
+      setIsLoading(false);
+      setIsPlaying(true);
+    };
     const handleEnded = () => setIsPlaying(false);
 
     video.addEventListener("loadedmetadata", handleLoadedMetadata);
@@ -223,7 +260,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
           setIsLoading(false);
-          video.play().catch(() => setIsPlaying(false));
+          attemptAutoplay();
           initAmbientCanvas();
         });
 
@@ -236,15 +273,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         });
       } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
         video.src = streamUrl;
-        video.addEventListener(
-          "loadedmetadata",
-          () => {
-            setIsLoading(false);
-            video.play().catch(() => setIsPlaying(false));
-            initAmbientCanvas();
-          },
-          { once: true }
-        );
       } else {
         setPlaybackError("This browser does not support HLS playback.");
         setIsLoading(false);
@@ -252,30 +280,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     } else if (streamType === "dash") {
       if (video.canPlayType("application/dash+xml")) {
         video.src = streamUrl;
-        video.addEventListener(
-          "loadedmetadata",
-          () => {
-            setIsLoading(false);
-            video.play().catch(() => setIsPlaying(false));
-            initAmbientCanvas();
-          },
-          { once: true }
-        );
       } else {
         setPlaybackError("DASH playback requires a compatible browser or dash.js");
         setIsLoading(false);
       }
     } else {
       video.src = streamUrl;
-      video.addEventListener(
-        "loadedmetadata",
-        () => {
-          setIsLoading(false);
-          video.play().catch(() => setIsPlaying(false));
-          initAmbientCanvas();
-        },
-        { once: true }
-      );
     }
 
     hlsRef.current = hls;
@@ -291,7 +301,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, [streamUrl, streamType, initAmbientCanvas]);
+  }, [streamUrl, streamType, initAmbientCanvas, attemptAutoplay]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -321,10 +331,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (!video) return;
     if (isPlaying) {
       video.pause();
+      setIsPlaying(false);
     } else {
-      video.play();
+      video
+        .play()
+        .then(() => {
+          setIsPlaying(true);
+        })
+        .catch(() => {
+          setIsPlaying(false);
+        });
     }
-    setIsPlaying(!isPlaying);
   }, [isPlaying]);
 
   const handleSeek = useCallback(

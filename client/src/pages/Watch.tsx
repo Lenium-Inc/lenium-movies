@@ -30,6 +30,8 @@ import {
   MapPin,
   Globe,
   Calendar,
+  Download,
+  ExternalLink,
 } from "lucide-react";
 import { getRating, setRating, subscribeRatings } from "@/services/ratings";
 import {
@@ -65,6 +67,14 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { isExternalEmbedUrl, getEmbedHostName } from "@/lib/streamUtils";
+import { useAuth } from "@/context/AuthContext";
+import { apiHistoryAdd } from "@/services/auth";
+import {
+  addDownload,
+  canDownload,
+  downloadFile,
+  getDownloads,
+} from "@/services/downloads";
 
 const TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p";
 
@@ -247,6 +257,12 @@ export function WatchPage() {
 
   // Local session for My List and History
   const { isInMyList, toggleMyList, addToHistory } = useLocalSession();
+
+  const { user: authUser } = useAuth();
+
+  const [downloadQuality, setDownloadQuality] = useState("");
+  const [downloading, setDownloading] = useState(false);
+  const [downloadStarted, setDownloadStarted] = useState(false);
 
   // Fetch movie details on mount
   useEffect(() => {
@@ -558,6 +574,43 @@ export function WatchPage() {
     }
   };
 
+  const handleDownload = useCallback(async () => {
+    const stream = resolved?.stream;
+    if (!stream || !movie) return;
+
+    let selectedUrl = stream.stream_url;
+    let selectedQuality: string | null = null;
+    const variant = downloadQuality
+      ? stream.streams?.find((s) => s.quality === downloadQuality)
+      : stream.streams?.[0];
+    if (variant?.url) {
+      selectedUrl = variant.url;
+      selectedQuality = variant.quality ?? null;
+    }
+    if (!canDownload(selectedUrl)) return;
+
+    setDownloading(true);
+    try {
+      addDownload({
+        key: String(stream.id),
+        title: movie.title,
+        year: movie.year,
+        poster: movie.poster,
+        quality: selectedQuality,
+        streamUrl: selectedUrl,
+      });
+      const entry = getDownloads().find((e) => e.key === String(stream.id));
+      if (entry) {
+        await downloadFile(entry);
+        setDownloadStarted(true);
+      }
+    } catch (err) {
+      console.error("[WatchPage] download failed", err);
+    } finally {
+      setDownloading(false);
+    }
+  }, [resolved, movie, downloadQuality]);
+
   // Determine what to show as episode title
   const displayTitle =
     movie?.mediaType === "tv" && episodeDetails?.title
@@ -582,6 +635,26 @@ export function WatchPage() {
       });
     }
   }, [resolved?.stream, movie, addToHistory]);
+
+  // Record per-account history on the backend when signed in
+  const recordedHistoryRef = useRef("");
+  useEffect(() => {
+    if (!movie || !authUser) return;
+    const key = `${movie.providerId}:${season}:${episode}`;
+    if (recordedHistoryRef.current === key) return;
+    recordedHistoryRef.current = key;
+    apiHistoryAdd({
+      movie_key: String(movie.providerId),
+      title: movie.title,
+      year: movie.year ?? null,
+      poster: movie.poster ?? null,
+      backdrop: movie.backdrop ?? null,
+      media_type: movie.mediaType ?? "movie",
+      progress_seconds: watchedSeconds,
+      duration_seconds: 0,
+      watched_at: Date.now(),
+    }).catch(() => {});
+  }, [movie, authUser, season, episode, watchedSeconds]);
 
   // Determine if stream is external embed
   const streamUrl = resolved?.stream?.stream_url ?? "";
@@ -609,6 +682,11 @@ export function WatchPage() {
         };
       });
   }, [resolved, isEmbed]);
+
+  const downloadVariants = useMemo(() => {
+    if (!resolved?.stream?.streams) return [];
+    return resolved.stream.streams.filter((s) => s.url && canDownload(s.url));
+  }, [resolved]);
 
   // Show loading state with skeleton
   if (movieLoading) {
@@ -718,25 +796,78 @@ export function WatchPage() {
                       </button>
                     </div>
 
-                    <VideoPlayer
-                      streamUrl={streamUrl!}
-                      title={displayTitle}
-                      poster={
-                        movie.backdrop
-                          ? getImageUrl(movie.backdrop, "original")
-                          : movie.poster
-                          ? getImageUrl(movie.poster, "w780")
-                          : ""
-                      }
-                      onClose={handleClose}
-                      variants={qualityVariants}
-                      currentQuality={qualityVariants.find(v => v.quality)?.quality || "Auto"}
-                      onQualityChange={(q) => {}}
-                      isLoading={resolving}
-                      playbackError={playError?.message || null}
-                      onRetry={handleRetry}
-                      hideCloseButton
-                    />
+                    {!isEmbed && streamUrl ? (
+                      <VideoPlayer
+                        streamUrl={streamUrl}
+                        title={displayTitle}
+                        poster={
+                          movie.backdrop
+                            ? getImageUrl(movie.backdrop, "original")
+                            : movie.poster
+                            ? getImageUrl(movie.poster, "w780")
+                            : ""
+                        }
+                        onClose={handleClose}
+                        variants={qualityVariants}
+                        currentQuality={qualityVariants.find(v => v.quality)?.quality || "Auto"}
+                        onQualityChange={(q) => {}}
+                        isLoading={resolving}
+                        playbackError={playError?.message || null}
+                        onRetry={handleRetry}
+                        hideCloseButton
+                      />
+                    ) : (
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <div className="relative w-full h-full max-w-6xl max-h-[85vh] flex items-center justify-center">
+                          <img
+                            src={
+                              movie.backdrop
+                                ? getImageUrl(movie.backdrop, "original")
+                                : movie.poster
+                                ? getImageUrl(movie.poster, "w780")
+                                : ""
+                            }
+                            alt={movie.title}
+                            className="absolute inset-0 w-full h-full object-cover opacity-30 blur-sm"
+                          />
+                          <div className="relative z-20 text-center px-6 max-w-lg">
+                            <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-white/5 border border-white/10 grid place-items-center">
+                              <Monitor className="h-8 w-8 text-indigo-400" />
+                            </div>
+                            <p className="text-lg font-semibold text-white">
+                              Streaming source is external
+                            </p>
+                            <p className="mt-2 text-sm text-white/60 leading-6">
+                              This title is served by the {embedHostName} embed player, so it
+                              can't play inline in our video player. Open it directly in a
+                              new tab to watch.
+                            </p>
+                            {streamUrl && (
+                              <a
+                                href={streamUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="mt-6 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-indigo-500"
+                              >
+                                <ExternalLink className="h-4 w-4" />
+                                Open in {embedHostName}
+                              </a>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setResolved(null);
+                                void play();
+                              }}
+                              className="mt-3 inline-flex items-center gap-1.5 text-xs text-white/50 transition hover:text-white/80"
+                            >
+                              <RefreshCw className="h-3 w-3" />
+                              Look for other sources
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </>
                 )}
                 {!resolved && (
@@ -844,6 +975,43 @@ export function WatchPage() {
                       {isInMyList(movie.id) ? "In My List" : "Add to My List"}
                     </span>
                   </Button>
+
+                  {resolved && canDownload(resolved.stream.stream_url) && (
+                    <div className="flex items-center gap-2">
+                      {downloadVariants.length > 1 && (
+                        <Select value={downloadQuality} onValueChange={(value) => { setDownloadQuality(value); setDownloadStarted(false); }}>
+                          <SelectTrigger className="w-[110px] bg-white/5 border border-white/10 text-white/80 text-xs">
+                            <SelectValue placeholder="Quality" />
+                          </SelectTrigger>
+                          <SelectContent className="bg-zinc-900 border border-white/10 text-white">
+                            {downloadVariants.map((v) => (
+                              <SelectItem key={v.quality || "source"} value={v.quality || "source"}>
+                                {v.quality || "Source"}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                      <Button
+                        variant="outline"
+                        onClick={() => void handleDownload()}
+                        disabled={downloading}
+                        className="flex items-center gap-2 px-4 py-3"
+                        aria-label="Download"
+                      >
+                        {downloading ? (
+                          <Loader2 className="h-5 w-5 animate-spin" />
+                        ) : downloadStarted ? (
+                          <Check className="h-5 w-5" />
+                        ) : (
+                          <Download className="h-5 w-5" />
+                        )}
+                        <span className="hidden sm:inline">
+                          {downloading ? "Preparing…" : downloadStarted ? "Saved" : "Download"}
+                        </span>
+                      </Button>
+                    </div>
+                  )}
                 </div>
               </div>
 

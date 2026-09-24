@@ -8,6 +8,7 @@ import {
   SearchStatusBar,
 } from "@/components/movies/CatalogEmptyState";
 import { Details } from "@/components/movies/Details";
+import { DownloadsView } from "@/components/movies/DownloadsView";
 import { Spotlight } from "@/components/movies/Spotlight";
 import { MovieRow } from "@/components/movies/MovieRow";
 import { SkeletonMovieGrid } from "@/components/movies/SkeletonMovieCard";
@@ -77,6 +78,8 @@ export default function Home() {
                 imported and approved. No placeholder collections are shown.
               </p>
             </section>
+          ) : view === "downloads" ? (
+            <DownloadsView />
           ) : view === "genres" ? (
             <section className="py-8">
               <div className="mb-6">

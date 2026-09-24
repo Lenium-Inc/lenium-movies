@@ -1,2 +1,4 @@
-flask>=3.0certifi
+flask>=3.0
+certifi
 gunicorn
+psycopg[binary]>=3.1

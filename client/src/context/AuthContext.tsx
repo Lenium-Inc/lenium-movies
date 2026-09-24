@@ -5,8 +5,15 @@ import {
   useState,
   type ReactNode,
 } from "react";
-
-export type StreamQuality = "4K" | "1080p" | "720p" | "480p" | "320p";
+import {
+  apiLogin,
+  apiLogout,
+  apiMe,
+  apiSignup,
+  clearSession,
+  getStoredUser,
+  type ApiUser,
+} from "@/services/auth";
 
 export interface User {
   id: string;
@@ -18,8 +25,9 @@ export interface User {
 export interface AuthContextType {
   user: User | null;
   isLoading: boolean;
-  login: (credentials?: Record<string, unknown>) => Promise<void>;
-  logout: () => void;
+  login: (credentials: { email: string; password: string }) => Promise<void>;
+  signup: (input: { name: string; email: string; password: string }) => Promise<void>;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -28,69 +36,80 @@ interface AuthProviderProps {
   children: ReactNode;
 }
 
-const STORAGE_KEY = "freestream_user";
+function toUser(api: ApiUser): User {
+  return {
+    id: String(api.id),
+    name: api.name,
+    email: api.email,
+    avatar_url: undefined,
+  };
+}
 
 export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (
-          parsed &&
-          typeof parsed.id === "string" &&
-          typeof parsed.name === "string" &&
-          typeof parsed.email === "string"
-        ) {
-          setUser(parsed);
-        }
-      }
-    } catch {
-      localStorage.removeItem(STORAGE_KEY);
-    } finally {
-      setIsLoading(false);
+    let mounted = true;
+    const cached = getStoredUser();
+    if (cached) {
+      setUser(toUser(cached));
     }
+    void apiMe()
+      .then((fresh) => {
+        if (!mounted) return;
+        if (fresh) {
+          setUser(toUser(fresh));
+        } else {
+          setUser(null);
+        }
+      })
+      .catch(() => {
+        /* keep cached session on network failure */
+      })
+      .finally(() => {
+        if (mounted) setIsLoading(false);
+      });
+    return () => {
+      mounted = false;
+    };
   }, []);
 
-  const login = async (
-    credentials?: Record<string, unknown>
-  ): Promise<void> => {
+  const login = async (credentials: {
+    email: string;
+    password: string;
+  }): Promise<void> => {
     setIsLoading(true);
     try {
-      if (credentials?.email && credentials?.name) {
-        const newUser: User = {
-          id: (credentials.id as string) || crypto.randomUUID(),
-          name: credentials.name as string,
-          email: credentials.email as string,
-          avatar_url: credentials.avatar_url as string | undefined,
-        };
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(newUser));
-        setUser(newUser);
-      } else {
-        const mockUser: User = {
-          id: crypto.randomUUID(),
-          name: "Demo User",
-          email: "demo@freestream.app",
-          avatar_url: undefined,
-        };
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(mockUser));
-        setUser(mockUser);
-      }
+      const payload = await apiLogin(credentials);
+      setUser(toUser(payload.user));
     } finally {
       setIsLoading(false);
     }
   };
 
-  const logout = (): void => {
-    localStorage.removeItem(STORAGE_KEY);
+  const signup = async (input: {
+    name: string;
+    email: string;
+    password: string;
+  }): Promise<void> => {
+    setIsLoading(true);
+    try {
+      const payload = await apiSignup(input);
+      setUser(toUser(payload.user));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const logout = async (): Promise<void> => {
+    await apiLogout();
     setUser(null);
+    clearSession();
   };
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, login, logout }}>
+    <AuthContext.Provider value={{ user, isLoading, login, signup, logout }}>
       {children}
     </AuthContext.Provider>
   );
