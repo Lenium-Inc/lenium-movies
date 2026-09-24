@@ -43,6 +43,7 @@ export interface VideoPlayerProps {
   isLoading?: boolean;
   playbackError?: string | null;
   onRetry?: () => void;
+  onSourceError?: () => void;
   hideCloseButton?: boolean;
   autoPlay?: boolean;
 }
@@ -61,6 +62,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   isLoading: externalIsLoading = false,
   playbackError: externalPlaybackError = null,
   onRetry,
+  onSourceError,
   hideCloseButton = false,
   autoPlay = true,
 }) => {
@@ -230,9 +232,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
 
     const handleError = () => {
-      const error = video.error?.message || "Playback failed";
-      setPlaybackError(`Error: ${error}`);
+      setPlaybackError(
+        "Stream currently unavailable. Click to retry source."
+      );
       setIsLoading(false);
+      onSourceError?.();
     };
 
     const handleWaiting = () => setIsLoading(true);
@@ -266,23 +270,28 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
         hls.on(Hls.Events.ERROR, (_event: unknown, data: { fatal?: boolean }) => {
           if (data.fatal) {
-            setPlaybackError("The video could not be loaded.");
+            setPlaybackError(
+              "Stream currently unavailable. Click to retry source."
+            );
             setIsLoading(false);
             hls?.destroy();
+            onSourceError?.();
           }
         });
       } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
         video.src = streamUrl;
       } else {
-        setPlaybackError("This browser does not support HLS playback.");
+        setPlaybackError("Stream currently unavailable. Click to retry source.");
         setIsLoading(false);
+        onSourceError?.();
       }
     } else if (streamType === "dash") {
       if (video.canPlayType("application/dash+xml")) {
         video.src = streamUrl;
       } else {
-        setPlaybackError("DASH playback requires a compatible browser or dash.js");
+        setPlaybackError("Stream currently unavailable. Click to retry source.");
         setIsLoading(false);
+        onSourceError?.();
       }
     } else {
       video.src = streamUrl;
@@ -301,7 +310,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, [streamUrl, streamType, initAmbientCanvas, attemptAutoplay]);
+  }, [streamUrl, streamType, initAmbientCanvas, attemptAutoplay, onSourceError]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -518,7 +527,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 </div>
               ) : (
                 <p className="text-white/80 font-medium text-sm tracking-wider">
-                  Loading video...
+                  Buffering video...
                 </p>
               )}
             </div>
@@ -538,15 +547,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       />
 
       <div
-        className={`absolute top-0 inset-x-0 p-4 bg-gradient-to-b from-black/80 via-black/40 to-transparent flex items-center justify-between transition-opacity duration-300 z-30 ${
+        className={`absolute top-0 inset-x-0 p-4 bg-gradient-to-b from-black/80 via-black/40 to-transparent flex items-center justify-end transition-opacity duration-300 z-30 ${
           showControls && hasUserInteracted ? "opacity-100" : "opacity-0 pointer-events-none"
         }`}
       >
-        <div className="flex items-center gap-3 min-w-0">
-          <h1 className="text-white text-base font-semibold tracking-wide drop-shadow-md truncate">
-            {title}
-          </h1>
-        </div>
         {!hideCloseButton && (
           <button
             onClick={onClose}

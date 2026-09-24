@@ -71,15 +71,18 @@ def _find_catalog_entry(title: str, year) -> dict | None:
     return best[1] if best else None
 
 
-def _direct_source_for(title: str, year=None) -> dict | None:
+def _direct_source_for(title: str, year=None, refresh: bool = False) -> dict | None:
     """Prefer a direct, playable Archive.org source for a title; fall back to a
-    live on-demand scrape when the local catalog has no confident match."""
+    live on-demand scrape when the local catalog has no confident match. Pass
+    `refresh=True` to bypass the cache and scrape again (the frontend uses this
+    while its stream-fallback loop is looking for a playable source)."""
     if not title:
         return None
     key = catalog_lib.normalize_title(title) or title.lower().strip()
-    cached = _direct_source_cache.get(key)
+    if refresh:
+        _direct_source_cache.pop(key, None)
     if key in _direct_source_cache:
-        return cached
+        return _direct_source_cache[key]
     entry = _find_catalog_entry(title, year)
     if entry is None:
         try:
@@ -357,6 +360,7 @@ def get_stream_direct():
     media_type = request.args.get("media_type", "movie")
     season = request.args.get("season", 1)
     episode = request.args.get("episode", 1)
+    refresh = request.args.get("refresh", "") in ("1", "true", "yes")
 
     if not tmdb_id:
         return jsonify({"success": False, "error": "Invalid ID"}), 400
@@ -366,6 +370,8 @@ def get_stream_direct():
 
     # Prefer a direct, ad-free Archive.org MP4 for movies when one exists. The
     # viewer gets a real stream immediately; quality variants become mirrors.
+    # With `refresh=1` the cache is bypassed so a retrying client can keep
+    # asking until a playable source is found.
     direct = None
     if not is_tv:
         details = _tmdb_get(f"/movie/{tmdb_id}", {}) or {}
@@ -374,15 +380,15 @@ def get_stream_direct():
         if details.get("release_date"):
             year = details["release_date"][:4]
         if title:
-            direct = _direct_source_for(title, year)
+            direct = _direct_source_for(title, year, refresh=refresh)
 
     if direct:
         streams = direct.get("streams") or []
         default = direct.get("stream_url", "")
         mirrors = [
-            {"name": s.get("quality", "Auto"), "url": s["url"]}
-            for s in streams
-            if s.get("url") and s["url"] != default
+            {"name": f"Server {index + 1}", "url": source["url"]}
+            for index, source in enumerate(streams)
+            if source.get("url") and source["url"] != default
         ]
         return jsonify({
             "success": True,
@@ -394,20 +400,17 @@ def get_stream_direct():
     if is_tv:
         stream_url = f"https://vidsrc.me/embed/tv?tmdb={tmdb_id}&season={season}&episode={episode}"
         fallback = f"https://vidsrc.cc/v2/embed/tv/{tmdb_id}/{season}/{episode}"
-        goojara = f"https://goojara.to/embed/tv?tmdb={tmdb_id}&season={season}&episode={episode}"
     else:
         stream_url = f"https://vidsrc.me/embed/movie?tmdb={tmdb_id}"
         fallback = f"https://vidsrc.cc/v2/embed/movie/{tmdb_id}"
-        goojara = f"https://goojara.to/embed/movie?tmdb={tmdb_id}"
 
     return jsonify({
         "success": True,
         "activeSource": stream_url,
         "is_embed": True,
         "mirrors": [
-            {"name": "Server Alpha (VidSrc Me)", "url": stream_url},
-            {"name": "Server Beta (VidSrc CC)", "url": fallback},
-            {"name": "Server Gamma (Goojara)", "url": goojara}
+            {"name": "Server 1", "url": stream_url},
+            {"name": "Server 2", "url": fallback},
         ]
     })
 

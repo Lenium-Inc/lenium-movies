@@ -338,6 +338,12 @@ export interface GetStreamRequest {
   season?: number;
   /** Episode to target (TV only; defaults to 1 on the backend). */
   episode?: number;
+  /**
+   * Bypasses the backend's direct-source cache and forces a fresh scrape.
+   * Used by the player's stream-fallback loop while it polls for a playable
+   * source.
+   */
+  refresh?: boolean;
 }
 
 function isGetStreamPayload(value: unknown): value is {
@@ -370,6 +376,7 @@ export async function getStreamSource(
     params.set("season", String(input.season ?? 1));
     params.set("episode", String(input.episode ?? 1));
   }
+  if (input.refresh) params.set("refresh", "1");
   const response = await fetch(
     `${MOVIE_API_BASE_URL}/api/get-stream?${params.toString()}`
   );

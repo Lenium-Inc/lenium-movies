@@ -23,32 +23,6 @@ export function isExternalEmbedUrl(url: string | null | undefined): boolean {
   }
 }
 
-export function getEmbedHostName(url: string): string {
-  try {
-    const hostname = new URL(url).hostname.toLowerCase();
-    const hostMap: Record<string, string> = {
-      "vidsrc.me": "VidSrc",
-      "vidsrc.sh": "VidSrc",
-      "vidsrc.cc": "VidSrc",
-      "embed.su": "Embed.su",
-      "goojara.to": "Goojara",
-      "vidlink.org": "VidLink",
-      "vidstream.pro": "VidStream",
-      "autoembed.cc": "AutoEmbed",
-      "2embed.cc": "2Embed",
-      "multiembed.mov": "MultiEmbed",
-    };
-    for (const [key, value] of Object.entries(hostMap)) {
-      if (hostname === key || hostname.endsWith(`.${key}`)) {
-        return value;
-      }
-    }
-    return hostname;
-  } catch {
-    return "External";
-  }
-}
-
 export type StreamType = "hls" | "dash" | "mp4" | "embed";
 
 export function getStreamType(url: string): StreamType {
