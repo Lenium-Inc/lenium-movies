@@ -36,6 +36,7 @@ import {
   getStreamSource,
   resolveStream,
   StreamNotFoundError,
+  StreamTimeoutError,
   type ResolvedStream,
   type StreamMovie,
   type TrailerInfo,
@@ -81,6 +82,14 @@ function getImageUrl(path: string, size: string): string {
 
 const RATE_AFTER_SECONDS = 15 * 60;
 const MAX_RETRY_ATTEMPTS = 3;
+
+/**
+ * Backoff between automatic resolver attempts. Without it the three attempts
+ * fire back to back, so a cold backend absorbs all of them while still booting
+ * and the viewer lands on the error screen without the service ever having had a
+ * fair chance. A manual "Retry source" skips the wait.
+ */
+const COLD_START_BACKOFF_MS = 4000;
 const RETRY_BASE_DELAY_MS = 1000;
 
 function classifyError(error: unknown) {
@@ -652,6 +661,10 @@ export function WatchPage() {
   const [sourceIndex, setSourceIndex] = useState(0);
   const [reconnecting, setReconnecting] = useState(false);
   const [streamUnavailable, setStreamUnavailable] = useState(false);
+  // True while the resolver call is in flight. A free-tier backend that scaled
+  // to zero needs 15-20s to boot, and that wait is not a failure -- showing the
+  // error screen during it is what made cold starts look broken.
+  const [wakingUp, setWakingUp] = useState(false);
   // Embed providers are the last resort: opt-in only, so the direct-source
   // path stays the default and no third-party frame loads until asked.
   const [useEmbedFallback, setUseEmbedFallback] = useState(false);
@@ -703,8 +716,15 @@ export function WatchPage() {
       fallbackAttemptsRef.current += 1;
 
       setReconnecting(true);
+      setWakingUp(true);
       setStreamUnavailable(false);
       try {
+        // Let a booting backend finish booting before spending an attempt.
+        if (!manual && fallbackAttemptsRef.current > 1) {
+          await new Promise(resolve =>
+            setTimeout(resolve, COLD_START_BACKOFF_MS)
+          );
+        }
         const source = await getStreamSource({
           tmdbId: stream.id,
           mediaType,
@@ -734,12 +754,22 @@ export function WatchPage() {
         ) {
           setStreamUnavailable(true);
         }
-      } catch {
+      } catch (err) {
+        // A timeout means the resolver is still waking up, so it costs an
+        // attempt but must not surface as "unavailable" on its own -- the loop
+        // retries and only the final attempt decides.
+        const timedOut = err instanceof StreamTimeoutError;
+        if (timedOut) {
+          console.warn(
+            `[stream] resolver cold start, attempt ${fallbackAttemptsRef.current}/${MAX_RETRY_ATTEMPTS}`
+          );
+        }
         if (fallbackAttemptsRef.current >= MAX_RETRY_ATTEMPTS || manual) {
           setStreamUnavailable(true);
         }
       } finally {
         setReconnecting(false);
+        setWakingUp(false);
       }
     },
     [resolved, reconnecting, season, episode]
@@ -969,7 +999,36 @@ export function WatchPage() {
                           <div className="relative z-20 flex flex-col items-center gap-4 rounded-xl border border-white/10 bg-black/60 px-8 py-6 text-center backdrop-blur-md">
                             <div className="h-10 w-10 animate-spin rounded-full border-[3px] border-white/20 border-t-white" />
                             <p className="text-white/90 font-medium text-sm tracking-wider">
-                              Reconnecting to stream…
+                              {wakingUp
+                                ? "Waking up stream server…"
+                                : "Reconnecting to stream…"}
+                            </p>
+                            {wakingUp ? (
+                              <p className="max-w-xs text-white/50 text-xs leading-relaxed">
+                                The backend scales to sleep when idle. Its first
+                                request after a pause can take up to half a
+                                minute to answer.
+                              </p>
+                            ) : null}
+                          </div>
+                        </div>
+                      </div>
+                    ) : resolved && wakingUp ? (
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <div className="relative w-full h-full max-w-6xl max-h-[85vh] flex items-center justify-center">
+                          <img
+                            src={streamPoster}
+                            alt={movie.title}
+                            className="absolute inset-0 w-full h-full object-cover opacity-40 blur-2xl scale-110"
+                          />
+                          <div className="relative z-20 flex flex-col items-center gap-4 rounded-xl border border-white/10 bg-black/60 px-8 py-6 text-center backdrop-blur-md">
+                            <div className="h-10 w-10 animate-spin rounded-full border-[3px] border-white/20 border-t-white" />
+                            <p className="text-white/90 font-medium text-sm tracking-wider">
+                              Waking up stream server…
+                            </p>
+                            <p className="max-w-xs text-white/50 text-xs leading-relaxed">
+                              Resolving sources. A sleeping backend can take up to
+                              30 seconds to respond on its first request.
                             </p>
                           </div>
                         </div>

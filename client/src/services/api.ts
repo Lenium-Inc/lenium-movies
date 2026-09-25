@@ -410,6 +410,47 @@ function isGetStreamPayload(value: unknown): value is {
 }
 
 /**
+ * Stream resolution is the slowest call in the app. A Render free-tier
+ * instance that has scaled to zero needs 15-20s to boot before it answers
+ * /api/get-stream, and `fetch` has no default timeout, so a cold start was
+ * indistinguishable from a hung request -- the resolver had no way to say "still
+ * waiting" and the UI had nothing to show but the generic spinner.
+ *
+ * 30s clears the cold-start window while still bounding a genuinely dead
+ * backend. Catalog and metadata calls are left alone: they answer in under a
+ * second and a long timeout there would only delay an honest error.
+ */
+export const STREAM_RESOLVE_TIMEOUT_MS = 30_000;
+
+/** Distinguishes "the resolver is still booting" from a real failure. */
+export class StreamTimeoutError extends Error {
+  constructor(readonly timeoutMs: number) {
+    super(`Stream resolver did not respond within ${timeoutMs / 1000}s`);
+    this.name = "StreamTimeoutError";
+  }
+}
+
+async function fetchWithTimeout(
+  input: string,
+  init: RequestInit,
+  timeoutMs: number
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (err) {
+    // Only the timer aborts this controller, so a rejection here is a timeout
+    // rather than a genuine network failure. Callers retry the former silently
+    // and surface the latter.
+    if (controller.signal.aborted) throw new StreamTimeoutError(timeoutMs);
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Resolve a direct playable source for an already-known TMDB title through the
  * backend's `/api/get-stream` endpoint. The backend returns an `activeSource`
  * (the URL the player boots on) plus a `mirrors` list of alternate servers.
@@ -417,7 +458,10 @@ function isGetStreamPayload(value: unknown): value is {
  * For TV entries pass the selected `season`/`episode` so the baked embed URL —
  * and every mirror — targets the exact episode the viewer picked.
  *
- * @throws `Error` when the backend is unreachable or returns an unexpected shape.
+ * @throws `StreamTimeoutError` if the backend does not answer within
+ * `STREAM_RESOLVE_TIMEOUT_MS`, which usually means a cold start rather than a
+ * dead service. @throws `Error` when the backend is unreachable or returns an
+ * unexpected shape.
  */
 export async function getStreamSource(
   input: GetStreamRequest
@@ -430,8 +474,10 @@ export async function getStreamSource(
     params.set("episode", String(input.episode ?? 1));
   }
   if (input.refresh) params.set("refresh", "1");
-  const response = await fetch(
-    `${MOVIE_API_BASE_URL}/api/get-stream?${params.toString()}`
+  const response = await fetchWithTimeout(
+    `${MOVIE_API_BASE_URL}/api/get-stream?${params.toString()}`,
+    {},
+    STREAM_RESOLVE_TIMEOUT_MS
   );
   if (!response.ok) {
     throw new Error(`Movie backend responded with status ${response.status}`);
