@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { genreFilterOptions, useCatalog } from "@/hooks/useCatalog";
+import { genreFilterOptions, INFINITE_VIEWS, useCatalog } from "@/hooks/useCatalog";
 import { Navbar } from "@/components/layout/Navbar";
 import {
   CatalogEmptyState,
@@ -9,6 +9,7 @@ import { Details } from "@/components/movies/Details";
 import { Spotlight } from "@/components/movies/Spotlight";
 import { MovieRow } from "@/components/movies/MovieRow";
 import { SkeletonMovieGrid } from "@/components/movies/SkeletonMovieCard";
+import { InfiniteMovieGrid } from "@/components/movies/InfiniteMovieGrid";
 import { DiscoverDropdown } from "@/components/DiscoverDropdown";
 import { TopProgressBar } from "@/components/ui/TopProgressBar";
 import type { Movie } from "@/components/movies/types";
@@ -31,11 +32,17 @@ export default function Home() {
     searchLoading,
     filtered,
     rows,
+    discoverItems,
+    discoverHasMore,
+    discoverLoading,
+    discoverLoadingMore,
+    discoverError,
     setView,
     setSection,
     setSearch,
     setGenre,
     toggleSave,
+    loadMoreDiscover,
   } = useCatalog();
 
   const [selected, setSelected] = useState<Movie | null>(null);
@@ -43,6 +50,7 @@ export default function Home() {
 
   const isClientSearch = search.trim().length > 0;
   const isHomeView = view === "home" && !isClientSearch;
+  const isBrowseView = INFINITE_VIEWS.has(view) && !isClientSearch;
 
   const heroBackdrop = heroActive?.backdrop;
   const heroArtUrl = heroBackdrop
@@ -53,7 +61,7 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-[#050505] text-[#FFFFFF]">
-      <TopProgressBar isLoading={loading || searchLoading} />
+      <TopProgressBar isLoading={loading || searchLoading || discoverLoading} />
       {isHomeView && heroArtUrl ? (
         <div aria-hidden className="pointer-events-none fixed inset-x-0 top-0 z-0 h-[80vh] overflow-hidden">
           <img
@@ -120,7 +128,7 @@ export default function Home() {
                 onSave={toggleSave}
                 onActiveChange={setHeroActive}
               />
-            ) : !isClientSearch && !loading && filtered.length === 0 ? (
+            ) : !isClientSearch && !isBrowseView && !loading && filtered.length === 0 ? (
               <CatalogEmptyState loading={false} configured={configured} />
             ) : null}
             {isClientSearch &&
@@ -145,8 +153,10 @@ export default function Home() {
                 genre={genre}
                 setGenre={setGenre}
                 setView={setView}
-                filteredCount={filtered.length}
-                isLoading={loading || searchLoading}
+                filteredCount={
+                  isBrowseView ? discoverItems.length : filtered.length
+                }
+                isLoading={loading || searchLoading || discoverLoading}
               />
             </section>
             <div className="mt-8">
@@ -154,6 +164,18 @@ export default function Home() {
                 <SkeletonMovieGrid count={12} />
               ) : searchLoading && isClientSearch ? (
                 <SkeletonMovieGrid count={12} />
+              ) : isBrowseView ? (
+                <InfiniteMovieGrid
+                  items={discoverItems}
+                  savedIds={savedIds}
+                  onSelect={setSelected}
+                  onSave={toggleSave}
+                  onLoadMore={loadMoreDiscover}
+                  hasMore={discoverHasMore}
+                  initialLoading={discoverLoading}
+                  loadingMore={discoverLoadingMore}
+                  error={discoverError}
+                />
               ) : (
                 rows.map((row, index) => (
                   <MovieRow

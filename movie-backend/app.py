@@ -27,6 +27,7 @@ from flask import Flask, Response, jsonify, request
 
 import authdb
 import catalog_lib
+import catalog_service
 import tmdb_service as tmdb
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -165,6 +166,7 @@ def search_catalog():
         return jsonify([])
 
     results = tmdb.search_multi(query)
+    catalog_service.ingest_tmdb_results(results)
     normalized = [tmdb.normalize_tmdb_item(item, item.get("media_type", "movie")) for item in results]
     normalized = [n for n in normalized if n]
     return jsonify(normalized)
@@ -452,6 +454,10 @@ def feeds():
     popular_movies = tmdb.get_popular("movie", 1)
     popular_tv = tmdb.get_popular("tv", 1)
 
+    catalog_service.ingest_tmdb_results(trending)
+    catalog_service.ingest_tmdb_results(popular_movies, "movie")
+    catalog_service.ingest_tmdb_results(popular_tv, "tv")
+
     featured = [tmdb.normalize_tmdb_item(item, item["media_type"]) for item in trending][:18]
     recent = [tmdb.normalize_tmdb_item(item, "movie") for item in popular_movies][:24]
     popular = [tmdb.normalize_tmdb_item(item, "tv") for item in popular_tv][:24]
@@ -526,6 +532,7 @@ def get_trending():
         media_type = "all"
 
     results = tmdb.get_trending_catalog(time_window, media_type)
+    catalog_service.ingest_tmdb_results(results)
     normalized = [tmdb.normalize_tmdb_item(item, item["media_type"]) for item in results]
     normalized = [n for n in normalized if n]
     normalized.sort(key=lambda x: x.get("popularity", 0), reverse=True)
@@ -546,6 +553,7 @@ def get_popular():
         media_type = "movie"
 
     results = tmdb.get_popular(media_type, page)
+    catalog_service.ingest_tmdb_results(results, media_type)
     normalized = [tmdb.normalize_tmdb_item(item, media_type) for item in results]
     normalized = [n for n in normalized if n]
     normalized.sort(key=lambda x: x.get("popularity", 0), reverse=True)
@@ -562,6 +570,7 @@ def get_now_playing():
     page = request.args.get("page", 1, type=int)
 
     results = tmdb.get_now_playing(page)
+    catalog_service.ingest_tmdb_results(results, "movie")
     normalized = [tmdb.normalize_tmdb_item(item, "movie") for item in results]
     normalized = [n for n in normalized if n]
     normalized.sort(key=lambda x: x.get("popularity", 0), reverse=True)
@@ -578,11 +587,63 @@ def get_on_the_air():
     page = request.args.get("page", 1, type=int)
 
     results = tmdb.get_on_the_air(page)
+    catalog_service.ingest_tmdb_results(results, "tv")
     normalized = [tmdb.normalize_tmdb_item(item, "tv") for item in results]
     normalized = [n for n in normalized if n]
     normalized.sort(key=lambda x: x.get("popularity", 0), reverse=True)
 
     return jsonify(normalized)
+
+
+@app.route("/api/catalog/discover", methods=["GET", "OPTIONS"])
+def catalog_discover():
+    """Aggregated, live-first catalog browse endpoint.
+
+    Every page re-fetches the LATEST titles fresh from the upstream providers
+    (TMDB, plus optional Trakt breadth on page one), normalizes each response
+    into the unified MediaItem contract, persists the batch (write-through
+    cache) and returns it — so infinite scrolling keeps pulling current
+    trending/popular/newly-released content. The DB is only a fallback if the
+    upstream is temporarily unreachable. `?media_type=movie|tv|all`,
+    `?genre=<name>`, `?page=N`.
+    """
+    if request.method == "OPTIONS":
+        return ("", 204)
+    media_type = request.args.get("media_type", "movie")
+    genre = request.args.get("genre") or None
+    try:
+        page = int(request.args.get("page", 1))
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        per_page = int(request.args.get("per_page", 24))
+    except (TypeError, ValueError):
+        per_page = 24
+    return jsonify(
+        catalog_service.discover(
+            media_type=media_type, page=page, per_page=per_page, genre=genre
+        )
+    )
+
+
+@app.route("/api/catalog/search", methods=["GET", "OPTIONS"])
+def catalog_search():
+    """Live multi-API catalog search with cache fallback.
+
+    Queries TMDB (then OMDB for obscure titles) live, saves every hit to the
+    catalog cache, and returns it — permanently expanding the library. Falls
+    back to cached results only if the upstream is unreachable."""
+    if request.method == "OPTIONS":
+        return ("", 204)
+    query = request.args.get("q") or request.args.get("query") or ""
+    media_type = request.args.get("media_type", "all")
+    try:
+        page = int(request.args.get("page", 1))
+    except (TypeError, ValueError):
+        page = 1
+    return jsonify(
+        catalog_service.search_media(query, media_type=media_type, page=page)
+    )
 
 
 @app.route("/api/movies/trailer", methods=["GET", "OPTIONS"])

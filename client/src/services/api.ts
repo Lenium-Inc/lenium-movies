@@ -693,6 +693,88 @@ export async function fetchNowPlaying(
   return result;
 }
 
+/** A unified catalog card returned by `/api/catalog/discover`. */
+export interface CatalogItem {
+  /** Namespaced provider id (e.g. `tmdb-123`, `omdb-tt…`). */
+  id: string;
+  /** TMDB id when the title has one (drives `/watch/:id`). */
+  tmdb_id?: string | number | null;
+  imdb_id?: string;
+  title: string;
+  media_type?: "movie" | "tv";
+  year?: number | null;
+  poster_url?: string;
+  backdrop_url?: string;
+  overview?: string;
+  vote_average?: number | null;
+  popularity?: number | null;
+  genres?: string[];
+  runtime?: number | null;
+  director?: string | null;
+  cast?: string[];
+  country?: string | null;
+  language?: string | null;
+  release_date?: string | null;
+  source?: string;
+}
+
+export interface DiscoverResult {
+  items: CatalogItem[];
+  page: number;
+  per_page: number;
+  total: number;
+  has_more: boolean;
+  source: "cache" | "live";
+}
+
+export interface DiscoverParams {
+  media_type?: "movie" | "tv" | "all";
+  page?: number;
+  per_page?: number;
+  genre?: string;
+}
+
+function isDiscoverResult(value: unknown): value is DiscoverResult {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    Array.isArray(record.items) &&
+    typeof record.page === "number" &&
+    typeof record.per_page === "number" &&
+    typeof record.has_more === "boolean"
+  );
+}
+
+/**
+ * Fetch a paginated, aggregated catalog page from the backend's DB-first
+ * discover endpoint. The backend serves its seeded database and falls back to
+ * a live multi-source aggregation (persisted) when a page isn't cached yet.
+ */
+export async function fetchDiscover(
+  params: DiscoverParams = {}
+): Promise<DiscoverResult> {
+  const query = new URLSearchParams();
+  query.set("media_type", params.media_type || "movie");
+  query.set("page", String(params.page || 1));
+  if (params.per_page && params.per_page !== 24) {
+    query.set("per_page", String(params.per_page));
+  }
+  if (params.genre) query.set("genre", params.genre);
+  const response = await fetch(
+    `${MOVIE_API_BASE_URL}/api/catalog/discover?${query.toString()}`
+  );
+  if (!response.ok) {
+    throw new Error(`Movie backend responded with status ${response.status}`);
+  }
+  const data: unknown = await response.json();
+  if (!isDiscoverResult(data)) {
+    throw new Error(
+      "Movie backend returned an unexpected discover payload shape"
+    );
+  }
+  return data;
+}
+
 /**
  * Fetch currently airing TV shows from TMDB via backend.
  * Cached for 5 minutes to avoid redundant requests.

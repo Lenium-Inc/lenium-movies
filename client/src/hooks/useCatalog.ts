@@ -5,6 +5,8 @@ import {
   searchCatalog,
   fetchTrending,
   fetchPopular,
+  fetchDiscover,
+  type CatalogItem,
   type StreamMovie,
 } from "@/services/api";
 import { savedListIds, subscribeList, toggleListSave } from "@/services/lists";
@@ -23,6 +25,20 @@ export const genreFilterOptions = [
   "Thriller",
 ];
 
+/**
+ * Views rendered as an unbounded, infinite-scrolled grid. Scrolling near the
+ * last tile asks the backend for `page + 1`; a skeleton grid renders while the
+ * next batch is being fetched.
+ */
+export const INFINITE_VIEWS: ReadonlySet<View> = new Set<View>([
+  "movies",
+  "tv",
+  "trending",
+]);
+
+/** Tiles a page of the aggregated catalog returns (backend default). */
+export const DISCOVER_PAGE_SIZE = 24;
+
 interface CatalogRows {
   title: string;
   items: Movie[];
@@ -38,11 +54,18 @@ interface UseCatalog {
   searchLoading: boolean;
   filtered: Movie[];
   rows: CatalogRows[];
+  discoverItems: Movie[];
+  discoverPage: number;
+  discoverHasMore: boolean;
+  discoverLoading: boolean;
+  discoverLoadingMore: boolean;
+  discoverError: string | null;
   setView: (view: View) => void;
   setSection: (view: View) => void;
   setSearch: (value: string) => void;
   setGenre: (value: string) => void;
   toggleSave: (movie: Movie) => void;
+  loadMoreDiscover: () => void;
 }
 
 const VIEWS_WITH_TV_FILTER: View[] = [
@@ -105,6 +128,54 @@ function toCatalogMovie(item: StreamMovie): Movie {
 
 const SEARCH_DEBOUNCE_MS = 300;
 
+/** Map a backend `CatalogItem` (unified, DB-cached card) to a catalog `Movie`. */
+function toDiscoverMovie(item: CatalogItem): Movie {
+  const mediaType: "movie" | "tv" = item.media_type === "tv" ? "tv" : "movie";
+  const year =
+    typeof item.year === "number" ? item.year : Number(item.year) || null;
+  // Cards carrying a TMDB id stay watchable; non-TMDB providers fall back to
+  // their own id (playback may not resolve for those exotic titles).
+  const rawId =
+    item.tmdb_id != null ? String(item.tmdb_id) : String(item.id ?? "");
+  const genres = item.genres?.length
+    ? item.genres
+    : [mediaType === "tv" ? "Series" : "Movie"];
+  return {
+    id: stableId(rawId),
+    providerId: rawId,
+    title: item.title,
+    year: Number.isFinite(year) ? year : null,
+    runtime: typeof item.runtime === "number" ? item.runtime : null,
+    rating: null,
+    score: typeof item.vote_average === "number" ? item.vote_average : null,
+    genre: genres,
+    poster: item.poster_url || null,
+    backdrop: item.backdrop_url || null,
+    synopsis:
+      item.overview ||
+      "Browse the catalogue — pick a title to see full details.",
+    director: item.director || null,
+    cast: item.cast || [],
+    country: item.country || null,
+    language: item.language || null,
+    releaseDate: item.release_date || null,
+    source: "tmdb",
+    mediaType,
+    vote_average: item.vote_average ?? undefined,
+    genres,
+    popularity: item.popularity ?? undefined,
+    overview: item.overview,
+    backdrop_url: item.backdrop_url,
+  };
+}
+
+/** Which media bucket an infinite-scroll view should request. */
+function mediaTypeFor(view: View): "movie" | "tv" | "all" {
+  if (view === "tv") return "tv";
+  if (view === "movies") return "movie";
+  return "all";
+}
+
 interface SearchCacheEntry {
   results: StreamMovie[];
   timestamp: number;
@@ -124,6 +195,15 @@ export function useCatalog(): UseCatalog {
   const [searchResults, setSearchResults] = useState<StreamMovie[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchLoading, setSearchLoading] = useState(false);
+
+  // Infinite-scroll browse grid (Explore / Shows / Trending)
+  const [discoverItems, setDiscoverItems] = useState<Movie[]>([]);
+  const [discoverPage, setDiscoverPage] = useState(1);
+  const [discoverHasMore, setDiscoverHasMore] = useState(false);
+  const [discoverLoading, setDiscoverLoading] = useState(false);
+  const [discoverLoadingMore, setDiscoverLoadingMore] = useState(false);
+  const [discoverError, setDiscoverError] = useState<string | null>(null);
+  const discoverInFlightRef = useRef(false);
 
   // Search cache and in-flight request tracking
   const searchCacheRef = useRef<Map<string, SearchCacheEntry>>(new Map());
@@ -165,6 +245,45 @@ export function useCatalog(): UseCatalog {
     }
     fetchCatalog();
   }, []);
+
+  // Load the first page of the aggregated catalog whenever a browse view's
+  // scope (view / genre) changes. Clearing search also snaps back to browse.
+  useEffect(() => {
+    if (search.trim()) return;
+    if (!INFINITE_VIEWS.has(view)) return;
+    let cancelled = false;
+    const genreQuery = genre === "All" ? undefined : genre;
+    setDiscoverLoading(true);
+    setDiscoverLoadingMore(false);
+    setDiscoverError(null);
+    setDiscoverHasMore(true);
+    setDiscoverItems([]);
+    fetchDiscover({
+      media_type: mediaTypeFor(view),
+      page: 1,
+      per_page: DISCOVER_PAGE_SIZE,
+      genre: genreQuery,
+    })
+      .then(res => {
+        if (cancelled) return;
+        setDiscoverItems(res.items.map(toDiscoverMovie));
+        setDiscoverPage(res.page);
+        setDiscoverHasMore(res.has_more);
+      })
+      .catch(err => {
+        if (cancelled) return;
+        console.error("Discover failed:", err);
+        setDiscoverItems([]);
+        setDiscoverHasMore(false);
+        setDiscoverError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setDiscoverLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [view, genre, search]);
 
   // Handle live searches against Flask backend with debounce and caching
   useEffect(() => {
@@ -314,6 +433,42 @@ export function useCatalog(): UseCatalog {
     setGenre("All");
   }, []);
 
+  /** Fetch the next page of the aggregated catalog for the active browse view. */
+  const loadMoreDiscover = useCallback(() => {
+    if (discoverInFlightRef.current || discoverLoadingMore || !discoverHasMore) {
+      return;
+    }
+    discoverInFlightRef.current = true;
+    setDiscoverLoadingMore(true);
+    const nextPage = discoverPage + 1;
+    const genreQuery = genre === "All" ? undefined : genre;
+    fetchDiscover({
+      media_type: mediaTypeFor(view),
+      page: nextPage,
+      per_page: DISCOVER_PAGE_SIZE,
+      genre: genreQuery,
+    })
+      .then(res => {
+        setDiscoverPage(res.page);
+        setDiscoverHasMore(res.has_more);
+        setDiscoverItems(prev => {
+          const seen = new Set(prev.map(movie => movie.providerId));
+          return [
+            ...prev,
+            ...res.items.map(toDiscoverMovie).filter(movie => !seen.has(movie.providerId)),
+          ];
+        });
+      })
+      .catch(err => {
+        console.error("Discover page failed:", err);
+        setDiscoverError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        discoverInFlightRef.current = false;
+        setDiscoverLoadingMore(false);
+      });
+  }, [discoverPage, discoverHasMore, discoverLoadingMore, view, genre]);
+
   const toggleSave = useCallback((movie: Movie) => {
     toggleListSave(movie);
     setSavedIds(savedListIds());
@@ -334,5 +489,12 @@ export function useCatalog(): UseCatalog {
     setSearch,
     setGenre,
     toggleSave,
+    discoverItems,
+    discoverPage,
+    discoverHasMore,
+    discoverLoading,
+    discoverLoadingMore,
+    discoverError,
+    loadMoreDiscover,
   };
 }

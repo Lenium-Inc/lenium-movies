@@ -252,6 +252,52 @@ def get_now_playing(page: int = 1) -> List[Dict]:
     return catalog
 
 
+def get_top_rated(media_type: str = "movie", page: int = 1) -> List[Dict]:
+    """Fetch top-rated movies/TV from TMDB - basic info only."""
+    return _basic_list(f"/{media_type}/top_rated", media_type, page)
+
+
+def get_upcoming(page: int = 1) -> List[Dict]:
+    """Fetch upcoming films from TMDB - basic info only."""
+    return _basic_list("/movie/upcoming", "movie", page)
+
+
+def get_discover(media_type: str = "movie", genre_id: Optional[int] = None, page: int = 1) -> List[Dict]:
+    """Fetch a discover list by genre (or all genres) from TMDB - basic info only."""
+    params: Dict[str, Any] = {"page": page, "sort_by": "popularity.desc"}
+    if genre_id:
+        params["with_genres"] = genre_id
+    if media_type not in ("movie", "tv"):
+        media_type = "movie"
+    return _basic_list(f"/discover/{media_type}", media_type, page, params)
+
+
+def _basic_list(endpoint: str, media_type: str, page: int, params: Optional[Dict] = None) -> List[Dict]:
+    """Shared list fetcher: turns a TMDB list response into catalog entries."""
+    data = _tmdb_get(endpoint, {**(params or {}), "page": page})
+    if not data:
+        return []
+    results = data.get("results", [])
+    catalog = []
+    for item in results:
+        catalog.append({
+            "id": item.get("id"),
+            "title": item.get("title") or item.get("name"),
+            "overview": item.get("overview", ""),
+            "release_date": item.get("release_date") or item.get("first_air_date", ""),
+            "first_air_date": item.get("first_air_date", ""),
+            "vote_average": item.get("vote_average"),
+            "poster_path": item.get("poster_path"),
+            "backdrop_path": item.get("backdrop_path"),
+            "genre_ids": item.get("genre_ids", []),
+            "popularity": item.get("popularity"),
+            "media_type": media_type,
+            "number_of_seasons": item.get("number_of_seasons") if media_type == "tv" else None,
+            "number_of_episodes": item.get("number_of_episodes") if media_type == "tv" else None,
+        })
+    return catalog
+
+
 def get_on_the_air(page: int = 1) -> List[Dict]:
     """Fetch currently airing TV shows from TMDB - basic info only."""
     endpoint = "/tv/on_the_air"
