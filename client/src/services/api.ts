@@ -118,10 +118,15 @@ export function proxiedStreamUrl(url: string): string {
 /**
  * Base URL of the movie backend.
  *
- * Defaults to same-origin (empty string), so every request is a relative
- * `/api/...` call that the current host serves. Dev works because Vite proxies
- * `/api` to Flask; production works because the Express server proxies `/api`
- * to Flask.
+ * Local dev: empty, so every request is a relative `/api/...` call that Vite
+ * proxies to the Flask process on :5000.
+ *
+ * Deployed: MUST be set to the backend's public origin. The Vercel deployment
+ * serves only this SPA and hosts no API of its own, so a relative `/api/...`
+ * call resolves against Vercel and comes back as the HTML shell -- which
+ * surfaces as a cryptic `Unexpected token '<'` JSON parse error and an empty
+ * catalogue, not as an obvious configuration error. `warnMissingBackendOrigin`
+ * below turns that into a message naming the fix.
  *
  * There is deliberately NO hardcoded fallback origin. When this was a literal
  * third-party URL, any build missing VITE_MOVIE_API_BASE_URL silently shipped
@@ -131,6 +136,19 @@ export function proxiedStreamUrl(url: string): string {
 export const MOVIE_API_BASE_URL = (
   import.meta.env.VITE_MOVIE_API_BASE_URL ?? import.meta.env.VITE_API_URL ?? ""
 ).replace(/\/+$/, "");
+
+function warnMissingBackendOrigin() {
+  if (import.meta.env.DEV || MOVIE_API_BASE_URL) return;
+  console.error(
+    "[config] VITE_MOVIE_API_BASE_URL is not set, so API calls go to this " +
+      "origin's /api/*, which is the SPA rather than the movie backend. " +
+      "Every catalog request will fail to parse as JSON. Set " +
+      "VITE_MOVIE_API_BASE_URL to the backend's public origin and redeploy -- " +
+      "Vite inlines it at build time, so a rebuild is required."
+  );
+}
+
+warnMissingBackendOrigin();
 
 /** Build a full API URL for the movie backend. */
 export function apiUrl(path: string): string {
