@@ -1,35 +1,31 @@
 import os
 import json
-import ssl
 import urllib.request
 import urllib.parse
-import certifi
 from typing import Optional, Dict, Any, List
 
-TMDB_API_KEY = os.getenv("TMDB_API_KEY", "100868d1fc3966ca832b3a5457e1edb9")
+from runtime_config import ssl_context, tmdb_api_key
+
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p"
 
-# SSL context for macOS LibreSSL compatibility
-def _ssl_context():
-    try:
-        return ssl.create_default_context(cafile=certifi.where())
-    except Exception:
-        return ssl._create_unverified_context()
 
 def _tmdb_get(endpoint: str, params: Optional[Dict] = None) -> Optional[Dict]:
     """Generic TMDB API request with error handling."""
+    api_key = tmdb_api_key()
+    if not api_key:
+        return None
     try:
         url = f"{TMDB_BASE_URL}{endpoint}"
-        request_params = {"api_key": TMDB_API_KEY, "language": "en-US"}
+        request_params = {"api_key": api_key, "language": "en-US"}
         if params:
             request_params.update(params)
-        
+
         query_string = urllib.parse.urlencode(request_params)
         full_url = f"{url}?{query_string}"
-        
+
         req = urllib.request.Request(full_url, headers={"User-Agent": "FreeStream/1.0"})
-        with urllib.request.urlopen(req, context=_ssl_context(), timeout=10) as response:
+        with urllib.request.urlopen(req, context=ssl_context(), timeout=10) as response:
             return json.loads(response.read().decode("utf-8"))
     except Exception as e:
         print(f"[TMDB Fetch Error]: {e}")

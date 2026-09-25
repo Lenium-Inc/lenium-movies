@@ -16,15 +16,13 @@ from __future__ import annotations
 
 import json
 import os
-import ssl
 import threading
 import urllib.request
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import certifi
-
 import tmdb_service as tmdb
+from runtime_config import ssl_context
 from catalog_store import CatalogStore
 from media_normalizer import (
     normalize_omdb,
@@ -47,17 +45,10 @@ TMDB_GENRE_IDS = {
 DEFAULT_PAGE_SIZE = 24
 
 
-def _ssl_context():
-    try:
-        return ssl.create_default_context(cafile=certifi.where())
-    except Exception:
-        return ssl._create_unverified_context()
-
-
 def _http_json(url: str, headers: dict | None = None) -> dict | list | None:
     req = urllib.request.Request(url, headers=headers or {"User-Agent": "FreeStream/1.0"})
     try:
-        with urllib.request.urlopen(req, context=_ssl_context(), timeout=12) as response:
+        with urllib.request.urlopen(req, context=ssl_context(), timeout=12) as response:
             return json.loads(response.read().decode("utf-8"))
     except Exception as error:  # noqa: BLE001 - an upstream failure degrades to cache-only
         print(f"[Catalog Aggregator] {error}")

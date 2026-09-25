@@ -22,37 +22,13 @@ import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 
+# The dotenv loader lives in runtime_config so that every module resolves
+# secrets the same way regardless of which one happens to be imported first.
+from runtime_config import load_env_file
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-
-def _load_env_file() -> None:
-    """Best-effort dotenv loader (root `./.env` + `movie-backend/.env`).
-
-    Only fills keys that are NOT already in the environment, so injected
-    values (Render, Neon CLI) always win. Neon's `neon link` writes values
-    wrapped in double quotes; those are stripped here."""
-    if os.environ.get("LENIUM_SKIP_ENV_FILE"):
-        return
-    for candidate in (
-        os.path.join(HERE, ".env"),
-        os.path.join(os.path.dirname(HERE), ".env"),
-    ):
-        try:
-            with open(candidate, "r", encoding="utf-8") as handle:
-                for raw in handle:
-                    line = raw.strip()
-                    if not line or line.startswith("#") or "=" not in line:
-                        continue
-                    key, _, value = line.partition("=")
-                    key = key.strip()
-                    if not key or key in os.environ:
-                        continue
-                    os.environ[key] = value.strip().strip('"').strip("'")
-        except OSError:
-            continue
-
-
-_load_env_file()
+load_env_file()
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 

@@ -17,13 +17,16 @@ from __future__ import annotations
 import json
 import os
 import re
-import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
 
-import certifi
 from flask import Flask, Response, jsonify, request
+
+# Imported first so the dotenv file is loaded before any module reads a secret.
+from runtime_config import load_env_file, ssl_context, tmdb_api_key
+
+load_env_file()
 
 import authdb
 import catalog_lib
@@ -33,7 +36,6 @@ import tmdb_service as tmdb
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
-TMDB_API_KEY = os.environ.get("TMDB_API_KEY") or "100868d1fc3966ca832b3a5457e1edb9"
 
 app = Flask(__name__)
 
@@ -96,19 +98,17 @@ def _direct_source_for(title: str, year=None, refresh: bool = False) -> dict | N
 
 
 def _tmdb_get(path: str, params: dict) -> dict | None:
-    """TMDB client wrapper supporting search & metadata lookup with macOS SSL fix."""
+    """TMDB client wrapper for search & metadata lookup."""
+    api_key = tmdb_api_key()
+    if not api_key:
+        return None
     try:
         url = f"{TMDB_BASE_URL}{path}?" + urllib.parse.urlencode(
-            {"api_key": TMDB_API_KEY, "language": "en-US", **params}
+            {"api_key": api_key, "language": "en-US", **params}
         )
 
-        try:
-            ctx = ssl.create_default_context(cafile=certifi.where())
-        except Exception:
-            ctx = ssl._create_unverified_context()
-
         req = urllib.request.Request(url, headers={"User-Agent": "FreeStream/1.0"})
-        with urllib.request.urlopen(req, context=ctx, timeout=10) as response:
+        with urllib.request.urlopen(req, context=ssl_context(), timeout=10) as response:
             return json.loads(response.read().decode("utf-8"))
     except Exception as e:
         print(f"[TMDB Fetch Error]: {e}")
