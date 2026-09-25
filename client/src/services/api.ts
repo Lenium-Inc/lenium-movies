@@ -134,17 +134,21 @@ export function proxiedStreamUrl(url: string): string {
  * VITE_MOVIE_API_BASE_URL explicitly to point somewhere else on purpose.
  */
 export const MOVIE_API_BASE_URL = (
-  import.meta.env.VITE_MOVIE_API_BASE_URL ?? import.meta.env.VITE_API_URL ?? ""
-).replace(/\/+$/, "");
+  import.meta.env.VITE_MOVIE_API_BASE_URL || import.meta.env.VITE_API_URL || ""
+)
+  .trim()
+  .replace(/\/+$/, "");
 
 function warnMissingBackendOrigin() {
   if (import.meta.env.DEV || MOVIE_API_BASE_URL) return;
   console.error(
-    "[config] VITE_MOVIE_API_BASE_URL is not set, so API calls go to this " +
-      "origin's /api/*, which is the SPA rather than the movie backend. " +
-      "Every catalog request will fail to parse as JSON. Set " +
-      "VITE_MOVIE_API_BASE_URL to the backend's public origin and redeploy -- " +
-      "Vite inlines it at build time, so a rebuild is required."
+    "[config] No backend origin resolved, so API calls go to this origin's " +
+      "/api/*, which is the SPA rather than the movie backend. Every catalog " +
+      "request will fail to parse as JSON. Set VITE_MOVIE_API_BASE_URL to the " +
+      "backend's public origin (e.g. https://your-backend.onrender.com) and " +
+      "redeploy -- Vite inlines it at build time, so a rebuild is required. " +
+      "Note the value must be non-empty: an empty VITE_MOVIE_API_BASE_URL is " +
+      "indistinguishable from unset here by design, and falls back silently."
   );
 }
 
