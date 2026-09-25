@@ -198,7 +198,10 @@ export function Spotlight({
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
       aria-label="Featured spotlight"
-      className="relative isolate -mx-4 h-[560px] w-[calc(100%+2rem)] overflow-hidden bg-[#050505] sm:-mx-6 sm:w-[calc(100%+3rem)] sm:h-[600px] lg:-mx-8 lg:w-[calc(100%+4rem)] lg:h-[660px]"
+      // Sits inside the framed featured card on Home, so it fills its parent
+      // rather than breaking out with negative margins. The page owns the
+      // rounded corners and the border.
+      className="relative isolate h-[560px] w-full overflow-hidden bg-[#050505] sm:h-[600px] lg:h-[660px]"
     >
       {/* Cross-fading media layer — trailer when available, backdrop otherwise */}
       <div className="absolute inset-0">
