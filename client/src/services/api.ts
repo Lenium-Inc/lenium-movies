@@ -121,38 +121,51 @@ export function proxiedStreamUrl(url: string): string {
  * Local dev: empty, so every request is a relative `/api/...` call that Vite
  * proxies to the Flask process on :5000.
  *
- * Deployed: MUST be set to the backend's public origin. The Vercel deployment
- * serves only this SPA and hosts no API of its own, so a relative `/api/...`
- * call resolves against Vercel and comes back as the HTML shell -- which
- * surfaces as a cryptic `Unexpected token '<'` JSON parse error and an empty
- * catalogue, not as an obvious configuration error. `warnMissingBackendOrigin`
- * below turns that into a message naming the fix.
+ * Dev: unset, and Vite proxies /api to http://localhost:5000 (vite.config.ts).
  *
- * There is deliberately NO hardcoded fallback origin. When this was a literal
- * third-party URL, any build missing VITE_MOVIE_API_BASE_URL silently shipped
- * every user's `Authorization: Bearer` token to that host. Set
- * VITE_MOVIE_API_BASE_URL explicitly to point somewhere else on purpose.
+ * Deployed: the Vercel deployment serves only this SPA and hosts no API of its
+ * own, so a relative `/api/...` call resolves against Vercel and comes back as
+ * the HTML shell -- which surfaces as a cryptic `Unexpected token '<'` JSON
+ * parse error and an empty catalogue, not as an obvious configuration error.
+ *
+ * Vite inlines VITE_MOVIE_API_BASE_URL at build time, and a variable that is
+ * present but blank is not the same as an absent one: that is the shape
+ * .env.example ships, and what you get from pasting that line into a dashboard.
+ * So production falls back to the deployed backend rather than silently
+ * pointing at the SPA's own /api/*. `warnUsingFallbackOrigin` below reports
+ * whenever that fallback is what got used.
+ *
+ * Two things to know about the fallback. It is the origin every user's
+ * `Authorization: Bearer` token is sent to (auth.ts), and *.onrender.com is a
+ * reclaimable namespace: deleting the Render project frees the name for
+ * someone else to register, after which tokens for this app are POSTed to
+ * whoever answers. Putting a custom domain on the backend closes that off, and
+ * setting VITE_MOVIE_API_BASE_URL overrides the fallback entirely -- including
+ * setting it to "/" to deliberately ship same-origin behind a proxy.
  */
-export const MOVIE_API_BASE_URL = (
+const CONFIGURED_BACKEND_ORIGIN = (
   import.meta.env.VITE_MOVIE_API_BASE_URL || import.meta.env.VITE_API_URL || ""
-)
-  .trim()
-  .replace(/\/+$/, "");
+).trim();
 
-function warnMissingBackendOrigin() {
-  if (import.meta.env.DEV || MOVIE_API_BASE_URL) return;
-  console.error(
-    "[config] No backend origin resolved, so API calls go to this origin's " +
-      "/api/*, which is the SPA rather than the movie backend. Every catalog " +
-      "request will fail to parse as JSON. Set VITE_MOVIE_API_BASE_URL to the " +
-      "backend's public origin (e.g. https://your-backend.onrender.com) and " +
-      "redeploy -- Vite inlines it at build time, so a rebuild is required. " +
-      "Note the value must be non-empty: an empty VITE_MOVIE_API_BASE_URL is " +
-      "indistinguishable from unset here by design, and falls back silently."
+const FALLBACK_BACKEND_ORIGIN = "https://vy-e721.onrender.com";
+
+export const MOVIE_API_BASE_URL = (
+  CONFIGURED_BACKEND_ORIGIN ||
+  (import.meta.env.PROD ? FALLBACK_BACKEND_ORIGIN : "")
+).replace(/\/+$/, "");
+
+function warnUsingFallbackOrigin() {
+  if (!import.meta.env.PROD || CONFIGURED_BACKEND_ORIGIN) return;
+  console.warn(
+    "[config] VITE_MOVIE_API_BASE_URL was absent or empty at build time, so " +
+      `this build is using the hardcoded fallback ${FALLBACK_BACKEND_ORIGIN}. ` +
+      "If that is not expected, set the variable in Vercel under the scope " +
+      "matching this deployment (Preview builds do not read Production values) " +
+      "and redeploy -- Vite inlines it, so a rebuild is required."
   );
 }
 
-warnMissingBackendOrigin();
+warnUsingFallbackOrigin();
 
 /** Build a full API URL for the movie backend. */
 export function apiUrl(path: string): string {
