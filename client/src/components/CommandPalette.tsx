@@ -44,12 +44,29 @@ export function CommandPalette() {
   const [topPicks, setTopPicks] = useState<PaletteItem[]>([]);
   const [loading, setLoading] = useState(false);
 
+  // Every dismissal path -- Escape, backdrop click, the ESC button, ⌘K toggle,
+  // picking a result -- must clear the query, not just close the dialog.
+  // Otherwise the stale query and its stale suggestions reappear the next time
+  // the palette opens, and the user has to backspace before they can search.
+  const close = () => {
+    setOpen(false);
+    setQuery("");
+  };
+
+  const handleOpenChange = (next: boolean) => {
+    setOpen(next);
+    if (!next) setQuery("");
+  };
+
   // Global hotkeys + navbar trigger.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        setOpen(current => !current);
+        setOpen(current => {
+          if (current) setQuery("");
+          return !current;
+        });
         return;
       }
       const target = event.target as HTMLElement | null;
@@ -126,8 +143,7 @@ export function CommandPalette() {
   }, [open]);
 
   const openItem = (item: PaletteItem) => {
-    setOpen(false);
-    setQuery("");
+    close();
     navigate(`/watch/${item.id}`);
   };
 
@@ -137,15 +153,16 @@ export function CommandPalette() {
     window.dispatchEvent(
       new CustomEvent(APPLY_SEARCH_EVENT, { detail: { query: value } })
     );
-    setOpen(false);
+    close();
   };
 
   const showSuggestions = query.trim().length > 0;
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="!max-w-(--breakpoint-md) gap-0 overflow-hidden border-white/10 bg-[#0a0a0c] p-0 text-white shadow-2xl"
+        className="!top-[15vh] !translate-y-0 !max-w-2xl gap-0 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/95 p-0 text-zinc-100 shadow-2xl"
+        overlayClassName="bg-black/80 backdrop-blur-md"
         showCloseButton={false}
       >
         <DialogTitle className="sr-only">Search titles</DialogTitle>
@@ -154,18 +171,18 @@ export function CommandPalette() {
           shouldFilter={false}
           className="flex h-full w-full flex-col overflow-hidden"
         >
-          <div className="flex items-center gap-2 border-b border-white/10 px-4">
-            <Search className="h-4 w-4 shrink-0 text-white/40" />
+          <div className="flex items-center gap-2 border-b border-zinc-800 px-4">
+            <Search className="h-4 w-4 shrink-0 text-zinc-500" />
             <CommandPrimitive.Input
               value={query}
               onValueChange={setQuery}
               placeholder="Search movies & shows…"
-              className="h-12 w-full bg-transparent text-sm text-white outline-none placeholder:text-white/30"
+              className="h-12 w-full bg-transparent text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-violet-500/50"
             />
             <button
               type="button"
-              onClick={() => setOpen(false)}
-              className="shrink-0 rounded-md border border-white/10 px-2 py-1 text-[10px] font-semibold text-white/50 transition hover:bg-white/10 hover:text-white"
+              onClick={close}
+              className="shrink-0 rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-400 transition hover:bg-zinc-700 hover:text-zinc-100"
             >
               ESC
             </button>
@@ -173,20 +190,23 @@ export function CommandPalette() {
 
           <CommandPrimitive.List className="max-h-[340px] overflow-y-auto py-2">
             {loading && (
-              <div className="flex items-center gap-2 px-4 py-3 text-xs text-white/40">
+              <div className="flex items-center gap-2 px-4 py-3 text-xs text-zinc-500">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 Searching…
               </div>
             )}
 
             {!loading && showSuggestions && suggestions.length === 0 && (
-              <CommandPrimitive.Empty className="px-4 py-8 text-center text-sm text-white/35">
+              <CommandPrimitive.Empty className="px-4 py-8 text-center text-sm text-zinc-500">
                 No matches for “{query}” yet.
               </CommandPrimitive.Empty>
             )}
 
             {showSuggestions && suggestions.length > 0 && (
-              <CommandPrimitive.Group heading="Results">
+              <CommandPrimitive.Group
+                heading="Results"
+                className="[&_[cmdk-group-heading]]:px-4 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-zinc-500"
+              >
                 {suggestions.map(item => (
                   <PaletteRow
                     key={item.id}
@@ -198,7 +218,10 @@ export function CommandPalette() {
             )}
 
             {!showSuggestions && topPicks.length > 0 && (
-              <CommandPrimitive.Group heading="Top picks">
+              <CommandPrimitive.Group
+                heading="Top picks"
+                className="[&_[cmdk-group-heading]]:px-4 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-zinc-500"
+              >
                 {topPicks.map(item => (
                   <PaletteRow
                     key={item.id}
@@ -210,21 +233,21 @@ export function CommandPalette() {
             )}
 
             {showSuggestions && suggestions.length > 0 && (
-              <CommandPrimitive.Separator className="my-1 bg-white/10" />
+              <CommandPrimitive.Separator className="my-1 bg-zinc-800" />
             )}
 
             {showSuggestions && (
               <CommandPrimitive.Item
                 onSelect={applyToCatalog}
-                className="flex cursor-pointer items-center gap-3 px-4 py-3 text-sm text-[#c4c4c0] outline-none data-[selected=true]:bg-white/5 data-[selected=true]:text-white"
+                className="flex cursor-pointer items-center gap-3 px-4 py-3 text-sm text-zinc-300 outline-none data-[selected=true]:bg-zinc-800/60 data-[selected=true]:text-zinc-100"
               >
-                <Search className="h-4 w-4 text-white/40" />
+                <Search className="h-4 w-4 text-zinc-500" />
                 Show all results for “{query.trim()}”
               </CommandPrimitive.Item>
             )}
 
             {!showSuggestions && (
-              <div className="flex items-center gap-2 px-4 py-3 text-xs text-white/35">
+              <div className="flex items-center gap-2 px-4 py-3 text-xs text-zinc-500">
                 <TrendingUp className="h-3.5 w-3.5" />
                 Trending now across movies & shows
               </div>
@@ -247,7 +270,7 @@ function PaletteRow({
     <CommandPrimitive.Item
       value={`${item.mediaType}:${item.id}`}
       onSelect={onSelect}
-      className="flex cursor-pointer items-center gap-3 px-4 py-2.5 text-sm text-white outline-none data-[selected=true]:bg-white/5"
+      className="flex cursor-pointer items-center gap-3 px-4 py-2.5 text-sm text-zinc-100 outline-none data-[selected=true]:bg-zinc-800/60"
     >
       {item.posterUrl ? (
         <img
@@ -256,7 +279,7 @@ function PaletteRow({
           className="h-12 w-8 shrink-0 rounded object-cover"
         />
       ) : (
-        <span className="grid h-12 w-8 shrink-0 place-items-center rounded bg-white/5 text-white/30">
+        <span className="grid h-12 w-8 shrink-0 place-items-center rounded bg-zinc-800 text-zinc-500">
           {item.mediaType === "tv" ? (
             <Film className="h-4 w-4" />
           ) : (
@@ -266,12 +289,14 @@ function PaletteRow({
       )}
       <span className="min-w-0 flex-1">
         <span className="block truncate font-medium">{item.title}</span>
-        <span className="block text-xs text-white/40">
-          {item.year ? `${item.year} · ` : ""}
-          {item.mediaType === "tv" ? "Series" : "Movie"}
+        <span className="mt-0.5 flex items-center gap-1.5 text-xs text-zinc-500">
+          <span className="rounded border border-zinc-700 bg-zinc-800/60 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-zinc-400">
+            {item.mediaType === "tv" ? "Show" : "Movie"}
+          </span>
+          {item.year ? <span>{item.year}</span> : null}
         </span>
       </span>
-      <span className="shrink-0 text-[10px] uppercase tracking-wider text-white/25">
+      <span className="shrink-0 text-[10px] uppercase tracking-wider text-zinc-600">
         Enter
       </span>
     </CommandPrimitive.Item>

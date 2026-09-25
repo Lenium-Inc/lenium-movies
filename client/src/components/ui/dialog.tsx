@@ -94,9 +94,13 @@ function DialogContent({
   children,
   showCloseButton = true,
   onEscapeKeyDown,
+  overlayClassName,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean;
+  /** Extra classes for the backdrop. Omitted, the shared `bg-black/50` default
+   * applies, so existing dialogs are unaffected unless they opt in. */
+  overlayClassName?: string;
 }) {
   const { isComposing } = useDialogComposition();
 
@@ -120,7 +124,7 @@ function DialogContent({
 
   return (
     <DialogPortal data-slot="dialog-portal">
-      <DialogOverlay />
+      <DialogOverlay className={overlayClassName} />
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
