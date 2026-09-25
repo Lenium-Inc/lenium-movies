@@ -684,7 +684,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             max="100"
             value={progress || 0}
             onChange={handleSeek}
-            className="w-full h-1 bg-white/30 rounded-lg appearance-none cursor-pointer accent-red-600 hover:h-2 transition-all"
+            className="w-full h-1 bg-white/30 rounded-lg appearance-none cursor-pointer accent-violet-600 hover:h-2 transition-all"
             onMouseDown={() => {
               if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
             }}
@@ -696,7 +696,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           <div className="flex items-center gap-4 flex-1 min-w-0">
             <button
               onClick={togglePlay}
-              className="hover:text-red-500 transition-colors flex-shrink-0"
+              className="hover:text-violet-500 transition-colors flex-shrink-0"
               aria-label={isPlaying ? "Pause" : "Play"}
             >
               {isPlaying ? (
@@ -711,7 +711,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 const v = videoRef.current;
                 if (v) v.currentTime -= 10;
               }}
-              className="hover:text-red-500 transition-colors flex-shrink-0"
+              className="hover:text-violet-500 transition-colors flex-shrink-0"
               aria-label="Rewind 10s"
             >
               <RotateCcw className="w-5 h-5" />
@@ -721,7 +721,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 const v = videoRef.current;
                 if (v) v.currentTime += 10;
               }}
-              className="hover:text-red-500 transition-colors flex-shrink-0"
+              className="hover:text-violet-500 transition-colors flex-shrink-0"
               aria-label="Forward 10s"
             >
               <RotateCw className="w-5 h-5" />
@@ -730,7 +730,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <div className="flex items-center gap-2 group flex-shrink-0">
               <button
                 onClick={toggleMute}
-                className="hover:text-red-500 transition-colors flex-shrink-0"
+                className="hover:text-violet-500 transition-colors flex-shrink-0"
                 aria-label={isMuted ? "Unmute" : "Mute"}
               >
                 {isMuted || volume === 0 ? (
@@ -746,7 +746,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 step="0.05"
                 value={isMuted ? 0 : volume}
                 onChange={handleVolumeChange}
-                className="w-20 h-1 bg-white/30 rounded-lg appearance-none cursor-pointer accent-white hover:accent-red-500 transition-all"
+                className="w-20 h-1 bg-white/30 rounded-lg appearance-none cursor-pointer accent-white hover:accent-violet-500 transition-all"
                 onMouseDown={() => {
                   if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
                 }}
@@ -805,7 +805,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                             setSubtitleMenuOpen(false);
                           }}
                           className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors ${
-                            currentSubtitles === sub ? "text-red-500 font-bold" : "text-white"
+                            currentSubtitles === sub ? "text-violet-500 font-bold" : "text-white"
                           }`}
                         >
                           {sub}
@@ -842,7 +842,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                           }}
                           className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors ${
                             currentQuality === (v.quality || "Auto")
-                              ? "text-red-500 font-bold"
+                              ? "text-violet-500 font-bold"
                               : "text-white"
                           }`}
                         >
@@ -855,7 +855,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                         switchQuality("Auto");
                       }}
                       className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors ${
-                        currentQuality === "Auto" ? "text-red-500 font-bold" : "text-white"
+                        currentQuality === "Auto" ? "text-violet-500 font-bold" : "text-white"
                       }`}
                     >
                       Auto
@@ -867,7 +867,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
             <button
               onClick={toggleFullscreen}
-              className="hover:text-red-500 transition-colors flex-shrink-0"
+              className="hover:text-violet-500 transition-colors flex-shrink-0"
               aria-label="Fullscreen"
             >
               <Maximize className="w-5 h-5" />

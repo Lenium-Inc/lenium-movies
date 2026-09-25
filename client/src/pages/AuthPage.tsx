@@ -147,7 +147,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
                     autoComplete="name"
                     autoFocus
                     maxLength={40}
-                    className="w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-white placeholder-white/30 outline-none transition focus:border-red-500/60 focus:ring-1 focus:ring-red-500/30"
+                    className="w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-white placeholder-white/30 outline-none transition focus:border-violet-500/60 focus:ring-1 focus:ring-violet-500/30"
                   />
                 </div>
               )}
@@ -164,7 +164,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
                   autoComplete="email"
                   autoFocus={!isSignup}
                   maxLength={254}
-                  className="w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-white placeholder-white/30 outline-none transition focus:border-red-500/60 focus:ring-1 focus:ring-red-500/30"
+                  className="w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-white placeholder-white/30 outline-none transition focus:border-violet-500/60 focus:ring-1 focus:ring-violet-500/30"
                 />
               </div>
               <div>
@@ -179,12 +179,12 @@ export default function AuthPage({ mode }: AuthPageProps) {
                   placeholder="At least 8 characters"
                   autoComplete={isSignup ? "new-password" : "current-password"}
                   maxLength={128}
-                  className="w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-white placeholder-white/30 outline-none transition focus:border-red-500/60 focus:ring-1 focus:ring-red-500/30"
+                  className="w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-white placeholder-white/30 outline-none transition focus:border-violet-500/60 focus:ring-1 focus:ring-violet-500/30"
                 />
               </div>
 
               {error && (
-                <p className="rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+                <p className="rounded-lg border border-violet-500/25 bg-violet-500/10 px-3 py-2 text-sm text-violet-300">
                   {error}
                 </p>
               )}

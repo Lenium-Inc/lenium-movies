@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import { useLocation, useParams } from "wouter";
 import {
   Bookmark,
+  Check,
   ChevronDown,
   ChevronUp,
   Play,
@@ -63,6 +64,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { isExternalEmbedUrl } from "@/lib/streamUtils";
 import { useAuth } from "@/context/AuthContext";
 import { apiHistoryAdd } from "@/services/auth";
+import { toast } from "sonner";
 
 const TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p";
 
@@ -545,7 +547,14 @@ export function WatchPage() {
   };
 
   const handleBackToDetails = () => {
-    if (movie) navigate(`/details/${movie.providerId}`);
+    // Prefer the browser history so users land exactly where they were
+    // (e.g. the details sheet). Fall back to home for direct deep links,
+    // since `/details/:id` has no route of its own.
+    if (window.history.length > 1) {
+      window.history.back();
+    } else {
+      navigate("/");
+    }
   };
 
   const handleShare = async () => {
@@ -1077,19 +1086,27 @@ export function WatchPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   <Button
                     variant="outline"
-                    className="flex items-center gap-2 px-4 py-3 focus-visible:ring-red-600/50"
+                    className="flex items-center gap-2 px-4 py-3 focus-visible:ring-violet-600/50"
                     onClick={() => {
                       if (!authUser) {
                         navigate("/login");
                         return;
                       }
+                      const wasInList = isInMyList(movie.id);
                       toggleMyList(movie);
+                      toast.success(
+                        wasInList ? "Removed from your list" : "Added to your list!"
+                      );
                     }}
                     aria-pressed={isInMyList(movie.id)}
                   >
-                    <Plus className="h-5 w-5" />
+                    {isInMyList(movie.id) ? (
+                      <Check className="h-5 w-5" />
+                    ) : (
+                      <Plus className="h-5 w-5" />
+                    )}
                     <span className="hidden sm:inline">
-                      {isInMyList(movie.id) ? "In My List" : "Add to My List"}
+                      {isInMyList(movie.id) ? "✓ In My List" : "Add to My List"}
                     </span>
                   </Button>
                 </div>

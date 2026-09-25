@@ -41,7 +41,7 @@ export class ErrorBoundary extends Component<Props, State> {
           <div className="flex flex-col items-center w-full max-w-md p-6 text-center">
             <AlertTriangle
               size={48}
-              className="text-red-500 mb-4 flex-shrink-0"
+              className="text-violet-500 mb-4 flex-shrink-0"
             />
             <h2 className="text-lg font-semibold text-white mb-2">
               Something went wrong
@@ -72,11 +72,11 @@ export function ErrorFallback({ retry }: { retry: () => void }) {
     <div className="group relative bg-zinc-900 rounded-xl overflow-hidden shadow-lg border border-white/5 aspect-[2/3] w-full">
       <div className="absolute inset-0 flex items-center justify-center bg-zinc-800">
         <div className="text-center p-4">
-          <AlertTriangle size={32} className="text-red-500 mx-auto mb-2" />
+          <AlertTriangle size={32} className="text-violet-500 mx-auto mb-2" />
           <p className="text-sm text-zinc-400">Failed to load</p>
           <button
             onClick={retry}
-            className="mt-2 text-xs text-red-400 hover:text-red-300 underline"
+            className="mt-2 text-xs text-violet-400 hover:text-violet-300 underline"
           >
             Retry
           </button>

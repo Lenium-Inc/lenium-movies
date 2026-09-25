@@ -10,7 +10,7 @@ import { useActiveProfile } from "@/context/ActiveProfileContext";
  * links, and sign out.
  */
 export function ProfileMenu() {
-  const { user, logout } = useAuth();
+  const { user, isLoading, logout } = useAuth();
   const { profiles, activeProfile, selectProfile } = useActiveProfile();
   const [, navigate] = useLocation();
   const [open, setOpen] = useState(false);
@@ -31,10 +31,20 @@ export function ProfileMenu() {
   }, [open]);
 
   if (!user) {
+    // While the stored session is being validated, render a quiet placeholder
+    // instead of flashing "Sign In" at signed-in users.
+    if (isLoading) {
+      return (
+        <div
+          aria-hidden
+          className="grid h-9 w-9 animate-pulse place-items-center rounded-full border border-white/10 bg-white/10"
+        />
+      );
+    }
     return (
       <Link
         href="/login"
-        className="rounded-md bg-red-600 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-red-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-400"
+        className="rounded-md bg-violet-600 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-violet-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400"
       >
         Sign In
       </Link>
@@ -165,7 +175,7 @@ export function ProfileMenu() {
             <button
               type="button"
               onClick={handleSignOut}
-              className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-red-400 transition hover:bg-red-500/10 hover:text-red-300"
+              className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-violet-400 transition hover:bg-violet-500/10 hover:text-violet-300"
             >
               <LogOut className="h-4 w-4" />
               Sign Out

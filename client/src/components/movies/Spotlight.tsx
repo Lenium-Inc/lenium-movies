@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useLocation } from "wouter";
+import { toast } from "sonner";
 import { fetchTrailerByTmdbId, type TrailerInfo } from "@/services/api";
 import type { Movie } from "./types";
 
@@ -75,7 +76,7 @@ const PrimaryActionButton = ({
     type="button"
     onClick={onClick}
     disabled={disabled}
-    className={`inline-flex items-center gap-2 rounded-full px-7 py-3.5 text-sm font-semibold transition-all duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 disabled:opacity-50 disabled:cursor-not-allowed ${className}`}
+    className={`inline-flex items-center gap-2 rounded-full px-7 py-3.5 text-sm font-semibold transition-all duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-500 disabled:opacity-50 disabled:cursor-not-allowed ${className}`}
   >
     <Icon className="h-5 w-5" />
     {label}
@@ -99,7 +100,7 @@ const SecondaryActionButton = ({
     type="button"
     onClick={onClick}
     disabled={disabled}
-    className={`inline-flex items-center gap-2 rounded-full px-7 py-3.5 text-sm font-semibold transition-all duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 disabled:opacity-50 disabled:cursor-not-allowed ${className}`}
+    className={`inline-flex items-center gap-2 rounded-full px-7 py-3.5 text-sm font-semibold transition-all duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-500 disabled:opacity-50 disabled:cursor-not-allowed ${className}`}
   >
     <Icon className="h-5 w-5" />
     {label}
@@ -327,12 +328,17 @@ export function Spotlight({
                     icon={Play}
                     label="Play"
                     onClick={() => handlePlay(current)}
-                    className="bg-red-600 font-black text-white ring-1 ring-inset ring-red-400/40 shadow-[0_16px_40px_rgba(220,38,38,0.35)] hover:bg-red-500 hover:shadow-[0_20px_48px_rgba(220,38,38,0.45)] active:scale-[0.97] active:bg-red-700"
+                    className="bg-violet-600 font-black text-white ring-1 ring-inset ring-violet-400/40 shadow-[0_16px_40px_rgba(124,58,237,0.35)] hover:bg-violet-500 hover:shadow-[0_20px_48px_rgba(124,58,237,0.45)] active:scale-[0.97] active:bg-violet-700"
                   />
                   <SecondaryActionButton
                     icon={saved ? Check : Bookmark}
                     label={saved ? "In My List" : "My List"}
-                    onClick={() => onSave?.(current)}
+                    onClick={() => {
+                    toast.success(
+                      saved ? "Removed from your list" : "Added to your list!"
+                    );
+                    onSave?.(current);
+                  }}
                     className="border-2 border-white/20 bg-black/30 text-white backdrop-blur-md hover:border-white/40 hover:bg-white/10 hover:text-white active:scale-[0.97] active:border-white/50"
                   />
                 </div>

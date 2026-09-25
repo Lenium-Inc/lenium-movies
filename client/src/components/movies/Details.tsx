@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/context/AuthContext";
+import { toast } from "sonner";
 import { getRating, setRating, subscribeRatings } from "@/services/ratings";
 import {
   addDownload,
@@ -468,9 +469,12 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
                   navigate("/login");
                   return;
                 }
+                toast.success(
+                  saved ? "Removed from your list" : "Added to your list!"
+                );
                 onSave();
               }}
-              className="flex items-center gap-2 rounded-md border border-white/15 bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600 focus-visible:ring-offset-2 focus-visible:ring-offset-black"
+              className="flex items-center gap-2 rounded-md border border-white/15 bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-600 focus-visible:ring-offset-2 focus-visible:ring-offset-black"
             >
               {saved ? (
                 <Check className="h-4 w-4" />
@@ -487,7 +491,7 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
                 onClick={() => void handleOffline()}
                 disabled={offline}
                 aria-disabled={!authUser || offline}
-                className={`flex items-center gap-2 rounded-md border px-4 py-2.5 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600 focus-visible:ring-offset-2 focus-visible:ring-offset-black ${
+                className={`flex items-center gap-2 rounded-md border px-4 py-2.5 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-600 focus-visible:ring-offset-2 focus-visible:ring-offset-black ${
                   offline
                     ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
                     : authUser

@@ -118,7 +118,7 @@ export default function ProfilePage() {
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4 sm:px-6 lg:px-8">
           <Link href="/" className="flex items-center gap-1.5 text-white" aria-label="Stream Vy home">
             <Play className="h-4 w-4" />
-            <span className="text-base font-black tracking-tight">STREAM VY</span>
+            <span className="text-base font-black tracking-tight">Stream Vy</span>
           </Link>
           <div className="flex items-center gap-3">
             <Link
@@ -206,7 +206,7 @@ export default function ProfilePage() {
                   placeholder="Profile name"
                   autoFocus
                   maxLength={20}
-                  className="mt-4 w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white placeholder-white/30 outline-none transition focus:border-red-500/60 focus:ring-1 focus:ring-red-500/30"
+                  className="mt-4 w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white placeholder-white/30 outline-none transition focus:border-violet-500/60 focus:ring-1 focus:ring-violet-500/30"
                 />
                 <label
                   htmlFor="profile-kids"
@@ -281,7 +281,7 @@ export default function ProfilePage() {
                             deleteProfile(profile.id);
                           }}
                           aria-label={`Delete ${profile.name}`}
-                          className="absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-full bg-black/70 text-white/70 opacity-0 transition group-hover:opacity-100 hover:bg-red-500 hover:text-white"
+                          className="absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-full bg-black/70 text-white/70 opacity-0 transition group-hover:opacity-100 hover:bg-violet-500 hover:text-white"
                         >
                           <X className="h-3.5 w-3.5" />
                         </button>
@@ -327,7 +327,7 @@ export default function ProfilePage() {
               <button
                 type="button"
                 onClick={() => void handleClearHistory()}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 px-3 py-1.5 text-xs font-semibold text-white/50 transition hover:border-red-500/50 hover:text-red-400"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 px-3 py-1.5 text-xs font-semibold text-white/50 transition hover:border-violet-500/50 hover:text-violet-400"
               >
                 <Trash2 className="h-3.5 w-3.5" />
                 Clear History
@@ -380,7 +380,7 @@ export default function ProfilePage() {
                     <button
                       type="button"
                       onClick={() => void handleRemoveHistory(item.movie_key)}
-                      className="shrink-0 rounded-lg p-2 text-white/40 transition hover:bg-red-500/10 hover:text-red-400"
+                      className="shrink-0 rounded-lg p-2 text-white/40 transition hover:bg-violet-500/10 hover:text-violet-400"
                       aria-label={`Remove ${item.title} from history`}
                     >
                       <X className="h-4 w-4" />

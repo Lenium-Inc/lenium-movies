@@ -72,7 +72,7 @@ export default function ProfilesPage() {
               placeholder="Profile name"
               maxLength={20}
               autoFocus
-              className="mt-6 w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white placeholder-white/30 outline-none transition focus:border-red-500/60 focus:ring-1 focus:ring-red-500/30"
+              className="mt-6 w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white placeholder-white/30 outline-none transition focus:border-violet-500/60 focus:ring-1 focus:ring-violet-500/30"
             />
             <label className="mt-4 flex cursor-pointer items-center gap-3 text-sm text-white/70">
               <input
@@ -126,7 +126,7 @@ export default function ProfilesPage() {
                         deleteProfile(profile.id);
                       }}
                       aria-label={`Delete ${profile.name}`}
-                      className="absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-full bg-black/70 text-white/80 transition hover:bg-red-500 hover:text-white"
+                      className="absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-full bg-black/70 text-white/80 transition hover:bg-violet-500 hover:text-white"
                     >
                       <X className="h-3.5 w-3.5" />
                     </button>

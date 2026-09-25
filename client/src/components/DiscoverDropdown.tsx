@@ -91,7 +91,7 @@ export const DiscoverDropdown: React.FC<DiscoverDropdownProps> = ({
         <div className="absolute left-0 mt-2 w-80 bg-zinc-950 border border-white/10 rounded-2xl shadow-2xl overflow-hidden p-5 flex flex-col gap-4 animate-in fade-in slide-in-from-top-2 duration-150">
           <div className="flex items-center justify-between border-b border-white/10 pb-3">
             <div className="flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-red-500" />
+              <Sparkles className="w-4 h-4 text-violet-500" />
               <span className="text-white font-semibold text-sm">
                 Filter Catalog
               </span>
@@ -114,7 +114,7 @@ export const DiscoverDropdown: React.FC<DiscoverDropdownProps> = ({
                 <button
                   key={t}
                   onClick={() => setSelectedType(t)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${selectedType === t ? "bg-red-600 text-white font-semibold" : "bg-zinc-900 text-zinc-300 hover:bg-zinc-800"}`}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${selectedType === t ? "bg-violet-600 text-white font-semibold" : "bg-zinc-900 text-zinc-300 hover:bg-zinc-800"}`}
                 >
                   {t}
                 </button>
@@ -154,7 +154,7 @@ export const DiscoverDropdown: React.FC<DiscoverDropdownProps> = ({
                 >
                   <span>{s}</span>
                   {selectedSort === s && (
-                    <Check className="w-3 h-3 text-red-500" />
+                    <Check className="w-3 h-3 text-violet-500" />
                   )}
                 </button>
               ))}
@@ -164,7 +164,7 @@ export const DiscoverDropdown: React.FC<DiscoverDropdownProps> = ({
           {/* Apply Filters Button */}
           <button
             onClick={handleApply}
-            className="mt-2 w-full py-2.5 bg-red-600 hover:bg-red-500 text-white font-semibold rounded-xl text-xs tracking-wide transition-all shadow-lg"
+            className="mt-2 w-full py-2.5 bg-violet-600 hover:bg-violet-500 text-white font-semibold rounded-xl text-xs tracking-wide transition-all shadow-lg"
           >
             Apply Filters
           </button>
@@ -185,7 +185,7 @@ export const DiscoverDropdown: React.FC<DiscoverDropdownProps> = ({
                   setSelectedSort("Trending");
                   setSelectedType("All");
                 }}
-                className="text-red-400 hover:text-red-300 underline"
+                className="text-violet-400 hover:text-violet-300 underline"
               >
                 Clear all
               </button>

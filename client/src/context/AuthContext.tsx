@@ -46,7 +46,13 @@ function toUser(api: ApiUser): User {
 }
 
 export function AuthProvider({ children }: AuthProviderProps) {
-  const [user, setUser] = useState<User | null>(null);
+  // Rehydrate synchronously from localStorage so protected chrome (e.g. the
+  // "Sign In" button vs the profile menu) never flashes while `apiMe`
+  // validates the stored session in the background.
+  const [user, setUser] = useState<User | null>(() => {
+    const cached = getStoredUser();
+    return cached ? toUser(cached) : null;
+  });
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
