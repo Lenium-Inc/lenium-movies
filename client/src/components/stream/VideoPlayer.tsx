@@ -43,6 +43,11 @@ export interface VideoPlayerProps {
   onSourceError?: () => void;
   hideCloseButton?: boolean;
   autoPlay?: boolean;
+  /**
+   * The page is silently cycling through alternate sources after a failure.
+   * Buffering/error chrome is suppressed so ambient poster stays on screen.
+   */
+  autoCycling?: boolean;
 }
 
 const QUALITY_ORDER = ["4K", "1080p", "720p", "480p", "360p", "Auto"] as const;
@@ -62,6 +67,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   onSourceError,
   hideCloseButton = false,
   autoPlay = true,
+  autoCycling = false,
 }) => {
   const [isPlaying, setIsPlaying] = useState<boolean>(autoPlay);
   const [isMuted, setIsMuted] = useState<boolean>(false);
@@ -281,8 +287,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     // If the source stalls (no progress for a while) it is treated as a dead
     // source and handed back to the page so the failover loop can switch
-    // mirrors/servers in the background.
-    const STALL_TIMEOUT_MS = 12000;
+    // mirrors/servers in the background. ~6s cadence keeps auto-cycles snappy.
+    const STALL_TIMEOUT_MS = 6000;
     const startStallWatch = () => {
       if (stallTimerRef.current) return;
       stallTimerRef.current = setTimeout(() => {
@@ -316,10 +322,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     const handleError = () => {
       clearStallWatch();
-      setPlaybackError(
-        "Stream currently unavailable. Click to retry source."
-      );
-      setIsLoading(false);
+      // On a silent auto-cycle just hand the failure to the page without
+      // flashing an error card — the next source is already queued.
+      if (!autoCycling) {
+        setPlaybackError(
+          "Stream currently unavailable. Click to retry source."
+        );
+        setIsLoading(false);
+      }
       onSourceError?.();
     };
 
@@ -368,10 +378,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
         hls.on(Hls.Events.ERROR, (_event: unknown, data: { fatal?: boolean }) => {
           if (data.fatal) {
-            setPlaybackError(
-              "Stream currently unavailable. Click to retry source."
-            );
-            setIsLoading(false);
+            if (!autoCycling) {
+              setPlaybackError(
+                "Stream currently unavailable. Click to retry source."
+              );
+              setIsLoading(false);
+            }
             hls?.destroy();
             onSourceError?.();
           }
@@ -379,16 +391,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
         video.src = streamUrl;
       } else {
-        setPlaybackError("Stream currently unavailable. Click to retry source.");
-        setIsLoading(false);
+        if (!autoCycling) {
+          setPlaybackError("Stream currently unavailable. Click to retry source.");
+          setIsLoading(false);
+        }
         onSourceError?.();
       }
     } else if (streamType === "dash") {
       if (video.canPlayType("application/dash+xml")) {
         video.src = streamUrl;
       } else {
-        setPlaybackError("Stream currently unavailable. Click to retry source.");
-        setIsLoading(false);
+        if (!autoCycling) {
+          setPlaybackError("Stream currently unavailable. Click to retry source.");
+          setIsLoading(false);
+        }
         onSourceError?.();
       }
     } else {
@@ -411,7 +427,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, [streamUrl, streamType, initAmbientCanvas, attemptAutoplay, onSourceError]);
+  }, [streamUrl, streamType, initAmbientCanvas, attemptAutoplay, onSourceError, autoCycling]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -620,7 +636,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         aria-hidden="true"
       />
 
-      {effectiveIsLoading && (
+      {effectiveIsLoading && !autoCycling && (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
           <div className="pointer-events-auto flex flex-col items-center gap-4 rounded-2xl bg-black/45 px-8 py-6 text-center backdrop-blur-md">
             <div className="h-10 w-10 animate-spin rounded-full border-[3px] border-white/20 border-t-white" />

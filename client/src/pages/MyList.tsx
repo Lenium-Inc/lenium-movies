@@ -2,6 +2,11 @@ import { Link } from "wouter";
 import { Bookmark, Film, Plus } from "lucide-react";
 import { useLocalSession } from "@/context/LocalSessionContext";
 import { useEffect, useState } from "react";
+import {
+  hasRemoteSession,
+  pushRemoveToRemote,
+  syncSavedFromRemote,
+} from "@/services/lists";
 
 export default function MyList() {
   const { hydrated, isAuthenticated, getMyList, removeFromMyList } = useLocalSession();
@@ -13,6 +18,16 @@ export default function MyList() {
     window.addEventListener("freestream:state-change", unsub);
     return () => window.removeEventListener("freestream:state-change", unsub);
   }, []);
+
+  // Merge the account's Postgres-backed saved_media into the local list once
+  // we're signed in and hydrated, so remote saves show up here too.
+  const remoteCapable = hasRemoteSession();
+  const [syncedRemote, setSyncedRemote] = useState(false);
+  useEffect(() => {
+    if (!hydrated || !remoteCapable || syncedRemote) return;
+    setSyncedRemote(true);
+    void syncSavedFromRemote().then(() => setRev(r => r + 1));
+  }, [hydrated, remoteCapable, syncedRemote]);
 
   const list = getMyList().filter(entry => {
     if (listFilter === "all") return true;
@@ -176,7 +191,10 @@ export default function MyList() {
                   <div className="mt-4 flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={() => removeFromMyList(entry.id)}
+                      onClick={() => {
+                        removeFromMyList(entry.id);
+                        void pushRemoveToRemote(Number(entry.id ?? entry.providerId ?? 0));
+                      }}
                       aria-label={`Remove ${entry.title} from My List`}
                       className="grid h-7 w-7 place-items-center rounded-full text-zinc-500 transition hover:bg-white/10 hover:text-zinc-200"
                     >

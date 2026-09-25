@@ -4,6 +4,7 @@ import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { MindfulCapModal } from "./components/player/MindfulCapModal";
+import { CommandPalette } from "./components/CommandPalette";
 import Home from "./pages/Home";
 import HeroPreview from "./pages/HeroPreview";
 import Profile from "./pages/Profile";
@@ -35,6 +36,7 @@ export default function App() {
       <ThemeProvider defaultTheme="dark">
         <Toaster />
         <MindfulCapModal />
+        <CommandPalette />
         <Router />
       </ThemeProvider>
     </ErrorBoundary>

@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { genreFilterOptions, INFINITE_VIEWS, useCatalog } from "@/hooks/useCatalog";
 import { Navbar } from "@/components/layout/Navbar";
+import { APPLY_SEARCH_EVENT } from "@/components/CommandPalette";
 import {
   CatalogEmptyState,
   SearchStatusBar,
@@ -48,6 +49,20 @@ export default function Home() {
   const [selected, setSelected] = useState<Movie | null>(null);
   const [heroActive, setHeroActive] = useState<Movie | null>(null);
 
+  // The global command palette can push a plain query back into the catalog
+  // grid ("See all results") — apply it to the shared search state.
+  useEffect(() => {
+    const onApply = (event: Event) => {
+      const query = (event as CustomEvent<{ query?: string }>).detail?.query;
+      if (typeof query === "string" && query.trim()) {
+        setSearch(query.trim());
+        setView("movies");
+      }
+    };
+    window.addEventListener(APPLY_SEARCH_EVENT, onApply);
+    return () => window.removeEventListener(APPLY_SEARCH_EVENT, onApply);
+  }, [setSearch, setView]);
+
   const isClientSearch = search.trim().length > 0;
   const isHomeView = view === "home" && !isClientSearch;
   const isBrowseView = INFINITE_VIEWS.has(view) && !isClientSearch;
@@ -73,15 +88,7 @@ export default function Home() {
         </div>
       ) : null}
       <div className="relative z-10">
-        <Navbar
-        view={view}
-        onNavigate={setSection}
-        search={search}
-        onSearchChange={value => {
-          setSearch(value);
-          setView("movies");
-        }}
-      />
+        <Navbar view={view} onNavigate={setSection} />
       <main className="mx-auto max-w-[1480px] px-4 pb-24 sm:px-6 lg:px-8">
         {view === "collections" ? (
           <section className="py-12">

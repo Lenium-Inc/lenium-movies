@@ -392,9 +392,14 @@ def get_stream_direct():
             for index, source in enumerate(streams)
             if source.get("url") and source["url"] != default
         ]
+        sources: list[str] = []
+        for url in [default] + [s.get("url", "") for s in streams]:
+            if url and url not in sources:
+                sources.append(url)
         return jsonify({
             "success": True,
             "activeSource": default,
+            "sources": sources,
             "mirrors": mirrors,
             "is_embed": False,
         })
@@ -409,6 +414,7 @@ def get_stream_direct():
     return jsonify({
         "success": True,
         "activeSource": stream_url,
+        "sources": [stream_url] + [fallback] if fallback != stream_url else [stream_url],
         "is_embed": True,
         "mirrors": [
             {"name": "Server 1", "url": stream_url},
@@ -900,4 +906,50 @@ def api_history_remove(movie_key: str):
     if not user:
         return _auth_error("Sign in to manage your watch history.")
     authdb.get_store().remove_history(user["id"], movie_key)
+    return jsonify({"success": True})
+
+
+@app.route("/api/auth/my-list", methods=["GET", "POST", "DELETE", "OPTIONS"])
+def api_my_list():
+    """Per-account saved titles (My List on the frontend)."""
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    user = _auth_user()
+    if not user:
+        return _auth_error("Sign in to sync your saved list.")
+
+    store = authdb.get_store()
+    user_id = user["id"]
+
+    if request.method == "DELETE":
+        store.clear_saved_media(user_id)
+        return jsonify({"success": True})
+
+    if request.method == "POST":
+        payload = request.get_json(silent=True) or {}
+        try:
+            media_id = int(payload.get("media_id") or payload.get("id"))
+        except (TypeError, ValueError):
+            return _auth_error("Missing a valid media id.", 400)
+        media_type = _normalize_media_type(payload.get("media_type") or "movie")
+        title = str(payload.get("title") or "").strip()
+        poster_path = payload.get("poster_path") or payload.get("poster_url") or None
+        added = store.add_saved_media(
+            user_id, media_id, media_type, title, poster_path
+        )
+        return jsonify({"success": True, "added": added})
+
+    items = store.saved_media(user_id)
+    return jsonify({"items": items})
+
+
+@app.route("/api/auth/my-list/<int:media_id>", methods=["DELETE", "OPTIONS"])
+def api_my_list_remove(media_id: int):
+    if request.method == "OPTIONS":
+        return ("", 204)
+    user = _auth_user()
+    if not user:
+        return _auth_error("Sign in to manage your saved list.")
+    authdb.get_store().remove_saved_media(user["id"], media_id)
     return jsonify({"success": True})

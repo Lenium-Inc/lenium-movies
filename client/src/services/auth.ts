@@ -192,3 +192,44 @@ export async function apiHistoryRemove(movieKey: string): Promise<void> {
 export async function apiHistoryClear(): Promise<void> {
   await request("/api/auth/history", { method: "DELETE", auth: true });
 }
+
+// ---------------------------------------------------------------------------
+// Saved media ("My List", backed by the Postgres `saved_media` table)
+// ---------------------------------------------------------------------------
+
+export interface SavedMediaItem {
+  media_id: number;
+  media_type: string;
+  title: string;
+  poster_path: string | null;
+  created_at: string | null;
+}
+
+export async function apiSavedMedia(): Promise<SavedMediaItem[]> {
+  const payload = await request<{ items: SavedMediaItem[] }>(
+    "/api/auth/my-list",
+    { auth: true }
+  );
+  return payload.items;
+}
+
+export async function apiSavedMediaAdd(item: {
+  media_id: number;
+  media_type?: "movie" | "tv";
+  title?: string;
+  poster_path?: string | null;
+}): Promise<boolean> {
+  const payload = await request<{ added: boolean }>("/api/auth/my-list", {
+    method: "POST",
+    body: item,
+    auth: true,
+  });
+  return payload.added;
+}
+
+export async function apiSavedMediaRemove(mediaId: number): Promise<void> {
+  await request(`/api/auth/my-list/${mediaId}`, {
+    method: "DELETE",
+    auth: true,
+  });
+}

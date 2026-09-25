@@ -64,6 +64,10 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { isExternalEmbedUrl } from "@/lib/streamUtils";
 import { useAuth } from "@/context/AuthContext";
 import { apiHistoryAdd } from "@/services/auth";
+import {
+  pushRemoveToRemote,
+  pushToggleToRemote,
+} from "@/services/lists";
 import { toast } from "sonner";
 
 const TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p";
@@ -416,6 +420,7 @@ export function WatchPage() {
             playable = {
               ...base,
               stream_url: source.url,
+              sources: source.sources,
               mirrors: source.mirrors,
               season: targetSeason,
               episode: targetEpisode,
@@ -627,6 +632,9 @@ export function WatchPage() {
     const stream = resolved?.stream;
     if (!stream) return [];
     const urls = new Set<string>();
+    for (const source of stream.sources ?? []) {
+      if (source && !isExternalEmbedUrl(source)) urls.add(source);
+    }
     if (stream.stream_url && !isExternalEmbedUrl(stream.stream_url)) {
       urls.add(stream.stream_url);
     }
@@ -646,6 +654,11 @@ export function WatchPage() {
   const playerKeyRef = useRef(0);
 
   const currentStreamUrl = playableCandidates[sourceIndex] ?? "";
+
+  // When the player is advancing through alternate sources on its own the
+  // switch is kept silent: no buffering spinner, just the ambient poster
+  // canvas while the next candidate hands it to the player.
+  const autoCycling = sourceIndex > 0 && !reconnecting;
 
   // Poll the backend stream endpoint until a playable direct source comes
   // back. `refresh` bypasses the backend cache so every attempt is a fresh
@@ -690,6 +703,7 @@ export function WatchPage() {
                   stream: {
                     ...prev.stream,
                     stream_url: source.url,
+                    sources: source.sources,
                     mirrors: source.mirrors,
                   },
                 }
@@ -747,12 +761,15 @@ export function WatchPage() {
   }, [resolved]);
 
   // Advance to the next candidate mirror, or hand off to the backend
-  // fallback loop when the current source fails mid-play.
+  // fallback loop when the current source fails mid-play. Source swaps are
+  // silent — the backing poster canvas keeps the surface alive, and the
+  // player remounts on the bumped key to reset its HLS/dash state.
   const handleSourceError = useCallback(() => {
     if (sourceIndex + 1 < playableCandidates.length) {
-      setSourceIndex((prev) => Math.min(prev + 1, playableCandidates.length - 1));
-      setReconnecting(true);
-      window.setTimeout(() => setReconnecting(false), 1000);
+      playerKeyRef.current += 1;
+      setSourceIndex((prev) =>
+        Math.min(prev + 1, playableCandidates.length - 1)
+      );
     } else if (!reconnecting && !streamUnavailable) {
       fallbackAttemptsRef.current = 0;
       void runStreamFallback(false);
@@ -912,6 +929,7 @@ export function WatchPage() {
                         currentQuality={qualityVariants.find(v => v.quality)?.quality || "Auto"}
                         onQualityChange={(q) => {}}
                         isLoading={resolving}
+                        autoCycling={autoCycling}
                         playbackError={playError?.message || null}
                         onRetry={() => {
                           if (playError) {
@@ -1097,6 +1115,16 @@ export function WatchPage() {
                       toast.success(
                         wasInList ? "Removed from your list" : "Added to your list!"
                       );
+                      if (wasInList) {
+                        void pushRemoveToRemote(Number(movie.providerId ?? movie.id ?? 0));
+                      } else {
+                        void pushToggleToRemote({
+                          id: Number(movie.providerId ?? movie.id),
+                          mediaType: movie.mediaType,
+                          title: movie.title,
+                          poster: movie.poster,
+                        });
+                      }
                     }}
                     aria-pressed={isInMyList(movie.id)}
                   >

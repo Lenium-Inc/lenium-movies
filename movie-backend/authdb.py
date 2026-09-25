@@ -24,6 +24,36 @@ from datetime import datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
+
+def _load_env_file() -> None:
+    """Best-effort dotenv loader (root `./.env` + `movie-backend/.env`).
+
+    Only fills keys that are NOT already in the environment, so injected
+    values (Render, Neon CLI) always win. Neon's `neon link` writes values
+    wrapped in double quotes; those are stripped here."""
+    if os.environ.get("LENIUM_SKIP_ENV_FILE"):
+        return
+    for candidate in (
+        os.path.join(HERE, ".env"),
+        os.path.join(os.path.dirname(HERE), ".env"),
+    ):
+        try:
+            with open(candidate, "r", encoding="utf-8") as handle:
+                for raw in handle:
+                    line = raw.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    key, _, value = line.partition("=")
+                    key = key.strip()
+                    if not key or key in os.environ:
+                        continue
+                    os.environ[key] = value.strip().strip('"').strip("'")
+        except OSError:
+            continue
+
+
+_load_env_file()
+
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -41,6 +71,18 @@ except Exception:  # pragma: no cover - dev boxes without the driver
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime(_ISO)
+
+
+def _to_iso(value) -> str | None:
+    """Normalize created_at/updated_at into an ISO string whether the driver
+    returned TEXT (SQLite) or a Python datetime (Postgres timestamptz)."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.strftime(_ISO)
+    return str(value)
 
 
 def _expires_at() -> str:
@@ -127,6 +169,16 @@ class Store:
         finally:
             conn.close()
 
+    def _execute_returning(self, sql: str, params: tuple = ()) -> dict | None:
+        """INSERT ... RETURNING row for Postgres (ids are DB-generated UUIDs)."""
+        conn = self._connect()
+        try:
+            cur = conn.cursor()
+            cur.execute(self._sql(sql), params)
+            return self._rows(cur, fetch_all=False)
+        finally:
+            conn.close()
+
     # -- schema -----------------------------------------------------------
 
     def init(self) -> None:
@@ -134,15 +186,17 @@ class Store:
         try:
             cur = conn.cursor()
             if self.pg:
+                # Matches the Neon-provisioned schema submitted with the task
+                # (the live DB already has these tables; CREATE IF NOT EXISTS is
+                # a no-op there and bootstraps the same shape on a fresh pg).
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS users (
-                        id BIGSERIAL PRIMARY KEY,
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                         email TEXT NOT NULL UNIQUE,
                         display_name TEXT NOT NULL,
                         password_hash TEXT NOT NULL,
-                        password_salt TEXT NOT NULL,
-                        created_at TEXT NOT NULL
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
                     )
                     """
                 )
@@ -150,7 +204,7 @@ class Store:
                     """
                     CREATE TABLE IF NOT EXISTS sessions (
                         token TEXT PRIMARY KEY,
-                        user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                         expires_at TEXT NOT NULL
                     )
                     """
@@ -158,8 +212,8 @@ class Store:
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS watch_history (
-                        id BIGSERIAL PRIMARY KEY,
-                        user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                         movie_key TEXT NOT NULL,
                         title TEXT NOT NULL,
                         year INT,
@@ -173,6 +227,36 @@ class Store:
                         updated_at TEXT NOT NULL,
                         UNIQUE (user_id, movie_key)
                     )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS saved_media (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        media_id BIGINT NOT NULL,
+                        media_type TEXT NOT NULL DEFAULT 'movie',
+                        title TEXT NOT NULL DEFAULT '',
+                        poster_path TEXT,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        UNIQUE (user_id, media_id)
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS catalog_cache (
+                        media_id BIGINT PRIMARY KEY,
+                        media_type TEXT NOT NULL DEFAULT 'movie',
+                        payload JSONB,
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_catalog_cache_type_updated
+                        ON catalog_cache(media_type, updated_at DESC)
                     """
                 )
             else:
@@ -217,6 +301,36 @@ class Store:
                     )
                     """
                 )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS saved_media (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER NOT NULL,
+                        media_id INTEGER NOT NULL,
+                        media_type TEXT NOT NULL DEFAULT 'movie',
+                        title TEXT NOT NULL DEFAULT '',
+                        poster_path TEXT,
+                        created_at TEXT NOT NULL,
+                        UNIQUE (user_id, media_id)
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS catalog_cache (
+                        media_id INTEGER PRIMARY KEY,
+                        media_type TEXT NOT NULL DEFAULT 'movie',
+                        payload TEXT,
+                        updated_at TEXT NOT NULL
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_catalog_cache_type_updated
+                        ON catalog_cache(media_type, updated_at DESC)
+                    """
+                )
                 conn.commit()
         finally:
             conn.close()
@@ -239,6 +353,14 @@ class Store:
         salt = secrets.token_hex(16)
         digest = self._hash(password, salt)
         now = _now()
+        if self.pg:
+            row = self._execute_returning(
+                "INSERT INTO users (email, display_name, password_hash, created_at) "
+                "VALUES (%s, %s, %s, %s) RETURNING id",
+                (email, name, digest, now),
+            )
+            user_id = row.get("id") if row else None
+            return self.user_by_id(user_id) if user_id else None
         user_id = self._execute(
             "INSERT INTO users (email, display_name, password_hash, password_salt, created_at) "
             "VALUES (?, ?, ?, ?, ?)",
@@ -253,18 +375,28 @@ class Store:
         raw = hashlib.pbkdf2_hmac(
             "sha256", password.encode("utf-8"), salt.encode("utf-8"), 210_000
         )
-        return raw.hex()
+        # Self-contained: salt is embedded so `users.password_hash` needs no
+        # separate column (matches the Neon-provisioned users schema).
+        return f"pbkdf2_sha256${salt}${raw.hex()}"
 
     def verify_password(self, user: dict, password: str) -> bool:
         import hashlib
 
+        combined = user.get("password_hash") or ""
+        legacy = "$" not in combined
+        if legacy:
+            # Old rows stored salt + digest in separate columns.
+            salt = user.get("password_salt") or ""
+            expected = user.get("password_hash") or ""
+        else:
+            scheme, salt, expected = combined.split("$", 2)
         raw = hashlib.pbkdf2_hmac(
             "sha256",
             password.encode("utf-8"),
-            (user.get("password_salt") or "").encode("utf-8"),
+            (salt or "").encode("utf-8"),
             210_000,
         )
-        return secrets.compare_digest(raw.hex(), user.get("password_hash") or "")
+        return secrets.compare_digest(raw.hex(), (expected or "").lower())
 
     # -- sessions ---------------------------------------------------------
 
@@ -373,6 +505,160 @@ class Store:
     def clear_history(self, user_id: int) -> None:
         self._execute("DELETE FROM watch_history WHERE user_id = ?", (user_id,))
 
+    # -- saved media (per-account My List) --------------------------------
+
+    def add_saved_media(
+        self,
+        user_id: int,
+        media_id: int | str,
+        media_type: str = "movie",
+        title: str = "",
+        poster_path: str | None = None,
+    ) -> bool:
+        """Add a title to the account's saved list. Returns False if present."""
+        media_id = int(media_id)
+        existing = self._query(
+            "SELECT id FROM saved_media WHERE user_id = ? AND media_id = ? LIMIT 1",
+            (user_id, media_id),
+        )
+        if existing:
+            return False
+        self._execute(
+            "INSERT INTO saved_media (user_id, media_id, media_type, title, poster_path, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                user_id,
+                media_id,
+                media_type if media_type in ("movie", "tv") else "movie",
+                title or "",
+                poster_path or "",
+                _now(),
+            ),
+        )
+        return True
+
+    def saved_media(self, user_id: int, limit: int = 500) -> list[dict]:
+        rows = self._query(
+            "SELECT media_id, media_type, title, poster_path, created_at "
+            "FROM saved_media WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+            (user_id, limit),
+            fetch_all=True,
+        ) or []
+        return [
+            {**row, "created_at": _to_iso(row.get("created_at"))} for row in rows
+        ]
+
+    def remove_saved_media(self, user_id: int, media_id: int | str) -> None:
+        self._execute(
+            "DELETE FROM saved_media WHERE user_id = ? AND media_id = ?",
+            (user_id, int(media_id)),
+        )
+
+    def clear_saved_media(self, user_id: int) -> None:
+        self._execute("DELETE FROM saved_media WHERE user_id = ?", (user_id,))
+
+    # -- catalog cache (JSONB snapshots) ----------------------------------
+
+    def upsert_catalog_cache(
+        self,
+        media_id: int | str,
+        media_type: str,
+        payload: dict,
+        ts: str | None = None,
+    ) -> None:
+        """Per-title JSON snapshot used by the catalog's cache-first path.
+        Postgres stores `payload` as JSONB; SQLite keeps it as JSON text."""
+        media_type = media_type if media_type in ("movie", "tv") else "movie"
+        ts = ts or _now()
+        existing = self._query(
+            "SELECT media_id FROM catalog_cache WHERE media_id = ? AND media_type = ? LIMIT 1",
+            (int(media_id), media_type),
+        )
+        if existing:
+            if self.pg:
+                import psycopg.types.json as _pg_json
+
+                self._execute(
+                    "UPDATE catalog_cache SET payload = %s, updated_at = %s "
+                    "WHERE media_id = %s AND media_type = %s",
+                    (_pg_json.Jsonb(payload), ts, int(media_id), media_type),
+                )
+            else:
+                self._execute(
+                    "UPDATE catalog_cache SET payload = ?, updated_at = ? "
+                    "WHERE media_id = ? AND media_type = ?",
+                    (json.dumps(payload), ts, int(media_id), media_type),
+                )
+            return
+        if self.pg:
+            import psycopg.types.json as _pg_json
+
+            self._execute(
+                "INSERT INTO catalog_cache (media_id, media_type, payload, updated_at) "
+                "VALUES (%s, %s, %s, %s)",
+                (int(media_id), media_type, _pg_json.Jsonb(payload), ts),
+            )
+        else:
+            self._execute(
+                "INSERT INTO catalog_cache (media_id, media_type, payload, updated_at) "
+                "VALUES (?, ?, ?, ?)",
+                (int(media_id), media_type, json.dumps(payload), ts),
+            )
+
+    def get_catalog_cache(
+        self, media_id: int | str, media_type: str | None = None
+    ) -> dict | None:
+        if media_type and media_type in ("movie", "tv"):
+            row = self._query(
+                "SELECT media_type, payload, updated_at FROM catalog_cache "
+                "WHERE media_id = ? AND media_type = ? LIMIT 1",
+                (int(media_id), media_type),
+            )
+        else:
+            row = self._query(
+                "SELECT media_type, payload, updated_at FROM catalog_cache "
+                "WHERE media_id = ? ORDER BY updated_at DESC LIMIT 1",
+                (int(media_id),),
+            )
+        if not row:
+            return None
+        if media_type and row.get("media_type") != media_type:
+            return None
+        payload = row.get("payload")
+        if isinstance(payload, str) and not self.pg:
+            try:
+                payload = json.loads(payload)
+            except (TypeError, ValueError):
+                return None
+        if not isinstance(payload, dict):
+            return None
+        return {"payload": payload, "updated_at": _to_iso(row.get("updated_at"))}
+
+    def recent_catalog_cache(
+        self, media_type: str = "all", limit: int = 100
+    ) -> list[dict]:
+        """Most recently cached payloads (used as the JSONB fallback page)."""
+        rows = self._query(
+            "SELECT media_type, payload, updated_at FROM catalog_cache "
+            "WHERE (? = 'all' OR media_type = ?) ORDER BY updated_at DESC LIMIT ?",
+            (media_type, media_type, limit),
+            fetch_all=True,
+        ) or []
+        out: list[dict] = []
+        for row in rows:
+            payload = row.get("payload")
+            if isinstance(payload, str) and not self.pg:
+                try:
+                    payload = json.loads(payload)
+                except (TypeError, ValueError):
+                    continue
+            if isinstance(payload, dict):
+                out.append(payload)
+        return out
+
+    def clear_catalog_cache(self) -> None:
+        self._execute("DELETE FROM catalog_cache", ())
+
 
 _store: Store | None = None
 
@@ -392,5 +678,5 @@ def serialize_user(user: dict | None) -> dict | None:
         "id": str(user.get("id")),
         "email": user.get("email"),
         "name": user.get("display_name") or user.get("name") or "",
-        "created_at": user.get("created_at"),
+        "created_at": _to_iso(user.get("created_at")),
     }

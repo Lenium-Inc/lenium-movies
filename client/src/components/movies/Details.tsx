@@ -38,7 +38,6 @@ import {
   subscribeStats,
 } from "@/services/stats";
 import type { Movie } from "./types";
-import { TrailerEmbed } from "./MediaCard";
 
 const TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p";
 
@@ -217,6 +216,7 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
           playable = {
             ...base,
             stream_url: source.url,
+            sources: source.sources,
             mirrors: source.mirrors,
             season: targetSeason,
             episode: targetEpisode,
@@ -377,57 +377,46 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
         onClick={event => event.stopPropagation()}
         className="max-h-[94vh] w-full max-w-2xl overflow-y-auto rounded-t-xl border border-white/10 bg-[#151519] shadow-2xl sm:rounded-xl"
       >
-        <div className="relative h-44 overflow-hidden sm:h-56">
-          {(() => {
-            if (trailer && trailer.provider === "youtube") {
-              return (
-                <iframe
-                  key="youtube-trailer"
-                  src={`https://www.youtube-nocookie.com/embed/${trailer.id}?autoplay=1&mute=1&controls=0&loop=1&playlist=${trailer.id}&enablejsapi=1`}
-                  className="w-full h-64 md:h-80 object-cover pointer-events-none rounded-t-xl"
-                  allow="autoplay; encrypted-media"
-                  title={`${movie.title} trailer`}
-                />
-              );
-            }
-            if (trailer) {
-              return (
-                <TrailerEmbed
-                  key="trailer-embed"
-                  provider={trailer.provider}
-                  id={trailer.id}
-                />
-              );
-            }
-            if (movie.backdrop) {
-              return (
-                <img
-                  key="backdrop"
-                  src={getImageUrl(movie.backdrop, "original")}
-                  alt=""
-                  className="h-full w-full object-cover"
-                />
-              );
-            }
-            return null;
-          })()}
-          <div className="absolute inset-0 bg-black/45" />
-          <div className="absolute inset-0 bg-gradient-to-t from-[#151519] to-transparent" />
+        <div className="relative aspect-video w-full bg-[#0a0a0c]">
+          {trailer && trailer.provider === "youtube" ? (
+            <iframe
+              key="youtube-trailer"
+              src={`https://www.youtube-nocookie.com/embed/${trailer.id}?autoplay=1&mute=1&controls=0&loop=1&playlist=${trailer.id}&playsinline=1&modestbranding=1&rel=0`}
+              className="absolute inset-0 h-full w-full object-cover pointer-events-none"
+              allow="autoplay; encrypted-media"
+              title={`${movie.title} trailer`}
+            />
+          ) : trailer ? (
+            <iframe
+              key="trailer-embed"
+              src={`https://www.dailymotion.com/embed/video/${trailer.id}?autoplay=1&muted=1&loop=1&controls=0`}
+              className="absolute inset-0 h-full w-full object-cover pointer-events-none"
+              allow="autoplay; encrypted-media"
+              title={`${movie.title} trailer`}
+            />
+          ) : movie.backdrop ? (
+            <img
+              key="backdrop"
+              src={getImageUrl(movie.backdrop, "original")}
+              alt=""
+              className="absolute inset-0 h-full w-full object-cover"
+            />
+          ) : (
+            <div className="absolute inset-0 bg-gradient-to-br from-[#1B1B20] to-[#0a0a0c]" />
+          )}
           <button
             onClick={onClose}
             aria-label="Close details"
-            className="absolute right-3 top-3 rounded-full bg-black/60 p-2 text-white"
+            className="absolute right-3 top-3 z-10 rounded-full bg-black/60 p-2 text-white backdrop-blur-sm transition hover:bg-black/80"
           >
             <X className="h-4 w-4" />
           </button>
-          <h2 className="absolute bottom-5 left-5 text-2xl font-bold sm:text-3xl">
-            {movie.title}
-          </h2>
         </div>
         <div className="p-5">
           {detailsLoaded ? (
             <>
-              <div className="flex flex-wrap items-center gap-2 text-xs text-[#aaa9ae]">
+              <h2 className="text-2xl font-bold sm:text-3xl">{movie.title}</h2>
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[#aaa9ae]">
                 {movie.year && <span>{movie.year}</span>}
                 {movie.runtime && (
                   <>

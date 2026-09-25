@@ -132,6 +132,70 @@ def _merge_uniq(items: list[dict], limit: int) -> list[dict]:
     return out
 
 
+def _auth_store():
+    import authdb
+
+    return authdb.get_store()
+
+
+def _snapshot_to_cache(items: list[dict]) -> None:
+    """Best-effort per-title JSONB snapshots (catalog_cache) of live items."""
+    try:
+        store = _auth_store()
+        for item in items:
+            tmdb_id = item.get("tmdb_id")
+            if not tmdb_id:
+                continue
+            store.upsert_catalog_cache(
+                int(tmdb_id),
+                item.get("media_type") or "movie",
+                item,
+            )
+    except Exception as error:  # noqa: BLE001 - JSONB caching is best-effort
+        print(f"[Catalog Aggregator] snapshot failed: {error}")
+
+
+def _snapshot_in_background(items: list[dict]) -> None:
+    if not items:
+        return
+
+    def _write(batch: list[dict]) -> None:
+        _snapshot_to_cache(batch)
+
+    threading.Thread(
+        target=_write, args=(items,), daemon=True, name="catalog-snapshot"
+    ).start()
+
+
+def _jsonb_cache_page(media_type: str, per_page: int) -> list[dict]:
+    """Newest JSONB snapshots as a fallback page (Postgres-native cache)."""
+    try:
+        items = _auth_store().recent_catalog_cache(media_type, per_page)
+        return [to_api(item) for item in items if to_api(item)]
+    except Exception as error:  # noqa: BLE001 - cache fallback is best-effort
+        print(f"[Catalog Aggregator] jsonb fallback failed: {error}")
+        return []
+
+
+def _refresh_in_background(media_type: str, page: int, per_page: int, genre: str | None):
+    """After serving a cached page, refresh the cache on a daemon thread so the
+    NEXT request sees current titles."""
+
+    def _refresh():
+        try:
+            store = CatalogStore()
+            items, _ = _fetch_live(media_type, page, per_page, genre)
+            if items:
+                store.upsert_items(items)
+                _snapshot_to_cache(items)
+        except Exception as error:  # noqa: BLE001 - refresh is best-effort
+            print(f"[Catalog Aggregator] background refresh failed: {error}")
+
+    threading.Thread(
+        target=_refresh, args=(), daemon=True, name="catalog-refresh"
+    ).start()
+
+
 def _fetch_live(media_type: str, page: int, per_page: int, genre: str | None):
     """Concurrently fetch a fresh page from TMDB (movie + tv for `all`) and,
     on the first page, optional Trakt trending for extra breadth."""
@@ -207,6 +271,7 @@ def search_media(query: str, media_type: str = "all", page: int = 1,
         }
 
     store.upsert_items(items)
+    _snapshot_in_background(items)
     return {
         "items": [to_api(item) for item in items[:per_page]],
         "page": page,
@@ -250,6 +315,7 @@ def discover(media_type: str = "movie", page: int = 1, per_page: int = DEFAULT_P
     live_items, has_more = _fetch_live(mt, page, per_page, genre)
     if live_items:
         store.upsert_items(live_items)  # write-through cache
+        _snapshot_in_background(live_items)  # JSONB snapshot (background)
         return {
             "items": [to_api(item) for item in live_items[:per_page]],
             "page": page,
@@ -260,14 +326,19 @@ def discover(media_type: str = "movie", page: int = 1, per_page: int = DEFAULT_P
         }
 
     rows = store.page(mt, genre, page, per_page) or []
+    source = "cache"
+    if not rows:
+        rows = _jsonb_cache_page(mt, per_page)
+        source = "jsonb"
     total = store.count(mt, genre)
+    _refresh_in_background(mt, page, per_page, genre)
     return {
         "items": [to_api(row) for row in rows],
         "page": page,
         "per_page": per_page,
         "total": total,
         "has_more": page * per_page < total,
-        "source": "cache",
+        "source": source,
     }
 
 

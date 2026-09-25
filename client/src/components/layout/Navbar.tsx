@@ -3,12 +3,11 @@ import { Menu, Play, Search, X } from "lucide-react";
 import { Link } from "wouter";
 import type { View } from "@/components/layout/navigation";
 import { ProfileMenu } from "@/components/layout/ProfileMenu";
+import { OPEN_SEARCH_EVENT } from "@/components/CommandPalette";
 
 interface NavbarProps {
   view: View;
   onNavigate: (view: View) => void;
-  search: string;
-  onSearchChange: (value: string) => void;
 }
 
 const NAV_LINKS: { id: View; label: string }[] = [
@@ -18,14 +17,17 @@ const NAV_LINKS: { id: View; label: string }[] = [
   { id: "tv", label: "Shows" },
 ];
 
+function openSearchPalette() {
+  window.dispatchEvent(new Event(OPEN_SEARCH_EVENT));
+}
+
 /**
  * Netflix-style sticky top navigation: transparent over the hero, turning
- * translucent dark once the page scrolls. Four core destinations, global
- * search, and the profile entry on the right.
+ * translucent dark once the page scrolls. Four core destinations, a global
+ * command-palette search trigger (⌘K / "/"), and the profile entry.
  */
-export function Navbar({ view, onNavigate, search, onSearchChange }: NavbarProps) {
+export function Navbar({ view, onNavigate }: NavbarProps) {
   const [scrolled, setScrolled] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
@@ -34,18 +36,6 @@ export function Navbar({ view, onNavigate, search, onSearchChange }: NavbarProps
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
-
-  const renderInput = (options: { autoFocus?: boolean } = {}) => (
-    <input
-      type="search"
-      value={search}
-      onChange={(event) => onSearchChange(event.target.value)}
-      placeholder="Search movies, shows, genres"
-      aria-label="Search the catalogue"
-      autoFocus={options.autoFocus}
-      className="w-full bg-transparent text-xs text-white outline-none placeholder:text-[#6E6E74]"
-    />
-  );
 
   const handleNavigate = (next: View) => {
     setMenuOpen(false);
@@ -94,23 +84,28 @@ export function Navbar({ view, onNavigate, search, onSearchChange }: NavbarProps
         </nav>
 
         <div className="ml-auto flex items-center gap-2.5">
-          {/* Desktop search */}
-          <div className="hidden items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-3.5 py-2 transition focus-within:border-violet-500/60 sm:flex">
+          {/* Desktop search trigger -> command palette */}
+          <button
+            type="button"
+            onClick={openSearchPalette}
+            aria-label="Open search (Ctrl/⌘ K)"
+            className="hidden items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-3.5 py-2 text-xs text-white/50 transition hover:border-white/25 hover:bg-white/10 hover:text-white/80 sm:flex"
+          >
             <Search className="h-3.5 w-3.5 text-white/50" />
-            {renderInput()}
+            <span className="min-w-[120px] text-left">Search titles…</span>
             <kbd className="rounded border border-white/10 bg-white/5 px-1.5 py-px text-[9px] font-semibold text-white/40">
-              /
+              ⌘K
             </kbd>
-          </div>
+          </button>
 
           {/* Mobile: search + menu toggles */}
           <button
             type="button"
-            aria-label={searchOpen ? "Close search" : "Search titles"}
-            onClick={() => setSearchOpen((open) => !open)}
+            aria-label="Search titles"
+            onClick={openSearchPalette}
             className="grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-white/[0.06] text-white/80 transition hover:bg-white/15 sm:hidden"
           >
-            {searchOpen ? <X className="h-4 w-4" /> : <Search className="h-4 w-4" />}
+            <Search className="h-4 w-4" />
           </button>
           <button
             type="button"
@@ -124,42 +119,23 @@ export function Navbar({ view, onNavigate, search, onSearchChange }: NavbarProps
         </div>
       </div>
 
-      {/* Mobile panels */}
-      {(searchOpen || menuOpen) && (
+      {/* Mobile menu panel */}
+      {menuOpen && (
         <div className="border-t border-white/10 bg-[#050505]/85 backdrop-blur-[18px] lg:hidden">
-          {searchOpen && (
-            <div className="flex items-center gap-2 px-4 py-3">
-              <Search className="h-3.5 w-3.5 shrink-0 text-white/50" />
-              <div className="min-w-0 flex-1">{renderInput({ autoFocus: true })}</div>
+          <nav className="flex items-center gap-6 px-4 py-3">
+            {NAV_LINKS.map((link) => (
               <button
+                key={link.id}
                 type="button"
-                aria-label="Clear search"
-                onClick={() => {
-                  onSearchChange("");
-                  setSearchOpen(false);
-                }}
-                className="shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold text-white/60 hover:bg-white/10"
+                onClick={() => handleNavigate(link.id)}
+                className={`text-sm font-medium transition ${
+                  view === link.id ? "text-white" : "text-white/60 hover:text-white"
+                }`}
               >
-                Clear
+                {link.label}
               </button>
-            </div>
-          )}
-          {menuOpen && (
-            <nav className="flex items-center gap-6 px-4 py-3">
-              {NAV_LINKS.map((link) => (
-                <button
-                  key={link.id}
-                  type="button"
-                  onClick={() => handleNavigate(link.id)}
-                  className={`text-sm font-medium transition ${
-                    view === link.id ? "text-white" : "text-white/60 hover:text-white"
-                  }`}
-                >
-                  {link.label}
-                </button>
-              ))}
-            </nav>
-          )}
+            ))}
+          </nav>
         </div>
       )}
     </header>

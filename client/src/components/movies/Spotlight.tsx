@@ -246,13 +246,15 @@ export function Spotlight({
       {/* Gradient architecture into void black — constant across state switches */}
       <div
         aria-hidden
-        className="absolute inset-0 bg-[radial-gradient(ellipse_130%_110%_at_62%_-12%,transparent_0%,rgba(5,5,5,0.30)_40%,#050505_80%)]"
+        className="absolute inset-0 bg-[radial-gradient(ellipse_130%_110%_at_18%_-12%,transparent_0%,rgba(5,5,5,0.30)_40%,#050505_80%)]"
       />
+      {/* Directional scrim: the void hangs from the bottom-left corner, sweeping
+          diagonally toward the top-right so left-aligned content reads. */}
       <div
         aria-hidden
-        className="absolute inset-0 bg-[linear-gradient(90deg,#050505_0%,rgba(5,5,5,0.80)_44%,rgba(5,5,5,0.20)_72%,transparent_100%)]"
+        className="absolute inset-0 bg-[linear-gradient(115deg,#050505_0%,rgba(5,5,5,0.88)_34%,rgba(5,5,5,0.45)_58%,transparent_82%)]"
       />
-      {/* Cinematic zinc fade from the bottom so the centered content reads against a theatrical backdrop */}
+      {/* Cinematic zinc fade from the bottom so the left-docked content reads against a theatrical backdrop */}
       <div
         aria-hidden
         className="absolute inset-x-0 bottom-0 h-[70%] bg-gradient-to-t from-zinc-950 via-zinc-950/50 to-transparent"
@@ -262,9 +264,9 @@ export function Spotlight({
         className="absolute inset-x-0 bottom-0 h-48 bg-[linear-gradient(180deg,transparent_0%,#050505_92%)]"
       />
 
-      {/* Cross-fading content block - centered, docked toward the bottom */}
-      <div className="absolute inset-0 z-10 flex items-end justify-center px-5 pb-20 sm:px-8 lg:px-14">
-        <div className="w-full max-w-3xl text-center">
+      {/* Cross-fading content block - left-aligned and docked toward the bottom */}
+      <div className="absolute inset-0 z-10 flex items-end justify-start px-5 pb-20 sm:px-8 lg:px-16">
+        <div className="w-full max-w-3xl text-left">
           {current ? (
             <AnimatePresence initial={false} mode="popLayout">
               <motion.div
@@ -280,7 +282,7 @@ export function Spotlight({
                 </h1>
 
                 {/* Consolidated Inline Metadata Row */}
-                <div className="mt-4 flex flex-wrap items-center justify-center gap-2.5">
+                <div className="mt-4 flex flex-wrap items-center justify-start gap-2.5">
                   {current.year ? (
                     <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/5 px-3 py-1 text-xs font-semibold text-white backdrop-blur-sm">
                       {current.year}
@@ -317,13 +319,13 @@ export function Spotlight({
 
                 {/* Plot Overview / Synopsis */}
                 {current.synopsis ? (
-                  <p className="mx-auto mt-4 line-clamp-3 max-w-2xl text-base leading-7 text-zinc-300">
+                  <p className="mt-4 line-clamp-3 max-w-2xl text-base leading-7 text-zinc-300 text-left">
                     {current.synopsis}
                   </p>
                 ) : null}
 
                 {/* Action Buttons - Only Play and My List */}
-                <div className="mt-8 flex flex-wrap items-center justify-center gap-4">
+                <div className="mt-8 flex flex-wrap items-center justify-start gap-4">
                   <PrimaryActionButton
                     icon={Play}
                     label="Play"

@@ -67,6 +67,8 @@ export interface StreamMovie {
   episode?: number;
   /** Alternate embed sources returned by `/api/get-stream`. */
   mirrors?: StreamMirror[];
+  /** Ordered playable source candidates (primary first) for auto-cycling. */
+  sources?: string[];
   /** Backdrop image URL from TMDB (original size). */
   backdrop_url?: string;
   /** TMDB overview/synopsis. */
@@ -328,6 +330,8 @@ export async function resolveStream(
 export interface StreamSource {
   /** Primary embed/web URL (`activeSource`). */
   url: string;
+  /** Ordered list of candidate source URLs (primary first) for auto-cycling. */
+  sources?: string[];
   /** Alternate servers the player can switch between. */
   mirrors: StreamMirror[];
 }
@@ -351,6 +355,7 @@ export interface GetStreamRequest {
 function isGetStreamPayload(value: unknown): value is {
   success: boolean;
   activeSource: string;
+  sources?: string[];
   mirrors: StreamMirror[];
 } {
   if (typeof value !== "object" || value === null) return false;
@@ -390,7 +395,14 @@ export async function getStreamSource(
     throw new Error("Movie backend returned an unexpected get-stream shape");
   }
   const mirrors = Array.isArray(payload.mirrors) ? payload.mirrors : [];
-  return { url: payload.activeSource, mirrors };
+  const rawSources =
+    Array.isArray(payload.sources) && payload.sources.length > 0
+      ? payload.sources
+      : [payload.activeSource, ...mirrors.map((m) => m.url)];
+  const sources = Array.from(
+    new Set(rawSources.filter((url): url is string => typeof url === "string" && url.length > 0))
+  );
+  return { url: payload.activeSource, sources, mirrors };
 }
 
 export interface MovieFeeds {
