@@ -671,6 +671,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         playsInline
         preload="metadata"
         controls={false}
+        controlsList="nodownload noplaybackrate"
+        disablePictureInPicture
+        onDragStart={preventContextMenu}
       />
 
       <div

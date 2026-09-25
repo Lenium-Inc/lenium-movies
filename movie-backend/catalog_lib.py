@@ -100,7 +100,9 @@ def open_archive_stream(url: str, range_header: str | None):
             response.close()
 
     headers_out = {}
-    for header in ("Content-Length", "Content-Type", "Accept-Ranges"):
+    # Content-Range is what lets the browser compute total size and seek within
+    # a 206; dropping it turns every range request into an unseekable clip.
+    for header in ("Content-Length", "Content-Type", "Accept-Ranges", "Content-Range"):
         value = response.headers.get(header)
         if value:
             headers_out[header] = value

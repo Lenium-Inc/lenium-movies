@@ -27,6 +27,7 @@ import {
   MapPin,
   Globe,
   Calendar,
+  Server,
 } from "lucide-react";
 import { getRating, setRating, subscribeRatings } from "@/services/ratings";
 import {
@@ -40,6 +41,7 @@ import {
   type TrailerInfo,
 } from "@/services/api";
 import { VideoPlayer, type StreamVariant } from "@/components/stream/VideoPlayer";
+import { EmbedPlayer } from "@/components/stream/EmbedPlayer";
 import { EpisodeMatrix } from "@/components/movies/EpisodeMatrix";
 import { cancelInFlightPrefetch, prefetchForOpen } from "@/services/prefetch";
 import { attemptPlay } from "@/services/capGate";
@@ -650,10 +652,25 @@ export function WatchPage() {
   const [sourceIndex, setSourceIndex] = useState(0);
   const [reconnecting, setReconnecting] = useState(false);
   const [streamUnavailable, setStreamUnavailable] = useState(false);
+  // Embed providers are the last resort: opt-in only, so the direct-source
+  // path stays the default and no third-party frame loads until asked.
+  const [useEmbedFallback, setUseEmbedFallback] = useState(false);
   const fallbackAttemptsRef = useRef(0);
   const playerKeyRef = useRef(0);
 
   const currentStreamUrl = playableCandidates[sourceIndex] ?? "";
+
+  // Every embed provider is keyed on the TMDB id, so only a purely numeric id
+  // is addressable. Anything else renders the "no sources" state instead.
+  const embedTargetId = useMemo(() => {
+    const id = resolved?.stream?.id ?? movie?.providerId ?? "";
+    return /^\d+$/.test(String(id)) ? String(id) : null;
+  }, [resolved?.stream?.id, movie?.providerId]);
+
+  // A new title/episode invalidates an earlier opt-in.
+  useEffect(() => {
+    setUseEmbedFallback(false);
+  }, [movie?.id, season, episode]);
 
   // When the player is advancing through alternate sources on its own the
   // switch is kept silent: no buffering spinner, just the ambient poster
@@ -941,6 +958,33 @@ export function WatchPage() {
                         onSourceError={handleSourceError}
                         hideCloseButton
                       />
+                    ) : resolved && currentStreamUrl && reconnecting ? (
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <div className="relative w-full h-full max-w-6xl max-h-[85vh] flex items-center justify-center">
+                          <img
+                            src={streamPoster}
+                            alt={movie.title}
+                            className="absolute inset-0 w-full h-full object-cover opacity-40 blur-2xl scale-110"
+                          />
+                          <div className="relative z-20 flex flex-col items-center gap-4 rounded-xl border border-white/10 bg-black/60 px-8 py-6 text-center backdrop-blur-md">
+                            <div className="h-10 w-10 animate-spin rounded-full border-[3px] border-white/20 border-t-white" />
+                            <p className="text-white/90 font-medium text-sm tracking-wider">
+                              Reconnecting to stream…
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    ) : resolved && useEmbedFallback ? (
+                      <EmbedPlayer
+                        key={playerKeyRef.current}
+                        tmdbId={embedTargetId}
+                        mediaType={movie.mediaType}
+                        season={movie.mediaType === "tv" ? season : undefined}
+                        episode={movie.mediaType === "tv" ? episode : undefined}
+                        title={displayTitle}
+                        poster={streamPoster}
+                        onClose={handleClose}
+                      />
                     ) : resolved && streamUnavailable ? (
                       <div className="absolute inset-0 flex items-center justify-center">
                         <div className="relative w-full h-full max-w-6xl max-h-[85vh] flex items-center justify-center">
@@ -953,14 +997,26 @@ export function WatchPage() {
                             <p className="text-lg font-semibold text-white">
                               Stream currently unavailable. Click to retry source.
                             </p>
-                            <button
-                              type="button"
-                              onClick={() => void runStreamFallback(true)}
-                              className="mt-5 inline-flex items-center gap-2 rounded-xl bg-white/10 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-white/20"
-                            >
-                              <RefreshCw className="h-4 w-4" />
-                              Retry source
-                            </button>
+                            <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => void runStreamFallback(true)}
+                                className="inline-flex items-center gap-2 rounded-xl bg-white/10 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-white/20"
+                              >
+                                <RefreshCw className="h-4 w-4" />
+                                Retry source
+                              </button>
+                              {embedTargetId ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setUseEmbedFallback(true)}
+                                  className="inline-flex items-center gap-2 rounded-xl bg-white/10 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-white/20"
+                                >
+                                  <Server className="h-4 w-4" />
+                                  Use another server
+                                </button>
+                              ) : null}
+                            </div>
                           </div>
                         </div>
                       </div>

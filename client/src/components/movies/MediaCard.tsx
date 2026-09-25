@@ -38,6 +38,8 @@ export const TrailerEmbed = React.forwardRef<
         src={src}
         title="Preview trailer"
         allow="autoplay; encrypted-media"
+        sandbox="allow-scripts allow-same-origin allow-forms"
+        referrerPolicy="no-referrer"
         tabIndex={-1}
         aria-hidden
         className="h-full w-full"
@@ -276,7 +278,10 @@ export function MediaCard({
               loop
               playsInline
               disablePictureInPicture
+              controlsList="nodownload noplaybackrate"
               preload="auto"
+              onContextMenu={event => event.preventDefault()}
+              onDragStart={event => event.preventDefault()}
               onError={() => setVideoFailed(true)}
               className="absolute inset-0 h-full w-full scale-[1.02] object-cover object-center transition-opacity duration-200"
             />

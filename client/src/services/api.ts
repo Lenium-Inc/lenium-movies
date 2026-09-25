@@ -115,11 +115,22 @@ export function proxiedStreamUrl(url: string): string {
   return `${MOVIE_API_BASE_URL}/api/movies/stream?url=${encodeURIComponent(url)}`;
 }
 
-/** Base URL of the movie backend. In dev, Vite proxies /api to Flask. */
-export const MOVIE_API_BASE_URL =
-  import.meta.env.VITE_MOVIE_API_BASE_URL ??
-  import.meta.env.VITE_API_URL ??
-  "https://vy-e721.onrender.com";
+/**
+ * Base URL of the movie backend.
+ *
+ * Defaults to same-origin (empty string), so every request is a relative
+ * `/api/...` call that the current host serves. Dev works because Vite proxies
+ * `/api` to Flask; production works because the Express server proxies `/api`
+ * to Flask.
+ *
+ * There is deliberately NO hardcoded fallback origin. When this was a literal
+ * third-party URL, any build missing VITE_MOVIE_API_BASE_URL silently shipped
+ * every user's `Authorization: Bearer` token to that host. Set
+ * VITE_MOVIE_API_BASE_URL explicitly to point somewhere else on purpose.
+ */
+export const MOVIE_API_BASE_URL = (
+  import.meta.env.VITE_MOVIE_API_BASE_URL ?? import.meta.env.VITE_API_URL ?? ""
+).replace(/\/+$/, "");
 
 /** Build a full API URL for the movie backend. */
 export function apiUrl(path: string): string {

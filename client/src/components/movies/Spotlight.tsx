@@ -219,6 +219,8 @@ export function Spotlight({
                     src={embedUrl(trailer, muted)}
                     title={`${current.title} trailer`}
                     allow="autoplay"
+                    sandbox="allow-scripts allow-same-origin allow-forms"
+                    referrerPolicy="no-referrer"
                     tabIndex={-1}
                     aria-hidden
                     className="absolute left-1/2 top-1/2 min-h-full min-w-full -translate-x-1/2 -translate-y-1/2"

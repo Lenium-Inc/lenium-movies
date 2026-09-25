@@ -138,7 +138,38 @@ def add_cors_headers(response):
     response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
     response.headers["Access-Control-Expose-Headers"] = "Content-Length, Accept-Ranges, Content-Type"
+    response.headers.pop("X-Powered-By", None)
     return response
+
+
+# Headers the WSGI layer stamps on every response identify the exact server and
+# Python build. Flask can only drop headers it owns, so filter the rest here.
+_SCRUBBED_HEADERS = frozenset(
+    {"server", "x-powered-by", "x-aspnet-version", "x-aspnetmvc-version"}
+)
+
+
+class _HeaderScrubber:
+    """Pass-through WSGI middleware that drops stack-fingerprinting headers."""
+
+    def __init__(self, wsgi_app):
+        self.wsgi_app = wsgi_app
+
+    def __call__(self, environ, start_response):
+        def scrub(status, headers, exc_info=None):
+            kept = [
+                (key, value)
+                for key, value in headers
+                if key.lower() not in _SCRUBBED_HEADERS
+            ]
+            return start_response(status, kept, exc_info)
+
+        return self.wsgi_app(environ, scrub)
+
+
+# Applied unconditionally so it covers every entrypoint -- `python app.py`,
+# `gunicorn app:app`, and the test client alike.
+app.wsgi_app = _HeaderScrubber(app.wsgi_app)
 
 
 def _auth_user() -> dict | None:
@@ -791,10 +822,6 @@ def get_media_by_id(id: str):
     return jsonify(result)
 
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
-
-
 # ---------------------------------------------------------------------------
 # Accounts & per-account watch history
 # ---------------------------------------------------------------------------
@@ -820,16 +847,41 @@ def api_signup():
     if not name:
         return _auth_error("Please enter your name.", 400)
 
-    store = authdb.get_store()
-    if store.user_by_email(email):
-        return _auth_error("An account with this email already exists.", 409)
+    # Every DB call below is wrapped: a driver error must never reach the
+    # client as a SQL string or traceback. The detail goes to the server log.
+    try:
+        store = authdb.get_store()
+        if store.user_by_email(email):
+            return _auth_error("An account with this email already exists.", 409)
 
-    user = store.create_user(email, name[:80], password)
-    if not user:
-        return _auth_error("Could not create the account. Try again.", 500)
+        user = store.create_user(email, name[:80], password)
+        if not user:
+            return _auth_error("Could not create the account. Try again.", 500)
 
-    token = store.create_session(user["id"])
-    return jsonify({"token": token, "user": authdb.serialize_user(user)}), 201
+        token = store.create_session(user["id"])
+    except Exception:
+        app.logger.exception("signup failed for %s", email)
+        return (
+            jsonify(
+                {
+                    "error": (
+                        "An error occurred during account creation. Please try again."
+                    )
+                }
+            ),
+            500,
+        )
+
+    return (
+        jsonify(
+            {
+                "success": True,
+                "token": token,
+                "user": authdb.serialize_user(user),
+            }
+        ),
+        201,
+    )
 
 
 @app.route("/api/auth/login", methods=["POST", "OPTIONS"])
@@ -841,13 +893,26 @@ def api_login():
     email = str(payload.get("email") or "").strip().lower()
     password = str(payload.get("password") or "")
 
-    store = authdb.get_store()
-    user = store.user_by_email(email)
-    if not user or not store.verify_password(user, password):
-        return _auth_error("Incorrect email or password.")
+    try:
+        store = authdb.get_store()
+        user = store.user_by_email(email)
+        # Run the KDF even when the account is unknown so a missing account and
+        # a wrong password take a comparable amount of time.
+        password_ok = store.verify_password(user, password) if user else False
+        if not user or not password_ok:
+            return _auth_error("Incorrect email or password.")
 
-    token = store.create_session(user["id"])
-    return jsonify({"token": token, "user": authdb.serialize_user(user)})
+        token = store.create_session(user["id"])
+    except Exception:
+        app.logger.exception("login failed for %s", email)
+        return (
+            jsonify(
+                {"error": "An error occurred during sign in. Please try again."}
+            ),
+            500,
+        )
+
+    return jsonify({"success": True, "token": token, "user": authdb.serialize_user(user)})
 
 
 @app.route("/api/auth/me", methods=["GET", "OPTIONS"])
@@ -953,3 +1018,42 @@ def api_my_list_remove(media_id: int):
         return _auth_error("Sign in to manage your saved list.")
     authdb.get_store().remove_saved_media(user["id"], media_id)
     return jsonify({"success": True})
+
+
+# ---------------------------------------------------------------------------
+# Entrypoint
+#
+# This MUST stay at the bottom of the module. It used to sit above the account
+# routes, where `app.run()` blocks and the decorators below it never executed
+# -- so every /api/auth/* endpoint 404'd under `python app.py`. Production uses
+# gunicorn (`gunicorn app:app`), which imports the module and is unaffected.
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    # The Werkzeug debugger is a remote-code-execution surface, so it is opt-in
+    # and only ever binds to loopback. Use gunicorn for anything real.
+    _debug = os.environ.get("FLASK_DEBUG", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    _host = "127.0.0.1" if _debug else "0.0.0.0"
+
+    from werkzeug.serving import WSGIRequestHandler
+
+    class _QuietRequestHandler(WSGIRequestHandler):
+        """Stops `BaseHTTPRequestHandler` from emitting
+        "Server: Werkzeug/3.1.8 Python/3.9.6". That header is written by the
+        HTTP handler, below the WSGI layer, so no app-level middleware can
+        reach it."""
+
+        def version_string(self) -> str:
+            return "stream-vy"
+
+    app.run(
+        host=_host,
+        port=int(os.environ.get("PORT", "5000")),
+        debug=_debug,
+        request_handler=_QuietRequestHandler,
+    )

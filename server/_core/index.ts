@@ -28,43 +28,97 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
   throw new Error(`No available port found starting from ${startPort}`);
 }
 
-// Simple fetch-based proxy for Flask movie backend
+// Reverse proxy for the Flask movie backend.
+//
+// Request headers are forwarded verbatim and the response body is streamed
+// rather than buffered. Both matter: forwarding `Authorization` is what makes
+// /api/auth/* work same-origin at all, and `Range` is what makes video seeking
+// work. Buffering the body with response.text() would pull entire movies into
+// memory before the first byte reached the player.
 async function proxyToFlask(req: express.Request, res: express.Response) {
-  const flaskUrl = `http://127.0.0.1:5000${req.originalUrl}`;
-  console.log(`[Proxy] ${req.method} ${req.originalUrl} -> ${flaskUrl}`);
+  const upstream = process.env.FLASK_URL || "http://127.0.0.1:5000";
+  const flaskUrl = `${upstream}${req.originalUrl}`;
+
+  // Hop-by-hop headers must not be forwarded; everything else (auth, range,
+  // accept, if-none-match) is passed through as-is.
+  const HOP_BY_HOP = new Set([
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+    "host",
+    "content-length",
+  ]);
+
+  const headers: Record<string, string> = {};
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (value === undefined) continue;
+    const lower = key.toLowerCase();
+    if (HOP_BY_HOP.has(lower)) continue;
+    headers[lower] = Array.isArray(value) ? value.join(", ") : value;
+  }
+
+  // The body was already parsed by express.json(); re-serialize it. A request
+  // with no parsed body (e.g. a ranged GET) is forwarded without one.
+  const hasBody = req.method !== "GET" && req.method !== "HEAD";
+  const serialized = hasBody ? JSON.stringify(req.body ?? {}) : undefined;
+  if (serialized !== undefined) {
+    if (!headers["content-type"]) headers["content-type"] = "application/json";
+    headers["content-length"] = String(Buffer.byteLength(serialized));
+  }
 
   try {
     const response = await fetch(flaskUrl, {
       method: req.method,
-      headers: {
-        "Content-Type": "application/json",
-        ...(req.headers["content-length"] && {
-          "Content-Length": req.headers["content-length"],
-        }),
-      },
-      body:
-        req.method !== "GET" && req.method !== "HEAD"
-          ? JSON.stringify(req.body)
-          : undefined,
+      headers,
+      body: serialized,
     });
 
-    const data = await response.text();
-
-    // Copy headers properly
+    // Copy status + headers, minus anything that fingerprints the stack or
+    // conflicts with the body we stream straight through.
+    const BLOCKED = new Set([
+      "content-encoding",
+      "transfer-encoding",
+      "content-length",
+      "server",
+      "x-powered-by",
+    ]);
     response.headers.forEach((value, key) => {
-      if (
-        key.toLowerCase() !== "content-encoding" &&
-        key.toLowerCase() !== "transfer-encoding"
-      ) {
+      if (!BLOCKED.has(key.toLowerCase())) {
         res.setHeader(key, value);
       }
     });
 
-    res.status(response.status).send(data);
+    res.status(response.status);
+
+    if (!response.body) {
+      res.end();
+      return;
+    }
+
+    // Pipe without buffering. Backpressure propagates through the transform.
+    const reader = response.body.getReader();
+    req.on("close", () => {
+      void reader.cancel().catch(() => {});
+    });
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!res.write(Buffer.from(value))) {
+        await new Promise<void>(resolve => res.once("drain", resolve));
+      }
+    }
+    res.end();
   } catch (err) {
     console.error("[Proxy Error]", err);
     if (!res.headersSent) {
       res.status(502).json({ error: "Movie backend unreachable" });
+    } else {
+      res.end();
     }
   }
 }
@@ -72,6 +126,17 @@ async function proxyToFlask(req: express.Request, res: express.Response) {
 async function startServer() {
   const app = express();
   const server = createServer(app);
+
+  // Stop advertising the stack. `Server` is set by the WSGI layer, not
+  // Express, so it has to be deleted in middleware before anything writes it.
+  app.disable("x-powered-by");
+  app.use((_req, res, next) => {
+    res.removeHeader("X-Powered-By");
+    res.removeHeader("Server");
+    res.removeHeader("X-AspNet-Version");
+    next();
+  });
+
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
