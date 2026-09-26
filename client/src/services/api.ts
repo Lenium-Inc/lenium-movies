@@ -857,6 +857,12 @@ export interface DiscoverParams {
   page?: number;
   per_page?: number;
   genre?: string;
+  /**
+   * Session-local taste signals. The client ranks results on its own either
+   * way; these are sent so the catalogue can use them if it chooses to.
+   */
+  affinity_genres?: string;
+  affinity_people?: string;
 }
 
 function isDiscoverResult(value: unknown): value is DiscoverResult {
@@ -885,6 +891,8 @@ export async function fetchDiscover(
     query.set("per_page", String(params.per_page));
   }
   if (params.genre) query.set("genre", params.genre);
+  if (params.affinity_genres) query.set("affinity_genres", params.affinity_genres);
+  if (params.affinity_people) query.set("affinity_people", params.affinity_people);
   const response = await fetch(
     `${MOVIE_API_BASE_URL}/api/catalog/discover?${query.toString()}`
   );

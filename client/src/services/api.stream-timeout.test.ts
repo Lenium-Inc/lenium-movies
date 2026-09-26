@@ -50,7 +50,7 @@ describe("getStreamSource timeout handling", () => {
   });
 
   it("does not abort a request that answers in time", async () => {
-    const fetchMock = vi.fn(async () => ({
+    const fetchMock = vi.fn(async (..._args: unknown[]) => ({
       ok: true,
       status: 200,
       json: async () => ({
@@ -86,7 +86,7 @@ describe("getStreamSource timeout handling", () => {
   });
 
   it("scopes the selected episode into the request", async () => {
-    const fetchMock = vi.fn(async () => ({
+    const fetchMock = vi.fn(async (..._args: unknown[]) => ({
       ok: true,
       status: 200,
       json: async () => ({

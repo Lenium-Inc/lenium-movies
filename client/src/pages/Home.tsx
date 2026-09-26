@@ -39,6 +39,7 @@ export default function Home() {
     discoverLoadingMore,
     discoverError,
     discoverRateLimited,
+    recordAffinity,
     setView,
     setSection,
     setSearch,
@@ -183,8 +184,14 @@ export default function Home() {
                 <InfiniteMovieGrid
                   items={discoverItems}
                   savedIds={savedIds}
-                  onSelect={setSelected}
-                  onSave={toggleSave}
+                  onSelect={movie => {
+                    recordAffinity(movie, 0.5);
+                    setSelected(movie);
+                  }}
+                  onSave={movie => {
+                    recordAffinity(movie, 0.8);
+                    toggleSave(movie);
+                  }}
                   onLoadMore={loadMoreDiscover}
                   hasMore={discoverHasMore}
                   initialLoading={discoverLoading}

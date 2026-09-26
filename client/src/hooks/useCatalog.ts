@@ -11,6 +11,16 @@ import {
   type StreamMovie,
 } from "@/services/api";
 import { savedListIds, subscribeList, toggleListSave } from "@/services/lists";
+import {
+  affinityQueryParams,
+  emptyAffinity,
+  rankByAffinity,
+  readAffinity,
+  recordInteraction,
+  signalsFrom,
+  writeAffinity,
+  type Affinity,
+} from "@/lib/affinity";
 
 export const genreFilterOptions = [
   "All",
@@ -63,6 +73,8 @@ interface UseCatalog {
   discoverError: string | null;
   /** True when the feed was throttled by TMDB rather than genuinely broken. */
   discoverRateLimited: boolean;
+  /** Fold a title the user engaged with into their session-local taste profile. */
+  recordAffinity: (movie: Movie, weight?: number) => void;
   setView: (view: View) => void;
   setSection: (view: View) => void;
   setSearch: (value: string) => void;
@@ -208,6 +220,9 @@ export function useCatalog(): UseCatalog {
   const [discoverError, setDiscoverError] = useState<string | null>(null);
   const [discoverRateLimited, setDiscoverRateLimited] = useState(false);
   const discoverInFlightRef = useRef(false);
+  // Read through a ref so paging callbacks never need affinity in their deps
+  // and therefore never re-create (and re-trigger the observer) on a new signal.
+  const affinityRef = useRef<Affinity>(typeof window === "undefined" ? emptyAffinity() : readAffinity());
 
   // Search cache and in-flight request tracking
   const searchCacheRef = useRef<Map<string, SearchCacheEntry>>(new Map());
@@ -268,10 +283,13 @@ export function useCatalog(): UseCatalog {
       page: 1,
       per_page: DISCOVER_PAGE_SIZE,
       genre: genreQuery,
+      ...affinityQueryParams(affinityRef.current),
     })
       .then(res => {
         if (cancelled) return;
-        setDiscoverItems(res.items.map(toDiscoverMovie));
+        setDiscoverItems(
+          rankByAffinity(res.items.map(toDiscoverMovie), affinityRef.current, signalsFrom),
+        );
         setDiscoverPage(res.page);
         setDiscoverHasMore(res.has_more);
       })
@@ -461,16 +479,17 @@ export function useCatalog(): UseCatalog {
       page: nextPage,
       per_page: DISCOVER_PAGE_SIZE,
       genre: genreQuery,
+      ...affinityQueryParams(affinityRef.current),
     })
       .then(res => {
         setDiscoverPage(res.page);
         setDiscoverHasMore(res.has_more);
         setDiscoverItems(prev => {
           const seen = new Set(prev.map(movie => movie.providerId));
-          return [
-            ...prev,
-            ...res.items.map(toDiscoverMovie).filter(movie => !seen.has(movie.providerId)),
-          ];
+          const fresh = res.items
+            .map(toDiscoverMovie)
+            .filter(movie => !seen.has(movie.providerId));
+          return [...prev, ...rankByAffinity(fresh, affinityRef.current, signalsFrom)];
         });
       })
       .catch(err => {
@@ -491,6 +510,12 @@ export function useCatalog(): UseCatalog {
         setDiscoverLoadingMore(false);
       });
   }, [discoverPage, discoverHasMore, discoverLoadingMore, view, genre]);
+
+  const recordAffinity = useCallback((movie: Movie, weight = 1) => {
+    const next = recordInteraction(affinityRef.current, signalsFrom(movie), weight);
+    affinityRef.current = next;
+    writeAffinity(next);
+  }, []);
 
   const toggleSave = useCallback((movie: Movie) => {
     toggleListSave(movie);
@@ -519,6 +544,7 @@ export function useCatalog(): UseCatalog {
     discoverLoadingMore,
     discoverError,
     discoverRateLimited,
+    recordAffinity,
     loadMoreDiscover,
   };
 }

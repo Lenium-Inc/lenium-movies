@@ -17,7 +17,7 @@ describe("TMDB live credential", () => {
   }, 15_000);
 
   it("fetches real search results and normalized movie metadata", async () => {
-    const results = await searchMovies("Inception", 5);
+    const results = await searchMovies("Inception", "multi", 5);
     expect(results.length).toBeGreaterThan(0);
     expect(results[0]).toMatchObject({ source: "tmdb" });
     expect(results[0]?.providerId).toBeTruthy();

@@ -64,6 +64,12 @@ import {
 import type { Movie, ResolvedStream as ResolvedStreamType, StreamVariant as StreamVariantType } from "@/components/movies/types";
 import type { StreamEpisode } from "@/services/api";
 import { buildWatchPath, resolveMediaType } from "@/lib/watchRoute";
+import {
+  readAffinity,
+  recordInteraction,
+  signalsFrom,
+  writeAffinity,
+} from "@/lib/affinity";
 import { TrailerEmbed } from "@/components/movies/MediaCard";
 import {
   Select,
@@ -102,6 +108,19 @@ const MAX_RETRY_ATTEMPTS = 3;
  */
 const COLD_START_BACKOFF_MS = 4000;
 const RETRY_BASE_DELAY_MS = 1000;
+
+/**
+ * Starting playback is the strongest taste signal there is. Recorded straight
+ * to session storage: the watch page is reachable without the catalogue hook,
+ * and personalisation must never be able to interfere with playback.
+ */
+function noteAffinity(movie: Movie, weight: number) {
+  try {
+    writeAffinity(recordInteraction(readAffinity(), signalsFrom(movie), weight));
+  } catch {
+    // Ignore: a blocked or full sessionStorage is not worth surfacing.
+  }
+}
 
 function classifyError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -455,6 +474,7 @@ export function WatchPage() {
             tmdbId: movie.providerId,
           });
           setResolved(stream);
+          noteAffinity(movie, 1);
           base = stream.stream;
         }
         setSeason(targetSeason);
