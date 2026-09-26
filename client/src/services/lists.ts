@@ -40,6 +40,17 @@ export function isEmptyList(): boolean {
 
 /** Toggle a title in the list, defaulting to "Plan to Watch" on add.
  *
+ * When a session token exists the change is also mirrored to the account.
+ *
+ * This used to be local-only, which meant the four "Add to My List" buttons on
+ * the home page (MovieCard, Details, Spotlight) saved to localStorage and
+ * nothing else, while only the Watch page pushed to the backend. The result was
+ * a list that looked account-backed but was not: signing in on one device and
+ * opening the site on another lost every title added from a card, and the
+ * Share feature shared an empty Postgres row. Mirroring here rather than in each
+ * component fixes all four call sites at once and cannot be forgotten by the
+ * fifth. The push is deliberately not awaited: the toggle is optimistic and the
+ * UI must not wait on the network for a button press.
  */
 export function toggleListSave(entry: {
   id: number;
@@ -50,7 +61,7 @@ export function toggleListSave(entry: {
   backdrop?: string | null;
   mediaType?: "movie" | "tv";
   score?: number | null;
-}): { saved: boolean; tag: ListTag } {
+}): { saved: boolean } {
   const movie = {
     id: entry.id,
     providerId: entry.providerId ?? String(entry.id),
@@ -62,8 +73,32 @@ export function toggleListSave(entry: {
     score: entry.score,
   };
   const saved = coreToggleMyList(movie);
-
-  return { saved, tag: saved ? "plan" : "plan" };
+  if (getToken()) {
+    // The account row is keyed on the provider (TMDB) id, not `Movie.id`,
+    // which is only a stable local number for React keys. The local list is
+    // keyed the same way, via getMovieKey, so using `entry.id` here would
+    // create a row that syncSavedFromRemote could never match back up.
+    const remoteId = Number(entry.providerId ?? entry.id);
+    if (Number.isFinite(remoteId) && remoteId > 0) {
+      if (saved) {
+        void pushToggleToRemote({
+          id: remoteId,
+          mediaType: entry.mediaType,
+          title: entry.title,
+          poster: entry.poster,
+        });
+      } else {
+        void pushRemoveToRemote(remoteId);
+      }
+    }
+  }
+  // No `tag` here on purpose: an add persists "plan" (see coreToggleMyList)
+  // and a remove leaves no entry at all, so there is no meaningful tag to
+  // return. MyList reads the tag off the stored entry, and setEntryTag is the
+  // only way to change it. Returning a hardcoded "plan" for both branches was
+  // the actual bug here -- a caller branching on it could never see a
+  // "favorites" or "watched" result.
+  return { saved };
 }
 
 export function setEntryTag(id: number, tag: ListTag): void {
