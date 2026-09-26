@@ -34,6 +34,7 @@ import {
   apiUrl,
   fetchTrailer,
   getStreamSource,
+  MOVIE_RESOLVE_TIMEOUT_MS,
   resolveStream,
   StreamNotFoundError,
   StreamTimeoutError,
@@ -48,6 +49,8 @@ import {
   findingBestStream,
   optimizingStream,
   reconnecting,
+  embedConsentNeeded,
+  noDirectSource,
   titleUnavailable,
   tryAgain,
   tryAnotherSource,
@@ -85,6 +88,7 @@ import { isExternalEmbedUrl } from "@/lib/streamUtils";
 import { useAuth } from "@/context/AuthContext";
 import { apiHistoryAdd } from "@/services/auth";
 import {
+  hasEmbedConsent,
   pushRemoveToRemote,
   pushToggleToRemote,
 } from "@/services/lists";
@@ -108,6 +112,17 @@ const MAX_RETRY_ATTEMPTS = 3;
  */
 const COLD_START_BACKOFF_MS = 4000;
 const RETRY_BASE_DELAY_MS = 1000;
+
+/**
+ * Ceiling on the automatic resolve retry loop, in wall-clock time.
+ *
+ * The loop re-schedules itself 1s after any failure the classifier calls
+ * recoverable, and a cold or misbehaving backend produces those indefinitely.
+ * Counting attempts alone is not enough because a single attempt can burn its
+ * own 45s budget, so there is also a time limit: whatever the attempt count,
+ * the page stops retrying after this long and reports the failure.
+ */
+const MAX_AUTO_RETRY_WINDOW_MS = 2 * 60 * 1000;
 
 /**
  * Starting playback is the strongest taste signal there is. Recorded straight
@@ -198,6 +213,32 @@ function classifyError(error: unknown) {
     };
   }
 
+  // A backend that fails outside its own handlers returns an HTML error page.
+  // Reading that as JSON throws "Unexpected token '<'", which matches no branch
+  // above and used to fall through to "unknown / recoverable" -- so a single
+  // server-side error page produced an endless 1Hz retry loop with nothing shown.
+  // It is a server fault rather than a transient viewer-side condition, so it is
+  // reported instead of retried forever.
+  if (
+    lowerMessage.includes("unexpected token") ||
+    lowerMessage.includes("non-json") ||
+    lowerMessage.includes("unexpected payload shape")
+  ) {
+    return {
+      type: "server_error",
+      message: "The movie service returned an error. Please try again.",
+      // Still `recoverable`, because a 500 is often a transient blip and the
+      // viewer should be able to ask again. What must not happen is retrying
+      // forever without telling anyone, and that is now the retry budget's job
+      // rather than this flag's: at most MAX_RETRY_ATTEMPTS within
+      // MAX_AUTO_RETRY_WINDOW_MS, then a terminal error card. Setting this false
+      // would have stopped the loop just as effectively while also removing the
+      // user's own "Try again", since handleRetry gates on the same flag.
+      recoverable: true,
+      retryCount: 0,
+    };
+  }
+
   return {
     type: "unknown",
     message: "We couldn't load this stream. Please try again.",
@@ -208,11 +249,18 @@ function classifyError(error: unknown) {
 
 // Fetch full movie details from TMDB via backend resolve endpoint
 async function fetchMovieDetails(tmdbId: string): Promise<Movie | null> {
+  // Bounded and abortable. This pointed at the resolve endpoint, which can
+  // scrape Archive.org for minutes server-side, and `fetch` has no default
+  // timeout -- so a slow resolve pinned the page on its skeleton with no error
+  // and no way to cancel when the user navigated away.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), MOVIE_RESOLVE_TIMEOUT_MS);
   try {
     const response = await fetch(apiUrl("/api/movies/resolve"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: tmdbId }),
+      signal: controller.signal,
     });
     if (!response.ok) return null;
     const data = await response.json();
@@ -253,6 +301,8 @@ async function fetchMovieDetails(tmdbId: string): Promise<Movie | null> {
     };
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -323,6 +373,10 @@ export function WatchPage() {
 
   // Refs for retry logic
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Budget for the self-rescheduling resolve loop, reset only by an explicit
+  // user action so an automatic failure can never buy itself a fresh budget.
+  const autoRetryRef = useRef(0);
+  const autoRetryStartedRef = useRef(Date.now());
 
   // Cache for resolveStream results to avoid duplicate API calls
   const resolveCacheRef = useRef<Map<string, ResolvedStream>>(new Map());
@@ -527,11 +581,34 @@ export function WatchPage() {
         );
         setPlayError(playbackError);
 
-        if (playbackError.recoverable) {
+        // This used to re-schedule itself every second with no cap and no time
+        // budget, and the captured closure always had `resolving === false`, so
+        // the guard at the top could not stop the re-entry. A backend that fails
+        // in a way the classifier calls "recoverable" therefore produced an
+        // endless 1Hz retry loop: the Play button flickering, "Preparing
+        // stream..." spinning forever, and no error ever shown -- because
+        // `playError` is only rendered once a URL is in hand.
+        //
+        // A retry budget bounds it. When it is spent the failure becomes
+        // terminal, and `streamUnavailable` is what actually reaches the screen
+        // even though nothing is resolved yet.
+        autoRetryRef.current += 1;
+        const budgetSpent =
+          autoRetryRef.current >= MAX_RETRY_ATTEMPTS ||
+          Date.now() - autoRetryStartedRef.current >= MAX_AUTO_RETRY_WINDOW_MS;
+
+        if (playbackError.recoverable && !budgetSpent) {
           const delay = RETRY_BASE_DELAY_MS;
           retryTimeoutRef.current = setTimeout(() => {
             resolveAndPlay(targetSeason, targetEpisode);
           }, delay);
+        } else {
+          if (playbackError.recoverable) {
+            console.warn(
+              `[WatchPage] giving up on "${movie.title}" after ${autoRetryRef.current} attempts`
+            );
+          }
+          setStreamUnavailable(true);
         }
       } finally {
         setResolving(false);
@@ -543,6 +620,11 @@ export function WatchPage() {
   const play = useCallback(async () => {
     if (resolving || !movie) return;
     if (!attemptPlay()) return;
+    // Pressing Play is deliberate, so it restores the automatic retry budget
+    // and clears a previous terminal "unavailable" verdict.
+    autoRetryRef.current = 0;
+    autoRetryStartedRef.current = Date.now();
+    setStreamUnavailable(false);
     if (resolved) {
       await resolveAndPlay(isSeries ? season : 1, isSeries ? episode : 1);
       return;
@@ -552,6 +634,9 @@ export function WatchPage() {
 
   const playEpisode = useCallback(
     (targetSeason: number, targetEpisode: number) => {
+      autoRetryRef.current = 0;
+      autoRetryStartedRef.current = Date.now();
+      setStreamUnavailable(false);
       void resolveAndPlay(targetSeason, targetEpisode);
     },
     [resolveAndPlay]
@@ -561,6 +646,11 @@ export function WatchPage() {
   const handleRetry = useCallback(() => {
     if (playError?.recoverable) {
       setPlayError(null);
+      // A deliberate retry is a fresh budget, otherwise the loop that ran out
+      // of attempts would refuse the user's own second attempt.
+      autoRetryRef.current = 0;
+      autoRetryStartedRef.current = Date.now();
+      setStreamUnavailable(false);
       if (isSeries) {
         resolveAndPlay(season, episode);
       } else {
@@ -735,10 +825,33 @@ export function WatchPage() {
   // Embed providers are the last resort: opt-in only, so the direct-source
   // path stays the default and no third-party frame loads until asked.
   const [useEmbedFallback, setUseEmbedFallback] = useState(false);
+  // Set when the viewer asks for a backup source without having accepted
+  // third-party embeds, so the error card can explain why nothing loaded.
+  const [embedConsentNotice, setEmbedConsentNotice] = useState(false);
   const fallbackAttemptsRef = useRef(0);
   const playerKeyRef = useRef(0);
 
   const currentStreamUrl = playableCandidates[sourceIndex] ?? "";
+
+  /**
+   * The backend resolved this title and handed back an embed URL, but no direct
+   * ad-free source exists for it -- a new release, or a title the direct
+   * catalog does not carry yet.
+   *
+   * This used to be indistinguishable from "not resolved yet": `playableCandidates`
+   * is empty for both, so the auto-fallback loop would spend up to three backend
+   * re-scrapes (each `refresh=1`, each a full Archive.org scrape) showing
+   * "Optimizing high-definition stream…" for roughly 100 seconds hunting a
+   * direct source that cannot exist, and only then report the title as
+   * unavailable -- with the embed URL it had been given all along sitting
+   * unused. The one-click "Try another source" on the error card reaches the
+   * embed player immediately instead.
+   */
+  const embedOnlyStream = useMemo(() => {
+    const streamUrl = resolved?.stream?.stream_url;
+    if (!streamUrl) return false;
+    return isExternalEmbedUrl(streamUrl) && playableCandidates.length === 0;
+  }, [resolved, playableCandidates]);
 
   // Every embed provider is keyed on the TMDB id, so only a purely numeric id
   // is addressable. Anything else renders the "no sources" state instead.
@@ -770,6 +883,13 @@ export function WatchPage() {
         return;
       }
       if (!mediaType) return;
+
+      // Already told it is embed-only, so re-scraping cannot produce a direct
+      // source. Report it now rather than after three more upstream round trips.
+      if (embedOnlyStream && !manual) {
+        setStreamUnavailable(true);
+        return;
+      }
 
       if (manual) {
         fallbackAttemptsRef.current = 0;
@@ -860,8 +980,20 @@ export function WatchPage() {
     playableCandidates,
     reconnecting,
     streamUnavailable,
+    embedOnlyStream,
     runStreamFallback,
   ]);
+
+  // An embed-only resolve is a terminal answer, not a pending one: there is no
+  // direct source left to wait for. The auto-arm effect above now correctly
+  // declines to start a hunt that cannot succeed, which means something has to
+  // move the page off "Finding the best stream..." -- otherwise stopping the
+  // futile loop would just trade one endless spinner for another.
+  useEffect(() => {
+    if (embedOnlyStream && !useEmbedFallback && !streamUnavailable) {
+      setStreamUnavailable(true);
+    }
+  }, [embedOnlyStream, useEmbedFallback, streamUnavailable]);
 
   // Reset source/failure state whenever a fresh resolve lands.
   useEffect(() => {
@@ -957,6 +1089,14 @@ export function WatchPage() {
   // Manual source switch. Unlike the automatic failover this is user-initiated,
   // so it is announced; the player then rotates mirrors on its own from there.
   const handleTryAnotherSource = useCallback(() => {
+    // The CookieBanner offers "essential only", which is supposed to mean no
+    // third-party frames. Honoured here: the embed providers are the one place
+    // another party can set cookies, so declining has to stop the load rather
+    // than just being acknowledged.
+    if (!hasEmbedConsent()) {
+      setEmbedConsentNotice(true);
+      return;
+    }
     toast.loading("Switching to backup source…", { id: "source-switch" });
     setUseEmbedFallback(true);
   }, []);
@@ -1173,8 +1313,13 @@ export function WatchPage() {
                           />
                           <div className="relative z-20 rounded-xl border border-white/10 bg-black/60 px-8 py-6 text-center backdrop-blur-md max-w-lg">
                             <p className="text-lg font-semibold text-white">
-                              {titleUnavailable}
+                              {embedOnlyStream ? noDirectSource : titleUnavailable}
                             </p>
+                            {embedConsentNotice ? (
+                              <p className="mt-3 text-xs leading-relaxed text-white/50">
+                                {embedConsentNeeded}
+                              </p>
+                            ) : null}
                             <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
                               <button
                                 type="button"

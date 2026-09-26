@@ -344,6 +344,34 @@ export interface StreamResolveOptions {
   episode?: number;
 }
 
+/** Distinguishes "the resolver is still booting" from a real failure. */
+export class StreamTimeoutError extends Error {
+  constructor(readonly timeoutMs: number) {
+    super(`Stream resolver did not respond within ${timeoutMs / 1000}s`);
+    this.name = "StreamTimeoutError";
+  }
+}
+
+async function fetchWithTimeout(
+  input: string,
+  init: RequestInit,
+  timeoutMs: number
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (err) {
+    // Only the timer aborts this controller, so a rejection here is a timeout
+    // rather than a genuine network failure. Callers retry the former silently
+    // and surface the latter.
+    if (controller.signal.aborted) throw new StreamTimeoutError(timeoutMs);
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Resolve playback for a metadata title through the movie backend. The backend
  * matches against its catalog and, when nothing is found, scrapes a playable
@@ -374,16 +402,32 @@ export async function resolveStream(
     if (options.season) body.season = options.season;
     if (options.episode) body.episode = options.episode;
   }
-  const response = await fetch(`${MOVIE_API_BASE_URL}/api/movies/resolve`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  const response = await fetchWithTimeout(
+    `${MOVIE_API_BASE_URL}/api/movies/resolve`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+    MOVIE_RESOLVE_TIMEOUT_MS
+  );
   if (response.status === 404) throw new StreamNotFoundError(title);
   if (!response.ok) {
     throw new Error(`Movie backend responded with status ${response.status}`);
   }
-  const payload: unknown = await response.json();
+  // A backend that fails outside its own handlers answers with an HTML error
+  // page. Parsing that as JSON throws "Unexpected token '<'", which no error
+  // classifier can reason about. Read the text first and fail with the status
+  // attached, so the caller sees a classifiable error instead of a parse error.
+  const rawBody = await response.text();
+  let payload: unknown;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    throw new Error(
+      `Movie backend responded with status ${response.status} and a non-JSON body`
+    );
+  }
   if (!isResolvePayload(payload)) {
     throw new Error("Movie backend returned an unexpected payload shape");
   }
@@ -443,33 +487,16 @@ function isGetStreamPayload(value: unknown): value is {
  */
 export const STREAM_RESOLVE_TIMEOUT_MS = 30_000;
 
-/** Distinguishes "the resolver is still booting" from a real failure. */
-export class StreamTimeoutError extends Error {
-  constructor(readonly timeoutMs: number) {
-    super(`Stream resolver did not respond within ${timeoutMs / 1000}s`);
-    this.name = "StreamTimeoutError";
-  }
-}
-
-async function fetchWithTimeout(
-  input: string,
-  init: RequestInit,
-  timeoutMs: number
-): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(input, { ...init, signal: controller.signal });
-  } catch (err) {
-    // Only the timer aborts this controller, so a rejection here is a timeout
-    // rather than a genuine network failure. Callers retry the former silently
-    // and surface the latter.
-    if (controller.signal.aborted) throw new StreamTimeoutError(timeoutMs);
-    throw err;
-  } finally {
-    clearTimeout(timer);
-  }
-}
+/**
+ * Budget for `/api/movies/resolve`. This endpoint does more than `get-stream`:
+ * on a catalog miss it can scrape Archive.org synchronously for up to five
+ * candidate identifiers, each a 30s x 2 metadata fetch plus a 25s stream probe.
+ * It was previously called with a bare `fetch` and no timeout at all, so a slow
+ * scrape left the watch page on a spinner with no error and no way to cancel.
+ * 45s leaves room for the metadata lookup plus a cold start while still
+ * guaranteeing the client stops waiting.
+ */
+export const MOVIE_RESOLVE_TIMEOUT_MS = 45_000;
 
 /**
  * Resolve a direct playable source for an already-known TMDB title through the
