@@ -31,6 +31,31 @@ export interface StreamVariant {
   type: "hls" | "dash" | "mp4";
 }
 
+/**
+ * Extract the variant ladder from a parsed HLS master playlist.
+ *
+ * The resolver usually returns a *single* `.m3u8` rather than one URL per
+ * rendition, so the quality list cannot come from the source array -- the rungs
+ * only exist once hls.js has walked the manifest. Returns unique `<height>p`
+ * labels, tallest first.
+ */
+export const deriveHlsLevels = (
+  instance: Hls | null | undefined
+): { quality: string; height: number }[] => {
+  const levels = (instance?.levels ?? []) as { height?: number }[];
+  const seen = new Set<string>();
+  const rungs: { quality: string; height: number }[] = [];
+  for (const level of levels) {
+    const height = Number(level.height) || 0;
+    if (!height) continue;
+    const quality = `${height}p`;
+    if (seen.has(quality)) continue;
+    seen.add(quality);
+    rungs.push({ quality, height });
+  }
+  return rungs.sort((a, b) => b.height - a.height);
+};
+
 export interface VideoPlayerProps {
   streamUrl: string;
   title: string;
@@ -81,6 +106,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [qualityMenuOpen, setQualityMenuOpen] = useState<boolean>(false);
   const [subtitleMenuOpen, setSubtitleMenuOpen] = useState<boolean>(false);
   const [currentQuality, setCurrentQuality] = useState<string>(initialQuality);
+  const [hlsLevels, setHlsLevels] = useState<{ quality: string; height: number }[]>([]);
+  const [hlsQuality, setHlsQuality] = useState<string>("Auto");
+  const [posterSettled, setPosterSettled] = useState<boolean>(false);
   const [currentSubtitles, setCurrentSubtitles] = useState<string>("Off");
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [hasUserInteracted, setHasUserInteracted] = useState<boolean>(false);
@@ -153,7 +181,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   }, [streamUrl]);
 
-  const canChangeQuality = variants.length > 1;
+  // Two ways a quality list can exist. Preferred: the ladder hls.js parsed out
+  // of the master manifest, which works for a single `.m3u8` source. Fallback:
+  // one URL per rendition handed over by the resolver.
+  const qualityOptions = useMemo<string[]>(() => {
+    if (hlsLevels.length > 1) {
+      return hlsLevels.map((l) => l.quality);
+    }
+    return variants
+      .map((v) => v.quality)
+      .filter((q): q is string => Boolean(q));
+  }, [hlsLevels, variants]);
+
+  // While the manifest ladder is in play the active rung is tracked separately,
+  // because changing it is an in-player level switch rather than a source swap.
+  const activeQuality = hlsLevels.length > 1 ? hlsQuality : currentQuality;
+
+  const canChangeQuality = qualityOptions.length > 1;
 
   const initAmbientCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -286,6 +330,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     let hls: any = null;
     setPlaybackError(null);
     setIsLoading(true);
+    // Ladder and poster are per-source; drop stale values so a manifest from
+    // the previous mirror never leaks into the next one.
+    setHlsLevels([]);
+    setHlsQuality("Auto");
+    setPosterSettled(false);
 
     // If the source stalls (no progress for a while) it is treated as a dead
     // source and handed back to the page so the failover loop can switch
@@ -353,6 +402,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setIsLoading(false);
     };
     const handleEnded = () => setIsPlaying(false);
+    // First frame is actually decodable -> the poster has done its job. This
+    // covers progressive MP4 and native (Safari) HLS, which never emit
+    // MANIFEST_PARSED.
+    const handleLoadedData = () => setPosterSettled(true);
 
     video.addEventListener("loadedmetadata", handleLoadedMetadata);
     video.addEventListener("error", handleError);
@@ -361,6 +414,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     video.addEventListener("playing", handlePlaying);
     video.addEventListener("canplay", handleCanPlay);
     video.addEventListener("ended", handleEnded);
+    video.addEventListener("loadeddata", handleLoadedData);
 
     if (streamType === "hls") {
       if (Hls.isSupported()) {
@@ -373,7 +427,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         hls.attachMedia(video);
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          setHlsLevels(deriveHlsLevels(hls));
           setIsLoading(false);
+          setPosterSettled(true);
           attemptAutoplay();
           initAmbientCanvas();
         });
@@ -425,6 +481,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       video.removeEventListener("playing", handlePlaying);
       video.removeEventListener("canplay", handleCanPlay);
       video.removeEventListener("ended", handleEnded);
+      video.removeEventListener("loadeddata", handleLoadedData);
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
@@ -537,6 +594,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const switchQuality = useCallback(
     (quality: string) => {
+      // Manifest ladder: hand the level straight to hls.js. No reload, no
+      // buffer restart, and the resolver is never asked for a second URL.
+      if (hlsLevels.length > 1) {
+        const instance = hlsRef.current;
+        if (!instance) return;
+        if (quality === "Auto") {
+          instance.currentLevel = -1;
+        } else {
+          const index = (instance.levels ?? []).findIndex(
+            (level: { height?: number }) =>
+              `${Number(level.height) || 0}p` === quality
+          );
+          if (index === -1) return;
+          instance.currentLevel = index;
+        }
+        setHlsQuality(quality);
+        setQualityMenuOpen(false);
+        return;
+      }
+
       if (quality === currentQuality) return;
       const variant = variants.find((v) => v.quality === quality);
       if (!variant) return;
@@ -547,7 +624,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setQualityMenuOpen(false);
       onQualityChange?.(quality);
     },
-    [currentQuality, variants, onQualityChange]
+    [hlsLevels, currentQuality, variants, onQualityChange]
   );
 
   const handleKeyDown = useCallback(
@@ -655,6 +732,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             )}
           </div>
         </div>
+      )}
+
+      {/* Held at full opacity until a real frame is decodable. The native
+          `poster` attribute clears as soon as the element paints, which left an
+          empty box while hls.js fetched the manifest and opening segments. */}
+      {poster && (
+        <img
+          src={poster}
+          alt=""
+          aria-hidden
+          draggable={false}
+          className={`pointer-events-none absolute inset-0 z-20 h-full w-full object-cover transition-opacity duration-500 ${
+            posterSettled ? "opacity-0" : "opacity-100"
+          }`}
+        />
       )}
 
       <video
@@ -841,35 +933,33 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-white/10 hover:bg-white/20 text-xs font-semibold tracking-wider transition-all"
                 >
                   <Settings className="w-4 h-4" />
-                  <span>{currentQuality}</span>
+                  <span>{activeQuality}</span>
                 </button>
                 {qualityMenuOpen && (
                   <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-28 bg-zinc-900 border border-white/10 rounded-lg shadow-xl overflow-hidden py-1 z-50">
-                    {variants
-                      .filter((v) => v.quality)
-                      .map((v) => (
-                        <button
-                          key={v.quality}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            switchQuality(v.quality || "Auto");
-                          }}
-                          className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors ${
-                            currentQuality === (v.quality || "Auto")
-                              ? "text-violet-500 font-bold"
-                              : "text-white"
-                          }`}
-                        >
-                          {v.quality || "Auto"}
-                        </button>
-                      ))}
+                    {qualityOptions.map((quality) => (
+                      <button
+                        key={quality}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          switchQuality(quality);
+                        }}
+                        className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors ${
+                          activeQuality === quality
+                            ? "text-violet-500 font-bold"
+                            : "text-white"
+                        }`}
+                      >
+                        {quality}
+                      </button>
+                    ))}
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         switchQuality("Auto");
                       }}
                       className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors ${
-                        currentQuality === "Auto" ? "text-violet-500 font-bold" : "text-white"
+                        activeQuality === "Auto" ? "text-violet-500 font-bold" : "text-white"
                       }`}
                     >
                       Auto
