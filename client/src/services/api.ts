@@ -184,6 +184,27 @@ function isStreamMovie(value: unknown): value is StreamMovie {
 }
 
 /**
+ * An HTTP-level failure from the movie backend, carrying the status code.
+ *
+ * Feed callers need to tell a TMDB rate limit (429) apart from a genuine
+ * outage, and previously could only match on the message text.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(status: number, context: string) {
+    super(`${context} failed with status ${status}`);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+/** True when the backend refused because we exceeded TMDB's rate limit. */
+export function isRateLimited(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 429;
+}
+
+/**
  * Live search against the movie backend's TMDB search endpoint (`/api/search`).
  * Returns TMDB results with baked `stream_url` (embeds for TV wire the
  * default S1E1) and — for TV entries — `seasons`/`episodes_per_season` that
@@ -199,7 +220,7 @@ export async function searchCatalog(query: string): Promise<StreamMovie[]> {
     `${MOVIE_API_BASE_URL}/api/search?q=${encodeURIComponent(trimmed)}`
   );
   if (!response.ok) {
-    throw new Error(`Movie backend responded with status ${response.status}`);
+    throw new ApiError(response.status, "Search");
   }
   const data: unknown = await response.json();
   if (!Array.isArray(data)) {
@@ -714,7 +735,7 @@ export async function fetchTrending(
     `${MOVIE_API_BASE_URL}/api/movies/trending?${query.toString()}`
   );
   if (!response.ok) {
-    throw new Error(`Movie backend responded with status ${response.status}`);
+    throw new ApiError(response.status, "Trending");
   }
   const data: unknown = await response.json();
   if (!Array.isArray(data)) {
@@ -750,7 +771,7 @@ export async function fetchPopular(
     `${MOVIE_API_BASE_URL}/api/movies/popular?${query.toString()}`
   );
   if (!response.ok) {
-    throw new Error(`Movie backend responded with status ${response.status}`);
+    throw new ApiError(response.status, "Popular");
   }
   const data: unknown = await response.json();
   if (!Array.isArray(data)) {
@@ -868,7 +889,7 @@ export async function fetchDiscover(
     `${MOVIE_API_BASE_URL}/api/catalog/discover?${query.toString()}`
   );
   if (!response.ok) {
-    throw new Error(`Movie backend responded with status ${response.status}`);
+    throw new ApiError(response.status, "Discover");
   }
   const data: unknown = await response.json();
   if (!isDiscoverResult(data)) {

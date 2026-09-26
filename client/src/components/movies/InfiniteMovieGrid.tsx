@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, CloudOff } from "lucide-react";
 import type { Movie } from "./types";
 import { MovieCard } from "./MovieCard";
 import { MovieGrid } from "./MovieGrid";
@@ -19,6 +19,8 @@ interface InfiniteMovieGridProps {
   /** Next page being fetched — renders the skeleton loader at the bottom. */
   loadingMore: boolean;
   error?: string | null;
+  /** The feed was throttled upstream, which is not a failure state. */
+  rateLimited?: boolean;
 }
 
 function MovieCardWrapper({
@@ -63,6 +65,7 @@ export function InfiniteMovieGrid({
   initialLoading,
   loadingMore,
   error,
+  rateLimited,
 }: InfiniteMovieGridProps) {
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const onLoadMoreRef = useRef(onLoadMore);
@@ -92,11 +95,16 @@ export function InfiniteMovieGrid({
   if (items.length === 0) {
     return (
       <div className="flex flex-col items-center gap-3 rounded-xl border border-white/10 bg-white/[0.02] px-6 py-16 text-center">
-        <AlertTriangle className="h-6 w-6 text-white/30" />
+        {rateLimited ? (
+          <CloudOff className="h-6 w-6 text-white/30" />
+        ) : (
+          <AlertTriangle className="h-6 w-6 text-white/30" />
+        )}
         <p className="text-sm text-[#99999d]">
-          {error
-            ? "Couldn't load the catalogue right now."
-            : "Nothing to show for this filter yet."}
+          {error ||
+            (rateLimited
+              ? "Catching our breath — the movie database is rate-limiting us. This clears in a moment."
+              : "Nothing to show for this filter yet.")}
         </p>
       </div>
     );

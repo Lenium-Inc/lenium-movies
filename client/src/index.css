@@ -229,3 +229,17 @@ button {
     scroll-behavior: auto;
   }
 }
+
+/*
+ * Off-screen catalogue cards skip layout, paint and image decoding. The feed
+ * holds hundreds of 2:3 posters, and without this every one of them is laid
+ * out and rasterised on each genre/view change.
+ *
+ * `auto <fallback>` lets the browser reuse the real measured size once a card
+ * has been rendered, so the scrollbar never jumps as cards enter the
+ * viewport; the fallback only applies to cards never seen.
+ */
+.movie-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 420px;
+}

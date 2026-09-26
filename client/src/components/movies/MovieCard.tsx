@@ -49,7 +49,9 @@ export const MovieCard: React.FC<MovieCardProps> = ({
   };
 
   return (
-    <article className="group relative bg-zinc-900/50 rounded-xl overflow-hidden border border-white/5 transition-all duration-300 hover:border-white/15 hover:shadow-[0_16px_48px_rgba(0,0,0,0.55)]">
+    <article
+      className="movie-card group relative bg-zinc-900/50 rounded-xl overflow-hidden border border-white/5 transition-all duration-300 hover:border-white/15 hover:shadow-[0_16px_48px_rgba(0,0,0,0.55)]"
+    >
       <button
         onClick={handlePlayClick}
         className="block"

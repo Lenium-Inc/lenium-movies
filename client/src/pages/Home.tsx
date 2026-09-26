@@ -38,6 +38,7 @@ export default function Home() {
     discoverLoading,
     discoverLoadingMore,
     discoverError,
+    discoverRateLimited,
     setView,
     setSection,
     setSearch,
@@ -189,6 +190,7 @@ export default function Home() {
                   initialLoading={discoverLoading}
                   loadingMore={discoverLoadingMore}
                   error={discoverError}
+                  rateLimited={discoverRateLimited}
                 />
               ) : (
                 rows.map((row, index) => (

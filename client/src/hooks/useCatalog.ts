@@ -6,6 +6,7 @@ import {
   fetchTrending,
   fetchPopular,
   fetchDiscover,
+  isRateLimited,
   type CatalogItem,
   type StreamMovie,
 } from "@/services/api";
@@ -60,6 +61,8 @@ interface UseCatalog {
   discoverLoading: boolean;
   discoverLoadingMore: boolean;
   discoverError: string | null;
+  /** True when the feed was throttled by TMDB rather than genuinely broken. */
+  discoverRateLimited: boolean;
   setView: (view: View) => void;
   setSection: (view: View) => void;
   setSearch: (value: string) => void;
@@ -203,6 +206,7 @@ export function useCatalog(): UseCatalog {
   const [discoverLoading, setDiscoverLoading] = useState(false);
   const [discoverLoadingMore, setDiscoverLoadingMore] = useState(false);
   const [discoverError, setDiscoverError] = useState<string | null>(null);
+  const [discoverRateLimited, setDiscoverRateLimited] = useState(false);
   const discoverInFlightRef = useRef(false);
 
   // Search cache and in-flight request tracking
@@ -256,6 +260,7 @@ export function useCatalog(): UseCatalog {
     setDiscoverLoading(true);
     setDiscoverLoadingMore(false);
     setDiscoverError(null);
+    setDiscoverRateLimited(false);
     setDiscoverHasMore(true);
     setDiscoverItems([]);
     fetchDiscover({
@@ -275,7 +280,16 @@ export function useCatalog(): UseCatalog {
         console.error("Discover failed:", err);
         setDiscoverItems([]);
         setDiscoverHasMore(false);
-        setDiscoverError(err instanceof Error ? err.message : String(err));
+        // A TMDB rate limit is transient and self-inflicted, not a broken
+        // backend -- say so instead of surfacing a raw status message.
+        setDiscoverRateLimited(isRateLimited(err));
+        setDiscoverError(
+          isRateLimited(err)
+            ? "Catching our breath — the movie database is rate-limiting us. This clears in a moment."
+            : err instanceof Error
+              ? err.message
+              : String(err)
+        );
       })
       .finally(() => {
         if (!cancelled) setDiscoverLoading(false);
@@ -461,7 +475,16 @@ export function useCatalog(): UseCatalog {
       })
       .catch(err => {
         console.error("Discover page failed:", err);
-        setDiscoverError(err instanceof Error ? err.message : String(err));
+        // A TMDB rate limit is transient and self-inflicted, not a broken
+        // backend -- say so instead of surfacing a raw status message.
+        setDiscoverRateLimited(isRateLimited(err));
+        setDiscoverError(
+          isRateLimited(err)
+            ? "Catching our breath — the movie database is rate-limiting us. This clears in a moment."
+            : err instanceof Error
+              ? err.message
+              : String(err)
+        );
       })
       .finally(() => {
         discoverInFlightRef.current = false;
@@ -495,6 +518,7 @@ export function useCatalog(): UseCatalog {
     discoverLoading,
     discoverLoadingMore,
     discoverError,
+    discoverRateLimited,
     loadMoreDiscover,
   };
 }
