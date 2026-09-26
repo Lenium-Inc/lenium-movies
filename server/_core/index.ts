@@ -80,9 +80,19 @@ function clientKey(req: express.Request): string {
   return req.ip || req.socket.remoteAddress || "unknown";
 }
 
-function tierSignal(tier: Tier): "metadata-limit" | "resolver-limit" {
-  return tier === "resolver" ? "resolver-limit" : "metadata-limit";
+function tierSignal(tier: Tier): "metadata-limit" | "resolver-limit" | "auth-limit" {
+  if (tier === "resolver") return "resolver-limit";
+  if (tier === "auth") return "auth-limit";
+  return "metadata-limit";
 }
+
+/**
+ * Tiers a scored block is allowed to withhold. Metadata stays reachable so a
+ * shared egress address is never punished wholesale, but credential endpoints
+ * are as much a target as the resolver: a block that let a stuffing run
+ * continue against /api/auth/login would cost more than it saves.
+ */
+const BLOCKING_TIERS: ReadonlySet<Tier> = new Set<Tier>(["resolver", "auth"]);
 
 /** Counters make the limiter observable; a limiter you cannot see is
  * indistinguishable from a broken backend. */
@@ -111,15 +121,15 @@ function apiGuard(req: express.Request, res: express.Response, next: express.Nex
     );
   }
 
-  // A scored block withholds the expensive endpoints only. Extending it to
-  // metadata would punish everyone sharing the egress address -- one abuser
-  // behind a corporate NAT would take an entire office off the catalogue --
-  // and it would break the promise that browsing never goes dark. The scraper
-  // still loses the thing worth protecting: the scrape budget.
+  // A scored block withholds the expensive endpoints only -- the resolver and
+  // credential checks. Extending it to metadata would punish everyone sharing
+  // the egress address: one abuser behind a corporate NAT would take an entire
+  // office off the catalogue, and it would break the promise that browsing
+  // never goes dark. The abuser still loses the thing worth protecting.
   const block = abuse.isBlocked(key);
   if (block.blocked) {
     stats.blocked += 1;
-    if (tier === "resolver") {
+    if (BLOCKING_TIERS.has(tier)) {
       res.setHeader("Retry-After", String(block.retryAfterSec));
       res.status(429).json({ error: "Too many requests. Please try again shortly." });
       return;

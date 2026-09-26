@@ -24,7 +24,7 @@
  */
 
 /** A request cost class. */
-export type Tier = "metadata" | "resolver";
+export type Tier = "metadata" | "resolver" | "auth";
 
 export interface TierConfig {
   /** Sustained refill rate in tokens per second. */
@@ -45,6 +45,11 @@ export const DEFAULT_TIERS: Record<Tier, TierConfig> = {
   metadata: { ratePerSec: 1, burst: 60, failOpen: true },
   // 10 burst, sustained ~1 per 6s. These trigger a scrape each.
   resolver: { ratePerSec: 1 / 6, burst: 10, failOpen: false },
+  // Credential endpoints. 5 burst, sustained ~1 per 5s, and fail-closed.
+  // These are the one place where being generous is a security hole rather
+  // than a nicety: an unlimited login endpoint is a free credential-stuffing
+  // oracle, and it is the cheapest possible way to enumerate valid accounts.
+  auth: { ratePerSec: 0.2, burst: 5, failOpen: false },
 };
 
 /**
@@ -172,7 +177,11 @@ export class RateLimiter {
 }
 
 /** Behavioural evidence that a client is scraping rather than browsing. */
-export type AbuseSignal = "honeypot" | "metadata-limit" | "resolver-limit";
+export type AbuseSignal =
+  | "honeypot"
+  | "metadata-limit"
+  | "resolver-limit"
+  | "auth-limit";
 
 /**
  * Weighted low. A hidden field is filled in by crawlers, password managers and
@@ -183,6 +192,7 @@ const SIGNAL_WEIGHT: Record<AbuseSignal, number> = {
   honeypot: 1,
   "metadata-limit": 1,
   "resolver-limit": 3,
+  "auth-limit": 3,
 };
 
 /**
@@ -326,10 +336,35 @@ const RESOLVER_PATHS = new Set([
   "source",
 ]);
 
+/**
+ * Credential endpoints. Matched on the final segment so that authenticated
+ * reads living under the same /api/auth prefix -- /me, /my-list, /history, and
+ * the share endpoints -- stay on the lenient metadata tier. Only the endpoints
+ * that accept or check a password are treated as expensive, because only those
+ * are worth attacking in bulk.
+ */
+const AUTH_PATHS = new Set([
+  "login",
+  "signup",
+  "register",
+  "signin",
+  "sign-up",
+  "password",
+  "password-reset",
+  "reset-password",
+  "forgot-password",
+]);
+
 export function classifyTier(pathname: string): Tier {
-  const segments = pathname.split("/").filter(Boolean);
+  // Strip the query and fragment first. Without this, /auth/login?x=1 keeps
+  // "login?x=1" as its final segment, misses the credential set entirely and
+  // lands on the lenient tier -- so appending a query string to a protected
+  // endpoint would be a complete bypass of its budget.
+  const path = pathname.split(/[?#]/, 1)[0] ?? "";
+  const segments = path.split("/").filter(Boolean);
   const last = segments[segments.length - 1]?.toLowerCase() ?? "";
   if (RESOLVER_PATHS.has(last)) return "resolver";
+  if (AUTH_PATHS.has(last)) return "auth";
   // A resolve nested under a title, e.g. /api/movies/22980/resolve.
   if (segments.some(s => RESOLVER_PATHS.has(s.toLowerCase()))) return "resolver";
   return "metadata";

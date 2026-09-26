@@ -278,6 +278,46 @@ describe("honeypotValue", () => {
   });
 });
 
+describe("classifyTier: auth", () => {
+  it("treats credential endpoints as the strict auth tier", () => {
+    expect(classifyTier("/auth/login")).toBe("auth");
+    expect(classifyTier("/auth/signup")).toBe("auth");
+    expect(classifyTier("/auth/password-reset")).toBe("auth");
+    // Query strings and trailing slashes must not create a way around it.
+    expect(classifyTier("/auth/login/")).toBe("auth");
+    expect(classifyTier("/auth/login?next=%2Fhome")).toBe("auth");
+  });
+
+  it("leaves authenticated reads on the lenient metadata tier", () => {
+    // These are session-gated rather than guessable, so the strict credential
+    // budget would only get in a real user's way.
+    expect(classifyTier("/auth/me")).toBe("metadata");
+    expect(classifyTier("/auth/my-list")).toBe("metadata");
+    expect(classifyTier("/auth/history")).toBe("metadata");
+    expect(classifyTier("/auth/shares")).toBe("metadata");
+    expect(classifyTier("/auth/shares/abc123/accept")).toBe("metadata");
+  });
+
+  it("cannot be dodged with a query string or fragment", () => {
+    // Regression: the query string used to ride along in the final segment,
+    // so /auth/login?x=1 missed the credential set and fell through to the
+    // lenient tier -- a trivial bypass of the strict budget.
+    expect(classifyTier("/auth/login?x=1")).toBe("auth");
+    expect(classifyTier("/auth/login#frag")).toBe("auth");
+    expect(classifyTier("/get-stream?tmdb_id=1")).toBe("resolver");
+    expect(classifyTier("/catalog/discover?page=2")).toBe("metadata");
+  });
+
+  it("still prefers resolver over auth when a path could match either", () => {
+    expect(classifyTier("/auth/resolve")).toBe("resolver");
+  });
+
+  it("configures the auth tier to fail closed on a small burst", () => {
+    expect(DEFAULT_TIERS.auth.failOpen).toBe(false);
+    expect(DEFAULT_TIERS.auth.burst).toBeLessThanOrEqual(10);
+  });
+});
+
 describe("isHoneypotPath", () => {
   it("recognises the hidden link target", () => {
     expect(isHoneypotPath("/hp/asset-manifest.json")).toBe(true);
