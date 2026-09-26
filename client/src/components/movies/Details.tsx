@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/context/AuthContext";
+import { formatRuntime } from "@/lib/format";
 import { toast } from "sonner";
 import { getRating, setRating, subscribeRatings } from "@/services/ratings";
 import {
@@ -368,7 +369,7 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
                 {movie.runtime && (
                   <>
                     <span>·</span>
-                    <span>{movie.runtime}</span>
+                    <span>{formatRuntime(movie.runtime)}</span>
                   </>
                 )}
                 <span>·</span>

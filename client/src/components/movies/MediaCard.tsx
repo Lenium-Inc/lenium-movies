@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from "react";
 import { Play, Star, Film, Tv } from "lucide-react";
 import { Link } from "wouter";
 import type { TrailerInfo } from "@/services/api";
+import { formatRuntime } from "@/lib/format";
 
 interface MediaCardProps {
   id: string;
@@ -335,7 +336,7 @@ export function MediaCard({
           ) : null}
           {runtime ? (
             <span className="rounded-md border border-white/10 bg-white/[0.05] px-1.5 py-0.5 text-[10px] font-semibold text-[#E5E5EA]">
-              {runtime}
+              {formatRuntime(runtime)}
             </span>
           ) : null}
           {genreLine ? (

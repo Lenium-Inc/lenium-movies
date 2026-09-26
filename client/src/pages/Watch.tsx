@@ -43,6 +43,7 @@ import {
 } from "@/services/api";
 import { VideoPlayer, type StreamVariant } from "@/components/stream/VideoPlayer";
 import { EmbedPlayer } from "@/components/stream/EmbedPlayer";
+import { formatRuntime } from "@/lib/format";
 import { EpisodeMatrix } from "@/components/movies/EpisodeMatrix";
 import { cancelInFlightPrefetch, prefetchForOpen } from "@/services/prefetch";
 import { attemptPlay } from "@/services/capGate";
@@ -1188,7 +1189,7 @@ export function WatchPage() {
                     <>
                       <span>·</span>
                       <span className="px-2 py-1 bg-white/5 border border-white/10 rounded">
-                        {movie.runtime} min
+                        {formatRuntime(movie.runtime)}
                       </span>
                     </>
                   )}
@@ -1380,7 +1381,7 @@ export function WatchPage() {
                       {movie.runtime != null && (
                         <div>
                           <p className="text-white/50">Runtime</p>
-                          <p className="text-white font-medium">{movie.runtime} min</p>
+                          <p className="text-white font-medium">{formatRuntime(movie.runtime)}</p>
                         </div>
                       )}
                     </div>

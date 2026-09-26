@@ -16,6 +16,7 @@ import { useLocation } from "wouter";
 import { toast } from "sonner";
 import { fetchTrailerByTmdbId, type TrailerInfo } from "@/services/api";
 import type { Movie } from "./types";
+import { formatRuntime } from "@/lib/format";
 
 const TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p";
 
@@ -42,16 +43,6 @@ function embedUrl(trailer: TrailerInfo, muted: boolean): string {
       ? `https://www.dailymotion.com/embed/video/${trailer.id}?autoplay=1&loop=1&controls=0&muted=${muted ? 1 : 0}`
       : `https://www.youtube-nocookie.com/embed/${trailer.id}?autoplay=1&controls=0&loop=1&playlist=${trailer.id}&playsinline=1&iv_load_policy=3&modestbranding=1&rel=0${muted ? "&mute=1" : ""}`;
   return base;
-}
-
-function formatRuntime(minutes: string | number | undefined): string {
-  if (!minutes) return "";
-  const mins =
-    typeof minutes === "string" ? parseInt(minutes.replace("m", "")) : minutes;
-  if (isNaN(mins)) return "";
-  const hours = Math.floor(mins / 60);
-  const remainingMins = mins % 60;
-  return hours > 0 ? `${hours}h ${remainingMins}m` : `${remainingMins}m`;
 }
 
 function formatRating(score: number | null): string {

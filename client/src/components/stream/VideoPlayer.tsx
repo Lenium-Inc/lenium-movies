@@ -22,6 +22,7 @@ import {
   SkipForward,
 } from "lucide-react";
 import Hls from "hls.js";
+import { formatPlayerTime } from "@/lib/format";
 
 export interface StreamVariant {
   quality: string | null;
@@ -548,13 +549,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     [currentQuality, variants, onQualityChange]
   );
 
-  const formatTime = useCallback((seconds: number) => {
-    if (isNaN(seconds)) return "0:00";
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs < 10 ? "0" : ""}${secs}`;
-  }, []);
-
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
       if (
@@ -773,7 +767,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             </div>
 
             <span className="text-xs font-medium text-white/80 flex-shrink-0">
-              {formatTime(videoRef.current?.currentTime || 0)} / {formatTime(duration)}
+              {formatPlayerTime(videoRef.current?.currentTime || 0)} / {formatPlayerTime(duration)}
             </span>
           </div>
 

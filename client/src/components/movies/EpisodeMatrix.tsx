@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState, useEffect } from "react";
 import { Check, ChevronDown, Play, Loader2 } from "lucide-react";
 import { useStatsRevision } from "@/hooks/useStats";
 import { getProgressFraction } from "@/services/stats";
+import { formatRuntime } from "@/lib/format";
 import { fetchEpisodeDetails } from "@/services/api";
 import type { StreamEpisode, StreamMovie } from "@/services/api";
 
@@ -249,7 +250,7 @@ export function EpisodeMatrix({ movie, onPlay }: EpisodeMatrixProps) {
                                     <span>📅 {details.air_date}</span>
                                   )}
                                   {details.runtime && (
-                                    <span>⏱ {details.runtime}min</span>
+                                    <span>⏱ {formatRuntime(details.runtime)}</span>
                                   )}
                                   {details.vote_average && (
                                     <span>

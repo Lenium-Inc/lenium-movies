@@ -9,16 +9,6 @@ interface MovieCardProps {
   onSave?: (movie: Movie) => void;
 }
 
-function formatRuntime(minutes: string | number | undefined): string {
-  if (!minutes) return "";
-  const mins =
-    typeof minutes === "string" ? parseInt(minutes.replace("m", "")) : minutes;
-  if (isNaN(mins)) return "";
-  const hours = Math.floor(mins / 60);
-  const remainingMins = mins % 60;
-  return hours > 0 ? `${hours}h ${remainingMins}m` : `${remainingMins}m`;
-}
-
 function formatRating(score: number | null | undefined): string {
   if (score === null || score === undefined) return "";
   return score.toFixed(1);
