@@ -105,8 +105,26 @@ function saveSession(state: SessionState): void {
 }
 
 function loadList(): Record<string, MovieSummary> {
-  const raw = readStorage<Record<string, MovieSummary>>(STORAGE_KEYS.list, {});
-  return raw || {};
+  const raw = readStorage<unknown>(STORAGE_KEYS.list, null);
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, MovieSummary> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    // `readStorage` only guards JSON.parse, not the shape of what came back.
+    // A stored `{a: null}` -- hand-edited, half-written, or left by an older
+    // build -- reached `getMyList`, whose sort comparator then read
+    // `a.addedAt` off null and threw a TypeError *during render*, taking down
+    // both /my-list and the home page via the error boundary. Entries are
+    // dropped here instead, at the only place that touches storage.
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const entry = value as Partial<MovieSummary>;
+    if (entry.id === undefined || entry.id === null) continue;
+    out[key] = {
+      ...(entry as MovieSummary),
+      id: entry.id,
+      title: typeof entry.title === "string" ? entry.title : "Untitled",
+    };
+  }
+  return out;
 }
 
 function saveList(list: Record<string, MovieSummary>): void {
@@ -220,6 +238,19 @@ export function initializeSession(): SessionState {
   migrateLegacyKeys();
 
   const session = loadSession();
+
+  // `hydrated` is what tells the UI "local state has been read, stop spinning".
+  // A stored object that parsed but happens to lack the flag -- a partial write,
+  // an older shape, or hand-edited storage -- made this return `false`
+  // permanently. `LocalSessionProvider` only ever calls this once, so nothing
+  // would ever retry and /my-list rendered its loading spinner forever.
+  //
+  // Treat a missing flag as hydrated. The only reason to report "not hydrated"
+  // is that there is genuinely nothing stored yet, and `loadSession`'s default
+  // already covers that.
+  if (typeof session.hydrated !== "boolean") {
+    return { ...session, hydrated: true };
+  }
 
   if (!session.hydrated) {
     return { user: null, isAuthenticated: false, hydrated: false };

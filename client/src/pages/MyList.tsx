@@ -1,6 +1,7 @@
 import { Link } from "wouter";
 import { Bookmark, Film, Plus, Share2, Users } from "lucide-react";
 import { useLocalSession } from "@/context/LocalSessionContext";
+import { useAuth } from "@/context/AuthContext";
 import { useEffect, useState } from "react";
 import { ShareListDialog } from "@/components/share/ShareListDialog";
 import {
@@ -11,11 +12,25 @@ import {
 import { apiShares, type SharedProfile } from "@/services/auth";
 
 export default function MyList() {
-  const { hydrated, isAuthenticated, getMyList, removeFromMyList } = useLocalSession();
+  const {
+    hydrated,
+    isAuthenticated: localAuthenticated,
+    getMyList,
+    removeFromMyList,
+    signInDemo,
+  } = useLocalSession();
+  const { user: authUser } = useAuth();
   const [listFilter, setListFilter] = useState<"all" | "plan" | "favorites" | "watched">("all");
   const [, setRev] = useState(0);
   const [shareOpen, setShareOpen] = useState(false);
   const [sharedWithMe, setSharedWithMe] = useState<SharedProfile[]>([]);
+
+  // A real account session counts too. This page used to gate on the local demo
+  // profile only, so someone genuinely signed in through /login was shown the
+  // "Continue as Viewer" wall -- and pressing it created a *local* session that
+  // sets no API token, leaving the share and sync controls permanently hidden.
+  // The two systems were disjoint, and this gate is where it showed.
+  const signedIn = Boolean(authUser) || localAuthenticated;
 
   // Lists other people have shared with this account. The local demo profile
   // has no server user, so this stays empty unless there is a real session.
@@ -63,7 +78,7 @@ export default function MyList() {
     );
   }
 
-  if (!isAuthenticated) {
+  if (!signedIn) {
     return (
       <div className="min-h-screen bg-[#050505] text-[#FFFFFF]">
         <div className="mx-auto max-w-2xl px-4 py-16 sm:px-6 lg:px-8">
@@ -75,17 +90,21 @@ export default function MyList() {
               My List
             </h1>
             <p className="mt-4 text-lg text-white/60 max-w-md mx-auto">
-              Sign in to save movies and shows to your personal list. Your saved
-              titles are stored locally in this browser.
+              Sign in to save movies and shows to your personal list. An account
+              keeps your list in sync across devices; a viewer profile keeps it
+              in this browser.
             </p>
             <div className="mt-8 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
+              <Link
+                href="/login"
+                className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-6 py-3 text-sm font-bold text-white transition hover:bg-indigo-500"
+              >
+                Sign in
+              </Link>
               <button
                 type="button"
-                onClick={() => {
-                  const { signInDemo } = useLocalSession();
-                  signInDemo();
-                }}
-                className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-6 py-3 text-sm font-bold text-white transition hover:bg-indigo-500"
+                onClick={() => signInDemo()}
+                className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-6 py-3 text-sm font-semibold text-white/80 transition hover:border-white/30 hover:bg-white/5"
               >
                 Continue as Viewer
               </button>
@@ -98,7 +117,7 @@ export default function MyList() {
               </Link>
             </div>
             <p className="mt-6 text-sm text-white/40">
-              This is a local demo — your data stays in this browser.
+              Viewer profiles are local to this browser and are not synced.
             </p>
           </div>
         </div>

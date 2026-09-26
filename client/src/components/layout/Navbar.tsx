@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { Menu, Play, Search, X } from "lucide-react";
-import { Link } from "wouter";
+import { Bookmark, Menu, Play, Search, X } from "lucide-react";
+import { Link, useLocation } from "wouter";
 import type { View } from "@/components/layout/navigation";
 import { ProfileMenu } from "@/components/layout/ProfileMenu";
 import { OPEN_SEARCH_EVENT } from "@/components/CommandPalette";
+import { savedListIds, subscribeList } from "@/services/lists";
 
 interface NavbarProps {
   view: View;
@@ -19,6 +20,44 @@ const NAV_LINKS: { id: View; label: string }[] = [
 
 function openSearchPalette() {
   window.dispatchEvent(new Event(OPEN_SEARCH_EVENT));
+}
+
+/**
+ * "My List" is a route (`/my-list`), not one of the single-page `View` modes,
+ * so it needs a real link rather than a NAV_LINKS entry -- routing it through
+ * `onNavigate` would have landed on `/?view=my-list` and rendered nothing.
+ *
+ * It was previously reachable only from a share-invite or a shared-list page,
+ * which is why a saved list looked like it had vanished.
+ */
+function MyListLink({ className }: { className: string }) {
+  const [location] = useLocation();
+  const [count, setCount] = useState(0);
+
+  useEffect(() => {
+    const refresh = () => setCount(savedListIds().length);
+    refresh();
+    return subscribeList(refresh);
+  }, []);
+
+  const active = location === "/my-list";
+  return (
+    <Link
+      href="/my-list"
+      className={`inline-flex items-center gap-1.5 transition ${className} ${
+        active ? "text-white" : "text-white/60 hover:text-white"
+      }`}
+      aria-current={active ? "page" : undefined}
+    >
+      <Bookmark className="h-4 w-4" />
+      My List
+      {count > 0 ? (
+        <span className="rounded-full bg-white/15 px-1.5 text-[11px] font-semibold tabular-nums text-white/80">
+          {count}
+        </span>
+      ) : null}
+    </Link>
+  );
 }
 
 /**
@@ -81,6 +120,7 @@ export function Navbar({ view, onNavigate }: NavbarProps) {
               </button>
             );
           })}
+          <MyListLink className="text-sm font-medium" />
         </nav>
 
         <div className="ml-auto flex items-center gap-2.5">
@@ -135,6 +175,7 @@ export function Navbar({ view, onNavigate }: NavbarProps) {
                 {link.label}
               </button>
             ))}
+            <MyListLink className="text-sm font-medium" />
           </nav>
         </div>
       )}

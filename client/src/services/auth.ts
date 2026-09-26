@@ -97,6 +97,18 @@ async function request<T>(
     } catch {
       /* non-JSON error body */
     }
+    // A 401 on an authenticated request means the stored token is expired,
+    // revoked, or simply garbage. Sessions last 30 days server-side, so a token
+    // can outlive its server row and then linger in localStorage forever.
+    //
+    // Nothing in the list or sharing paths used to clear it, and
+    // `hasRemoteSession()` is only a string-presence check -- so a dead token
+    // left the UI showing a Share button and a list that silently never syncs,
+    // with no way for the user to tell. Clearing here means the next render
+    // drops back to signed-out instead of pretending to be signed in.
+    if (options.auth && response.status === 401) {
+      clearSession();
+    }
     throw new AuthApiError(message, response.status);
   }
   return (await response.json()) as T;
