@@ -1021,6 +1021,261 @@ def api_my_list_remove(media_id: int):
 
 
 # ---------------------------------------------------------------------------
+# Profile / list sharing
+#
+# A share grants read access to the owner's saved list. The list itself stays
+# in `saved_media` and is never copied, so revoking access is a single DELETE
+# on `share_members` and there is no second copy to keep in sync.
+#
+# Two separate ideas, deliberately kept apart:
+#   * an *invite* is an outstanding, token-bearing offer (share_invites)
+#   * a *member* is someone who redeemed one (share_members)
+# Revoking an invite stops future redemptions; removing a member revokes access
+# someone already has. Conflating them is how shared folders end up with ghosts.
+# ---------------------------------------------------------------------------
+
+MAX_PENDING_INVITES = 20
+
+
+def _share_view(invite: dict, include_email: bool) -> dict:
+    """Serialise an invite for the owner. The token is the whole credential,
+    so it is only ever returned to the person who created it."""
+    return {
+        "token": invite.get("token"),
+        "email": invite.get("email") if include_email else None,
+        "role": invite.get("role") or "viewer",
+        "status": invite.get("status") or "pending",
+        "created_at": authdb._to_iso(invite.get("created_at")),
+        "expires_at": authdb._to_iso(invite.get("expires_at")),
+        "accepted_at": authdb._to_iso(invite.get("accepted_at")),
+    }
+
+
+def _share_preview(store, invite: dict) -> dict:
+    """What an invitee sees before accepting. Deliberately thin: a display
+    name and a count, never the list contents and never other members."""
+    owner = store.user_by_id(invite.get("owner_id"))
+    items = store.saved_media(invite.get("owner_id"), limit=200)
+    return {
+        "inviter_name": (owner or {}).get("display_name") or "Someone",
+        "item_count": len(items),
+        "role": invite.get("role") or "viewer",
+        "expires_at": authdb._to_iso(invite.get("expires_at")),
+    }
+
+
+@app.route("/api/auth/shares", methods=["GET", "POST", "OPTIONS"])
+def api_shares():
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    user = _auth_user()
+    if not user:
+        return _auth_error("Sign in to share your list.")
+
+    store = authdb.get_store()
+    owner_id = user["id"]
+
+    if request.method == "POST":
+        payload = request.get_json(silent=True) or {}
+        email = str(payload.get("email") or "").strip().lower() or None
+        role = str(payload.get("role") or "viewer").strip()
+        if role not in ("viewer", "editor"):
+            return _auth_error("Role must be viewer or editor.", 400)
+
+        # Reuse an equivalent pending invite instead of minting a second token
+        # for the same address. This caps how fast anyone can manufacture
+        # share links, without needing a separate rate limiter here.
+        for existing in store.share_invites_for_owner(owner_id):
+            if (
+                (existing.get("status") or "") == "pending"
+                and (existing.get("email") or "") == (email or "")
+                and (existing.get("role") or "viewer") == role
+            ):
+                return jsonify({"share": _share_view(existing, True), "reused": True})
+
+        if store.count_pending_invites(owner_id) >= MAX_PENDING_INVITES:
+            return _auth_error(
+                "You have too many active invites. Revoke one first.", 429
+            )
+
+        invite = store.create_share_invite(owner_id, email=email, role=role)
+        return jsonify({"share": _share_view(invite, True), "reused": False})
+
+    return jsonify(
+        {
+            "invites": [
+                _share_view(i, True) for i in store.share_invites_for_owner(owner_id)
+            ],
+            "members": _member_views(store, owner_id, owner_id),
+            "shared_with_me": [
+                {
+                    "owner_id": str(row.get("owner_id")),
+                    "owner_name": row.get("display_name") or "Someone",
+                    "role": row.get("role") or "viewer",
+                }
+                for row in store.shared_profiles_for_user(owner_id)
+            ],
+        }
+    )
+
+
+def _member_views(store, owner_id, requester_id) -> list[dict]:
+    """Members of a shared list.
+
+    Email addresses are the owner's business only. Handing them to every
+    member would quietly turn a shared list into an address book."""
+    is_owner = str(owner_id) == str(requester_id)
+    return [
+        {
+            "user_id": str(row.get("user_id")),
+            "display_name": row.get("display_name") or "Viewer",
+            "role": row.get("role") or "viewer",
+            "email": row.get("email") if is_owner else None,
+            "joined_at": authdb._to_iso(row.get("created_at")),
+        }
+        for row in store.share_members_of(owner_id)
+    ]
+
+
+@app.route("/api/auth/shares/<string:token>", methods=["GET", "OPTIONS"])
+def api_share_preview(token: str):
+    """Preview an invite. No auth on purpose: the whole point is to show the
+    page something useful before the person has signed in."""
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    store = authdb.get_store()
+    invite = store.share_invite_by_token(token)
+    if not invite:
+        return _auth_error("This invite link is not valid.", 404)
+    if (invite.get("status") or "") == "revoked":
+        return _auth_error("This invite has been revoked.", 410)
+    if authdb._is_expired(invite.get("expires_at")):
+        return _auth_error("This invite has expired.", 410)
+    if (invite.get("status") or "") == "accepted" and not store.is_share_member(
+        invite.get("owner_id"), (_auth_user() or {}).get("id")
+    ):
+        # Don't confirm to a stranger that a link was already used.
+        return _auth_error("This invite is no longer available.", 410)
+
+    payload = _share_preview(store, invite)
+    viewer = _auth_user()
+    if viewer:
+        payload["already_member"] = store.is_share_member(
+            invite.get("owner_id"), viewer["id"]
+        )
+        payload["is_owner"] = str(invite.get("owner_id")) == str(viewer["id"])
+    return jsonify(payload)
+
+
+@app.route("/api/auth/shares/<string:token>/accept", methods=["POST", "OPTIONS"])
+def api_share_accept(token: str):
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    user = _auth_user()
+    if not user:
+        return _auth_error("Sign in to accept this invite.")
+
+    store = authdb.get_store()
+    invite, reason = store.accept_share_invite(token, user["id"], user.get("email") or "")
+    if invite is None:
+        # One message for every failure mode. Distinguishing "wrong address"
+        # from "already used" turns this endpoint into an oracle for testing
+        # whether an address has an account.
+        return _auth_error("This invite cannot be accepted.", 400)
+    return jsonify({"success": True, "role": invite.get("role") or "viewer"})
+
+
+@app.route("/api/auth/shares/<string:token>/members", methods=["GET", "OPTIONS"])
+def api_share_members(token: str):
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    user = _auth_user()
+    if not user:
+        return _auth_error("Sign in to see who you share with.")
+
+    store = authdb.get_store()
+    invite = store.share_invite_by_token(token)
+    owner_id = (invite or {}).get("owner_id")
+    if not owner_id:
+        return _auth_error("This invite link is not valid.", 404)
+    # The owner is not a row in their own share_members table, so they have to
+    # be let through explicitly or they cannot see who they invited.
+    if str(owner_id) != str(user["id"]) and not store.is_share_member(
+        owner_id, user["id"]
+    ):
+        return _auth_error("You do not have access to this list.", 403)
+    return jsonify({"members": _member_views(store, owner_id, user["id"])})
+
+
+@app.route(
+    "/api/auth/shares/<string:token>/members/<string:member_id>",
+    methods=["DELETE", "OPTIONS"],
+)
+def api_share_remove_member(token: str, member_id: str):
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    user = _auth_user()
+    if not user:
+        return _auth_error("Sign in to manage sharing.")
+
+    store = authdb.get_store()
+    invite = store.share_invite_by_token(token)
+    owner_id = (invite or {}).get("owner_id")
+    if not owner_id:
+        return _auth_error("This invite link is not valid.", 404)
+    if str(owner_id) != str(user["id"]):
+        return _auth_error("Only the owner can remove people from a shared list.", 403)
+    if not store.remove_share_member(owner_id, member_id):
+        return _auth_error("That person is not on this list.", 404)
+    return jsonify({"success": True})
+
+
+@app.route("/api/auth/shares/<string:token>/revoke", methods=["POST", "OPTIONS"])
+def api_share_revoke(token: str):
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    user = _auth_user()
+    if not user:
+        return _auth_error("Sign in to manage sharing.")
+
+    if not authdb.get_store().revoke_share_invite(token, user["id"]):
+        return _auth_error("That invite is not active.", 404)
+    return jsonify({"success": True})
+
+
+@app.route("/api/auth/shared/<string:owner_id>/my-list", methods=["GET", "OPTIONS"])
+def api_shared_my_list(owner_id: str):
+    """Read someone else's saved list. Members only -- this is the route the
+    whole feature exists for, so it is the one that most needs the check."""
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    user = _auth_user()
+    if not user:
+        return _auth_error("Sign in to see shared lists.")
+
+    store = authdb.get_store()
+    if str(owner_id) == str(user["id"]):
+        return jsonify({"items": store.saved_media(user["id"]), "owner": "you"})
+    if not store.is_share_member(owner_id, user["id"]):
+        return _auth_error("You do not have access to this list.", 403)
+
+    owner = store.user_by_id(owner_id)
+    return jsonify(
+        {
+            "items": store.saved_media(owner_id),
+            "owner": (owner or {}).get("display_name") or "Someone",
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
 # Entrypoint
 #
 # This MUST stay at the bottom of the module. It used to sit above the account

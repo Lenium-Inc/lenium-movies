@@ -66,11 +66,22 @@ def _expires_at() -> str:
     return future.strftime(_ISO)
 
 
-def _is_expired(value: str | None) -> bool:
+def _is_expired(value) -> bool:
+    """True when a stored expiry has passed.
+
+    Accepts a datetime as well as a string: Postgres TIMESTAMPTZ columns come
+    back from psycopg as datetime objects, and feeding one to strptime raises
+    TypeError, which the old `except` turned into "expired". That silently
+    expired every row the moment it was written.
+    """
     if not value:
         return True
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc) > value
     try:
-        dt = datetime.strptime(value, _ISO).replace(tzinfo=timezone.utc)
+        dt = datetime.strptime(str(value), _ISO).replace(tzinfo=timezone.utc)
         return datetime.now(timezone.utc) > dt
     except (ValueError, TypeError):
         return True
@@ -142,6 +153,23 @@ class Store:
             else:
                 last = None
             return last
+        finally:
+            conn.close()
+
+    def _execute_rowcount(self, sql: str, params: tuple = ()) -> int:
+        """Run a write and report how many rows it touched.
+
+        `_execute` cannot answer this: it returns `lastrowid`, which is only
+        meaningful for an INSERT and is 0 for the UPDATE/DELETE statements
+        that need the count.
+        """
+        conn = self._connect()
+        try:
+            cur = conn.cursor()
+            cur.execute(self._sql(sql), params)
+            if not self.pg:
+                conn.commit()
+            return int(cur.rowcount or 0)
         finally:
             conn.close()
 
@@ -235,6 +263,50 @@ class Store:
                         ON catalog_cache(media_type, updated_at DESC)
                     """
                 )
+                # Profile/list sharing. `share_invites` is an outstanding
+                # invitation; `share_members` is one row per person who
+                # accepted one. The owner's list stays in saved_media -- a
+                # share only grants read access to it, so nothing is copied.
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS share_invites (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        token TEXT NOT NULL UNIQUE,
+                        owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        email TEXT,
+                        role TEXT NOT NULL DEFAULT 'viewer',
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        expires_at TIMESTAMPTZ NOT NULL DEFAULT now() + interval '7 days',
+                        accepted_at TIMESTAMPTZ,
+                        accepted_by UUID REFERENCES users(id) ON DELETE SET NULL
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS share_members (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        role TEXT NOT NULL DEFAULT 'viewer',
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        UNIQUE (owner_id, user_id)
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_share_invites_owner
+                    ON share_invites(owner_id)
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_share_members_user
+                    ON share_members(user_id)
+                    """
+                )
             else:
                 cur.execute(
                     """
@@ -305,6 +377,46 @@ class Store:
                     """
                     CREATE INDEX IF NOT EXISTS idx_catalog_cache_type_updated
                         ON catalog_cache(media_type, updated_at DESC)
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS share_invites (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        token TEXT NOT NULL UNIQUE,
+                        owner_id INTEGER NOT NULL,
+                        email TEXT,
+                        role TEXT NOT NULL DEFAULT 'viewer',
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        created_at TEXT NOT NULL,
+                        expires_at TEXT NOT NULL,
+                        accepted_at TEXT,
+                        accepted_by INTEGER
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS share_members (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        owner_id INTEGER NOT NULL,
+                        user_id INTEGER NOT NULL,
+                        role TEXT NOT NULL DEFAULT 'viewer',
+                        created_at TEXT NOT NULL,
+                        UNIQUE (owner_id, user_id)
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_share_invites_owner
+                    ON share_invites(owner_id)
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_share_members_user
+                    ON share_members(user_id)
                     """
                 )
                 conn.commit()
@@ -635,6 +747,164 @@ class Store:
     def clear_catalog_cache(self) -> None:
         self._execute("DELETE FROM catalog_cache", ())
 
+
+    # -- profile/list sharing ---------------------------------------------
+
+    SHARE_ROLES = ("viewer", "editor")
+
+    def create_share_invite(
+        self,
+        owner_id,
+        email: str | None = None,
+        role: str = "viewer",
+        ttl_days: int = 7,
+    ) -> dict:
+        """Mint an invite token. The token is the only credential, so it is
+        generated with `secrets` rather than a counter or a hash of anything
+        guessable, and it is never derived from the owner's id."""
+        role = role if role in self.SHARE_ROLES else "viewer"
+        email = (email or "").strip().lower() or None
+        expires = datetime.now(timezone.utc) + timedelta(days=max(1, min(ttl_days, 30)))
+        token = secrets.token_urlsafe(24)
+        created = _now()
+        self._execute(
+            "INSERT INTO share_invites "
+            "(token, owner_id, email, role, status, created_at, expires_at) "
+            "VALUES (?, ?, ?, ?, 'pending', ?, ?)",
+            (token, owner_id, email, role, created, expires.strftime(_ISO)),
+        )
+        return {
+            "token": token,
+            "email": email,
+            "role": role,
+            "status": "pending",
+            "created_at": created,
+            "expires_at": expires.strftime(_ISO),
+        }
+
+    def share_invite_by_token(self, token: str) -> dict | None:
+        return self._query(
+            "SELECT * FROM share_invites WHERE token = ? LIMIT 1", (token,)
+        )
+
+    def share_invites_for_owner(self, owner_id) -> list[dict]:
+        return (
+            self._query(
+                "SELECT * FROM share_invites WHERE owner_id = ? "
+                "ORDER BY created_at DESC LIMIT 100",
+                (owner_id,),
+                fetch_all=True,
+            )
+            or []
+        )
+
+    def count_pending_invites(self, owner_id) -> int:
+        row = self._query(
+            "SELECT COUNT(*) AS n FROM share_invites "
+            "WHERE owner_id = ? AND status = 'pending'",
+            (owner_id,),
+        )
+        return int((row or {}).get("n") or 0)
+
+    def revoke_share_invite(self, token: str, owner_id) -> bool:
+        """Owner-scoped so a leaked token cannot be used to revoke someone
+        else's invite, and idempotent so a double revoke is not an error."""
+        changed = self._execute_rowcount(
+            "UPDATE share_invites SET status = 'revoked' "
+            "WHERE token = ? AND owner_id = ? AND status = 'pending'",
+            (token, owner_id),
+        )
+        return changed > 0
+
+    def accept_share_invite(
+        self, token: str, user_id, user_email: str
+    ) -> tuple[dict | None, str]:
+        """Redeem an invite for `user_id`.
+
+        Returns (invite, ""), (None, reason). Rejections are explicit rather
+        than exceptions so the route can map them to status codes without
+        unwrapping driver errors.
+        """
+        invite = self.share_invite_by_token(token)
+        if not invite:
+            return None, "invalid"
+        if str(invite.get("owner_id")) == str(user_id):
+            return None, "own"
+        if invite.get("status") == "revoked":
+            return None, "revoked"
+        if invite.get("status") == "accepted":
+            # Already redeemed is not an error: re-opening a shared link should
+            # keep working for the person it was shared with.
+            if str(invite.get("accepted_by")) == str(user_id):
+                return invite, ""
+            return None, "used"
+        if _is_expired(invite.get("expires_at")):
+            return None, "expired"
+        locked = (invite.get("email") or "").strip().lower()
+        if locked and locked != (user_email or "").strip().lower():
+            # Deliberately vague: confirming which address an invite was sent
+            # to would turn this into an account-enumeration oracle.
+            return None, "mismatch"
+
+        self._execute(
+            "INSERT INTO share_members (owner_id, user_id, role, created_at) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT (owner_id, user_id) DO NOTHING",
+            (
+                invite.get("owner_id"),
+                user_id,
+                invite.get("role") or "viewer",
+                _now(),
+            ),
+        )
+        self._execute(
+            "UPDATE share_invites SET status = 'accepted', accepted_at = ?, "
+            "accepted_by = ? WHERE token = ?",
+            (_now(), user_id, token),
+        )
+        invite = dict(invite)
+        invite["status"] = "accepted"
+        return invite, ""
+
+    def share_members_of(self, owner_id) -> list[dict]:
+        return (
+            self._query(
+                "SELECT m.user_id AS user_id, m.role AS role, m.created_at AS created_at, "
+                "u.display_name AS display_name, u.email AS email "
+                "FROM share_members m JOIN users u ON u.id = m.user_id "
+                "WHERE m.owner_id = ? ORDER BY m.created_at DESC",
+                (owner_id,),
+                fetch_all=True,
+            )
+            or []
+        )
+
+    def shared_profiles_for_user(self, user_id) -> list[dict]:
+        """Everyone who has shared their list with this user."""
+        return (
+            self._query(
+                "SELECT m.owner_id AS owner_id, m.role AS role, m.created_at AS created_at, "
+                "u.display_name AS display_name FROM share_members m "
+                "JOIN users u ON u.id = m.owner_id WHERE m.user_id = ? "
+                "ORDER BY m.created_at DESC",
+                (user_id,),
+                fetch_all=True,
+            )
+            or []
+        )
+
+    def is_share_member(self, owner_id, user_id) -> bool:
+        row = self._query(
+            "SELECT 1 AS ok FROM share_members WHERE owner_id = ? AND user_id = ? LIMIT 1",
+            (owner_id, user_id),
+        )
+        return bool(row)
+
+    def remove_share_member(self, owner_id, user_id) -> bool:
+        changed = self._execute_rowcount(
+            "DELETE FROM share_members WHERE owner_id = ? AND user_id = ?",
+            (owner_id, user_id),
+        )
+        return changed > 0
 
 _store: Store | None = None
 
