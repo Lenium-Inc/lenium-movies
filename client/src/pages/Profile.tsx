@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
-import { Plus, Clock, Trash2, X, LogOut, ArrowRight, Play } from "lucide-react";
+import { Plus, Clock, Trash2, X, Play } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/context/AuthContext";
 import { useActiveProfile } from "@/context/ActiveProfileContext";
+import { ProfileMenu } from "@/components/layout/ProfileMenu";
 import {
   apiHistory,
   apiHistoryClear,
@@ -32,10 +33,10 @@ function formatProgress(item: RemoteHistoryItem): string {
  * sign out. Auth itself lives on /login and /signup.
  */
 export default function ProfilePage() {
-  const { user, isLoading: authLoading, logout } = useAuth();
+  const { user, isLoading: authLoading } = useAuth();
   const { profiles, activeProfile, selectProfile, addProfile, deleteProfile } =
     useActiveProfile();
-  const [, navigate] = useLocation();
+  const [location, navigate] = useLocation();
 
   const [showAddProfile, setShowAddProfile] = useState(false);
   const [newProfileName, setNewProfileName] = useState("");
@@ -63,6 +64,17 @@ export default function ProfilePage() {
   useEffect(() => {
     if (!authLoading && !user) navigate("/login");
   }, [authLoading, user, navigate]);
+
+  // The profile dropdown links here as /profile#manage-profiles. Wouter
+  // handles the route client-side, so the browser never performs its own
+  // fragment jump and the grid has to be scrolled to explicitly.
+  useEffect(() => {
+    if (location !== "/profile") return;
+    if (window.location.hash !== "#manage-profiles") return;
+    document
+      .getElementById("manage-profiles")
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [location]);
 
   const handleAddProfile = () => {
     if (!newProfileName.trim()) return;
@@ -120,75 +132,43 @@ export default function ProfilePage() {
             <Play className="h-4 w-4" />
             <span className="text-base font-black tracking-tight">Stream Vy</span>
           </Link>
-          <div className="flex items-center gap-3">
-            <Link
-              href="/profiles"
-              className="hidden items-center gap-2 rounded-full border border-white/15 bg-white/[0.06] py-1.5 pl-1 pr-3 text-sm font-medium text-white/80 transition hover:bg-white/15 sm:flex"
-            >
-              {activeProfile?.avatar ? (
-                <img
-                  src={activeProfile.avatar}
-                  alt=""
-                  className="h-7 w-7 rounded-full object-cover"
-                />
-              ) : (
-                <span className="grid h-7 w-7 place-items-center rounded-full bg-white text-xs font-black text-black">
-                  {(activeProfile?.name ?? user.name).charAt(0).toUpperCase()}
-                </span>
-              )}
-              {activeProfile?.name ?? user.name}
-            </Link>
-            <button
-              onClick={() => void logout()}
-              className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-white/15 px-3.5 py-2 text-xs font-semibold text-white/70 transition hover:border-white/40 hover:text-white"
-            >
-              <LogOut className="h-3.5 w-3.5" />
-              Sign Out
-            </button>
-          </div>
+          {/* Same single avatar + dropdown as the app navbar, so profile
+              controls are not duplicated on this page. */}
+          <ProfileMenu />
         </div>
       </header>
 
       <main className="relative mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:px-8">
         {/* Account */}
         <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-6 backdrop-blur-xl sm:p-8">
-          <div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-4">
-              {user.avatar_url ? (
-                <img
-                  src={user.avatar_url}
-                  alt=""
-                  className="h-14 w-14 rounded-2xl object-cover ring-1 ring-white/15"
-                />
-              ) : (
-                <span className="grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-white to-white/60 text-xl font-black text-black">
-                  {user.name.charAt(0).toUpperCase()}
-                </span>
+          <div className="flex items-center gap-4">
+            {user.avatar_url ? (
+              <img
+                src={user.avatar_url}
+                alt=""
+                className="h-14 w-14 rounded-2xl object-cover ring-1 ring-white/15"
+              />
+            ) : (
+              <span className="grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-white to-white/60 text-xl font-black text-black">
+                {user.name.charAt(0).toUpperCase()}
+              </span>
+            )}
+            <div>
+              <h1 className="text-xl font-bold tracking-tight sm:text-2xl">
+                {user.name}
+              </h1>
+              <p className="mt-0.5 text-sm text-white/50">{user.email}</p>
+              {activeProfile && activeProfile.name !== user.name && (
+                <p className="mt-1 text-xs text-white/40">
+                  Active profile: {activeProfile.name}
+                </p>
               )}
-              <div>
-                <h1 className="text-xl font-bold tracking-tight sm:text-2xl">
-                  {user.name}
-                </h1>
-                <p className="mt-0.5 text-sm text-white/50">{user.email}</p>
-                {activeProfile && activeProfile.name !== user.name && (
-                  <p className="mt-1 text-xs text-white/40">
-                    Active profile: {activeProfile.name}
-                  </p>
-                )}
-              </div>
             </div>
-            <Link
-              href="/profiles"
-              className="inline-flex w-fit items-center gap-1.5 rounded-lg border border-white/20 px-4 py-2 text-sm font-semibold text-white/80 transition hover:border-white/50 hover:text-white"
-            >
-              Switch profile
-              <ArrowRight className="h-4 w-4" />
-            </Link>
           </div>
         </section>
 
         {/* Manage profiles */}
-        <section className="mt-10">
+        <section id="manage-profiles" className="mt-10 scroll-mt-20">
           <h2 className="text-lg font-bold text-white">Manage Profiles</h2>
           <p className="mt-1 text-sm text-white/40">
             Profiles keep everyone's watchlist and history separate.
@@ -249,7 +229,7 @@ export default function ProfilePage() {
               {profiles.map((profile) => {
                 const isActive = profile.id === activeProfile?.id;
                 return (
-                  <div key={profile.id} className="group">
+                  <div key={profile.id} className="group relative">
                     <button
                       type="button"
                       onClick={() => {
@@ -274,18 +254,18 @@ export default function ProfilePage() {
                             Kids
                           </span>
                         )}
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            deleteProfile(profile.id);
-                          }}
-                          aria-label={`Delete ${profile.name}`}
-                          className="absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-full bg-black/70 text-white/70 opacity-0 transition group-hover:opacity-100 hover:bg-violet-500 hover:text-white"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
                       </div>
+                    </button>
+                    {/* Sibling of the tile button, not a child: a button nested
+                        inside a button is invalid HTML, and browsers reparent
+                        it, which broke the tile's own click target. */}
+                    <button
+                      type="button"
+                      onClick={() => deleteProfile(profile.id)}
+                      aria-label={`Delete ${profile.name}`}
+                      className="absolute right-1.5 top-1.5 z-10 grid h-7 w-7 place-items-center rounded-full bg-black/70 text-white/70 opacity-0 transition group-hover:opacity-100 hover:bg-red-500 hover:text-white"
+                    >
+                      <X className="h-3.5 w-3.5" />
                     </button>
                     <p className="mt-2 truncate text-center text-sm text-white/60">
                       {profile.name}

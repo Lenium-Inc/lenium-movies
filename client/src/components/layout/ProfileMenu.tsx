@@ -84,37 +84,35 @@ export function ProfileMenu() {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full z-50 mt-3 w-[19rem] overflow-hidden rounded-2xl border border-white/10 bg-[#0d0d0f]/95 shadow-2xl backdrop-blur-xl">
+        <div className="absolute right-0 top-full z-50 mt-3 w-56 rounded-xl border border-zinc-800 bg-zinc-900/90 p-2 shadow-2xl backdrop-blur-xl">
           {/* Active identity */}
-          <div className="border-b border-white/10 px-4 py-3">
-            <div className="flex items-center gap-3">
-              {avatar ? (
-                <img
-                  src={avatar}
-                  alt=""
-                  className="h-10 w-10 rounded-lg object-cover"
-                />
-              ) : (
-                <span className="grid h-10 w-10 place-items-center rounded-lg bg-white text-base font-black text-black">
-                  {displayName.charAt(0).toUpperCase()}
-                </span>
-              )}
-              <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-white">
-                  {displayName}
-                </p>
-                <p className="truncate text-[11px] text-white/50">{user.email}</p>
-              </div>
+          <div className="flex items-center gap-3 rounded-lg px-2 py-2">
+            {avatar ? (
+              <img
+                src={avatar}
+                alt=""
+                className="h-10 w-10 rounded-lg object-cover"
+              />
+            ) : (
+              <span className="grid h-10 w-10 place-items-center rounded-lg bg-white text-base font-black text-black">
+                {displayName.charAt(0).toUpperCase()}
+              </span>
+            )}
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold text-white">
+                {displayName}
+              </p>
+              <p className="truncate text-[11px] text-zinc-400">{user.email}</p>
             </div>
           </div>
 
           {/* Profile switcher */}
           {profiles.length > 0 && (
-            <div className="border-b border-white/10 px-4 py-3">
-              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/40">
+            <div className="mt-1 border-t border-zinc-800 pt-2">
+              <p className="px-2 text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500">
                 Switch profile
               </p>
-              <div className="mt-3 grid grid-cols-3 gap-2">
+              <div className="mt-2 grid grid-cols-3 gap-2">
                 {profiles.slice(0, 6).map((profile) => {
                   const isActive = profile.id === activeProfile?.id;
                   return (
@@ -125,8 +123,8 @@ export function ProfileMenu() {
                       disabled={profile.isLocked}
                       className={`flex flex-col items-center gap-1 rounded-lg border p-2 transition ${
                         isActive
-                          ? "border-white/40 bg-white/[0.08]"
-                          : "border-white/10 bg-black/20 hover:border-white/30 hover:bg-white/[0.05]"
+                          ? "border-zinc-600 bg-zinc-800"
+                          : "border-zinc-800 bg-zinc-900 hover:border-zinc-600 hover:bg-zinc-800/60"
                       } disabled:cursor-not-allowed disabled:opacity-40`}
                     >
                       <img
@@ -134,7 +132,7 @@ export function ProfileMenu() {
                         alt=""
                         className="h-9 w-9 rounded-md object-cover"
                       />
-                      <span className="w-full truncate text-center text-[10px] leading-3 text-white/80">
+                      <span className="w-full truncate text-center text-[10px] leading-3 text-zinc-300">
                         {profile.name}
                       </span>
                     </button>
@@ -144,11 +142,11 @@ export function ProfileMenu() {
             </div>
           )}
 
-          <nav className="px-2 py-2">
+          <nav className="mt-1 border-t border-zinc-800 pt-1">
             <Link
-              href="/profile"
+              href="/profile#manage-profiles"
               onClick={() => setOpen(false)}
-              className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-white/80 transition hover:bg-white/10 hover:text-white"
+              className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-zinc-800 hover:text-white"
             >
               <Users className="h-4 w-4" />
               Manage Profiles
@@ -156,31 +154,31 @@ export function ProfileMenu() {
             <Link
               href="/profile"
               onClick={() => setOpen(false)}
-              className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-white/80 transition hover:bg-white/10 hover:text-white"
+              className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-zinc-800 hover:text-white"
             >
               <Settings className="h-4 w-4" />
-              Account Settings
+              Account &amp; Settings
             </Link>
             <button
               type="button"
               onClick={() => setOpen(false)}
-              className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-white/80 transition hover:bg-white/10 hover:text-white"
+              className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-zinc-800 hover:text-white"
             >
               <Plus className="h-4 w-4" />
               Add Profile
             </button>
           </nav>
 
-          <div className="border-t border-white/10 px-4 py-3">
-            <button
-              type="button"
-              onClick={handleSignOut}
-              className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-violet-400 transition hover:bg-violet-500/10 hover:text-violet-300"
-            >
-              <LogOut className="h-4 w-4" />
-              Sign Out
-            </button>
-          </div>
+          <div className="my-1 border-t border-zinc-800" />
+
+          <button
+            type="button"
+            onClick={handleSignOut}
+            className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-red-400 transition hover:bg-red-500/10 hover:text-red-300"
+          >
+            <LogOut className="h-4 w-4" />
+            Sign Out
+          </button>
         </div>
       )}
     </div>
