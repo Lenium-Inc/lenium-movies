@@ -233,3 +233,114 @@ export async function apiSavedMediaRemove(mediaId: number): Promise<void> {
     auth: true,
   });
 }
+
+// ---------------------------------------------------------------------------
+// Sharing
+//
+// `request` attaches the bearer token when `auth` is true, and omits it
+// entirely when no session exists, so a signed-out visitor can still render an
+// invite. Credentials are sent on the preview call for that same reason: the
+// server needs to know who is asking in order to say "you already have access"
+// instead of rejecting a link the viewer legitimately holds.
+// ---------------------------------------------------------------------------
+
+export interface ShareInvite {
+  token: string;
+  email: string | null;
+  role: "viewer" | "editor";
+  status: "pending" | "accepted" | "revoked" | "expired";
+  created_at: string | null;
+  expires_at: string | null;
+  accepted_at: string | null;
+}
+
+export interface ShareMember {
+  user_id: string;
+  display_name: string;
+  role: "viewer" | "editor";
+  /** Only ever populated for the list owner. Other members get null. */
+  email: string | null;
+  joined_at: string | null;
+}
+
+export interface SharedProfile {
+  owner_id: string;
+  owner_name: string;
+  role: "viewer" | "editor";
+}
+
+export interface ShareInvitePreview {
+  inviter_name: string;
+  item_count: number;
+  role: "viewer" | "editor";
+  expires_at: string | null;
+  already_member?: boolean;
+  is_owner?: boolean;
+}
+
+export async function apiCreateShare(input?: {
+  email?: string | null;
+  role?: "viewer" | "editor";
+}): Promise<{ share: ShareInvite; reused: boolean }> {
+  return request("/api/auth/shares", {
+    method: "POST",
+    body: input ?? {},
+    auth: true,
+  });
+}
+
+export async function apiShares(): Promise<{
+  invites: ShareInvite[];
+  members: ShareMember[];
+  shared_with_me: SharedProfile[];
+}> {
+  return request("/api/auth/shares", { auth: true });
+}
+
+export async function apiSharePreview(
+  token: string
+): Promise<ShareInvitePreview> {
+  return request(`/api/auth/shares/${encodeURIComponent(token)}`, { auth: true });
+}
+
+export async function apiAcceptShare(token: string): Promise<void> {
+  await request(`/api/auth/shares/${encodeURIComponent(token)}/accept`, {
+    method: "POST",
+    auth: true,
+  });
+}
+
+export async function apiRevokeShare(token: string): Promise<void> {
+  await request(`/api/auth/shares/${encodeURIComponent(token)}/revoke`, {
+    method: "POST",
+    auth: true,
+  });
+}
+
+export async function apiShareMembers(token: string): Promise<ShareMember[]> {
+  const payload = await request<{ members: ShareMember[] }>(
+    `/api/auth/shares/${encodeURIComponent(token)}/members`,
+    { auth: true }
+  );
+  return payload.members;
+}
+
+export async function apiRemoveShareMember(
+  token: string,
+  userId: string
+): Promise<void> {
+  await request(
+    `/api/auth/shares/${encodeURIComponent(token)}/members/${encodeURIComponent(userId)}`,
+    { method: "DELETE", auth: true }
+  );
+}
+
+/** Read someone else's saved list. The server rejects non-members with 403. */
+export async function apiSharedSavedMedia(ownerId: string): Promise<{
+  items: SavedMediaItem[];
+  owner: string;
+}> {
+  return request(`/api/auth/shared/${encodeURIComponent(ownerId)}/my-list`, {
+    auth: true,
+  });
+}

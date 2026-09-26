@@ -1,17 +1,38 @@
 import { Link } from "wouter";
-import { Bookmark, Film, Plus } from "lucide-react";
+import { Bookmark, Film, Plus, Share2, Users } from "lucide-react";
 import { useLocalSession } from "@/context/LocalSessionContext";
 import { useEffect, useState } from "react";
+import { ShareListDialog } from "@/components/share/ShareListDialog";
 import {
   hasRemoteSession,
   pushRemoveToRemote,
   syncSavedFromRemote,
 } from "@/services/lists";
+import { apiShares, type SharedProfile } from "@/services/auth";
 
 export default function MyList() {
   const { hydrated, isAuthenticated, getMyList, removeFromMyList } = useLocalSession();
   const [listFilter, setListFilter] = useState<"all" | "plan" | "favorites" | "watched">("all");
   const [, setRev] = useState(0);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [sharedWithMe, setSharedWithMe] = useState<SharedProfile[]>([]);
+
+  // Lists other people have shared with this account. The local demo profile
+  // has no server user, so this stays empty unless there is a real session.
+  useEffect(() => {
+    if (!hydrated || !hasRemoteSession()) return;
+    let cancelled = false;
+    apiShares()
+      .then(payload => {
+        if (!cancelled) setSharedWithMe(payload.shared_with_me);
+      })
+      .catch(() => {
+        /* sharing is optional; a failure here must not break the list */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [hydrated, shareOpen]);
 
   useEffect(() => {
     const unsub = () => setRev(r => r + 1);
@@ -110,8 +131,8 @@ export default function MyList() {
                       : "border border-white/10 text-white/60 hover:bg-white/5 hover:text-white"
                   }`}
                 >
-                  {tag === "plan" ? "Plan to Watch" : tag === "favorites" ? "Favorites" : "Watched"}
-                </button>
+                {tag === "plan" ? "Plan to Watch" : tag === "favorites" ? "Favorites" : "Watched"}
+              </button>
               ))}
               <button
                 type="button"
@@ -124,9 +145,47 @@ export default function MyList() {
               >
                 All
               </button>
+              {hasRemoteSession() && (
+                <button
+                  type="button"
+                  onClick={() => setShareOpen(true)}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-white/10 px-3 py-1.5 text-sm font-medium text-white/80 transition hover:bg-white/5"
+                >
+                  <Share2 className="h-3.5 w-3.5" />
+                  Share
+                </button>
+              )}
             </div>
           </div>
         </header>
+
+        {hasRemoteSession() && (
+          <ShareListDialog open={shareOpen} onOpenChange={setShareOpen} />
+        )}
+
+        {sharedWithMe.length > 0 && (
+          <section className="mb-8">
+            <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-white/70">
+              <Users className="h-4 w-4 text-white/40" />
+              Shared with you
+            </h2>
+            <ul className="grid gap-2 sm:grid-cols-2">
+              {sharedWithMe.map(profile => (
+                <li key={profile.owner_id}>
+                  <Link
+                    href={`/share/shared/${profile.owner_id}`}
+                    className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/5 px-4 py-3 transition hover:border-white/20 hover:bg-white/10"
+                  >
+                    <span className="min-w-0 truncate font-medium text-white">
+                      {profile.owner_name}
+                    </span>
+                    <span className="shrink-0 text-xs text-white/40">View</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
 
         {list.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-white/10 bg-white/5 p-12 text-center">

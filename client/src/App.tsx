@@ -10,6 +10,8 @@ import HeroPreview from "./pages/HeroPreview";
 import Profile from "./pages/Profile";
 import { WatchPage } from "./pages/Watch";
 import MyList from "./pages/MyList";
+import ShareInvite from "./pages/ShareInvite";
+import SharedList from "./pages/SharedList";
 import ProfilesPage from "./pages/ProfilesPage";
 import AuthPage from "./pages/AuthPage";
 import Terms from "./pages/Terms";
@@ -25,6 +27,8 @@ function Router() {
       <Route path="/signup" component={() => <AuthPage mode="signup" />} />
       <Route path="/profile" component={Profile} />
       <Route path="/my-list" component={MyList} />
+      <Route path="/share/shared/:ownerId" component={SharedList} />
+      <Route path="/share/:token" component={ShareInvite} />
       <Route path="/watch/:id" component={WatchPage} />
       <Route path="/terms" component={Terms} />
       <Route path="/dmca" component={Dmca} />

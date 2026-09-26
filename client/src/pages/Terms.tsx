@@ -3,7 +3,7 @@ import {
   LegalList,
   LegalSection,
 } from "@/components/layout/LegalLayout";
-import { LEGAL_EFFECTIVE_DATE } from "@/lib/legal";
+import { LEGAL_CONTACT_EMAIL, LEGAL_EFFECTIVE_DATE } from "@/lib/legal";
 
 /**
  * Terms of Service.
@@ -96,6 +96,20 @@ export default function Terms() {
         <p>
           These terms do not limit rights you have under mandatory consumer
           law in your jurisdiction, and nothing here is intended to waive them.
+        </p>
+      </LegalSection>
+
+      <LegalSection heading="Contact">
+        <p>
+          Questions about these terms, or anything else relating to the service,
+          can be sent to{" "}
+          <a
+            href={`mailto:${LEGAL_CONTACT_EMAIL}`}
+            className="text-violet-300 underline underline-offset-4 hover:text-violet-200"
+          >
+            {LEGAL_CONTACT_EMAIL}
+          </a>
+          .
         </p>
       </LegalSection>
 
