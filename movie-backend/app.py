@@ -17,12 +17,14 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
 from flask import Flask, Response, jsonify, request
+from werkzeug.exceptions import HTTPException
 
 # Imported first so the dotenv file is loaded before any module reads a secret.
 from runtime_config import load_env_file, ssl_context, tmdb_api_key
@@ -53,7 +55,63 @@ def _load_direct_catalog() -> list[dict]:
         return []
 
 _DIRECT_CATALOG = _load_direct_catalog()
-_direct_source_cache: dict[str, dict | None] = {}
+# Cache of resolved direct sources, including negative results.
+#
+# A miss used to be cached as a bare `None`, which is indistinguishable from
+# "not looked up yet". The frontend's fallback loop calls with refresh=True
+# three times in a row precisely because a miss means "no direct source", so
+# every miss re-triggered a full Archive.org scrape -- up to five candidate
+# identifiers, each a 30s x 2 metadata fetch plus a 25s stream probe. One
+# request could burn ~7 minutes of a worker.
+#
+# Two things fix that: remember misses for a short window so a refresh storm
+# cannot multiply the work, and collapse concurrent lookups of the same title
+# onto one in-flight scrape instead of one per viewer.
+_MISS_TTL_SECONDS = 300
+_direct_source_cache: dict[str, tuple[float, dict | None]] = {}
+_direct_source_locks: dict[str, threading.Lock] = {}
+_direct_source_globals = threading.Lock()
+
+
+# Both dicts below are keyed by normalised title, so a long-lived worker
+# accumulates one entry per distinct title anyone ever searched. Left unbounded
+# that is a slow leak on a popular title, so the caches are capped and the
+# oldest half is dropped once the cap is hit. (The lock map is small next to
+# the cache, but the same reasoning applies and it shares the eviction.)
+_CACHE_MAX_ENTRIES = 2048
+
+
+def _evict_direct_caches() -> None:
+    """Caller must hold `_direct_source_globals`."""
+    if len(_direct_source_cache) <= _CACHE_MAX_ENTRIES:
+        return
+    for key in list(_direct_source_cache)[: len(_direct_source_cache) // 2]:
+        _direct_source_cache.pop(key, None)
+        _direct_source_locks.pop(key, None)
+
+
+def _direct_lock_for(key: str) -> threading.Lock:
+    with _direct_source_globals:
+        lock = _direct_source_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _direct_source_locks[key] = lock
+        return lock
+
+
+def _direct_cache_get(key: str, refresh: bool) -> tuple[bool, dict | None]:
+    """Return (hit, value). A refresh bypasses a live entry but not a
+    just-recorded miss -- otherwise the refresh storm is unbounded again."""
+    with _direct_source_globals:
+        record = _direct_source_cache.get(key)
+    if record is None:
+        return False, None
+    stored_at, value = record
+    if not refresh:
+        return True, value
+    if value is None and (time.time() - stored_at) < _MISS_TTL_SECONDS:
+        return True, None
+    return False, None
 
 
 def _find_catalog_entry(title: str, year) -> dict | None:
@@ -78,24 +136,38 @@ def _find_catalog_entry(title: str, year) -> dict | None:
 def _direct_source_for(title: str, year=None, refresh: bool = False) -> dict | None:
     """Prefer a direct, playable Archive.org source for a title; fall back to a
     live on-demand scrape when the local catalog has no confident match. Pass
-    `refresh=True` to bypass the cache and scrape again (the frontend uses this
-    while its stream-fallback loop is looking for a playable source)."""
+    `refresh=True` to bypass a cached hit and scrape again (the frontend uses
+    this while its stream-fallback loop is looking for a playable source).
+
+    Serialised per title so N simultaneous viewers of the same uncached title
+    produce one scrape, not N. Negative results are cached for a short window
+    so a retry loop cannot turn a known miss into minutes of upstream traffic.
+    """
     if not title:
         return None
     key = catalog_lib.normalize_title(title) or title.lower().strip()
-    if refresh:
-        _direct_source_cache.pop(key, None)
-    if key in _direct_source_cache:
-        return _direct_source_cache[key]
-    entry = _find_catalog_entry(title, year)
-    if entry is None:
-        try:
-            entry = catalog_lib.scrape_title(title, requested_year=year)
-        except Exception as error:  # noqa: BLE001
-            print(f"[Catalog] on-demand scrape failed for {title!r}: {error}")
-            entry = None
-    _direct_source_cache[key] = entry
-    return entry
+
+    hit, cached = _direct_cache_get(key, refresh)
+    if hit:
+        return cached
+
+    with _direct_lock_for(key):
+        # Another request may have finished the scrape while we waited.
+        hit, cached = _direct_cache_get(key, refresh)
+        if hit:
+            return cached
+
+        entry = _find_catalog_entry(title, year)
+        if entry is None:
+            try:
+                entry = catalog_lib.scrape_title(title, requested_year=year)
+            except Exception as error:  # noqa: BLE001
+                print(f"[Catalog] on-demand scrape failed for {title!r}: {error}")
+                entry = None
+        with _direct_source_globals:
+            _direct_source_cache[key] = (time.time(), entry)
+            _evict_direct_caches()
+        return entry
 
 
 def _tmdb_get(path: str, params: dict) -> dict | None:
@@ -168,6 +240,65 @@ def _allowed_origins() -> frozenset[str]:
 
 
 _ALLOWED_ORIGINS = _allowed_origins()
+
+
+# ---------------------------------------------------------------------------
+# Error responses are always JSON
+#
+# An unhandled exception used to produce Werkzeug's HTML 500 page. The client's
+# `response.json()` then threw `SyntaxError: Unexpected token '<'`, which
+# matched none of the branches in its error classifier, so it fell through to
+# "unknown, recoverable" and the watch page re-scheduled a retry every second,
+# forever. An HTML error page is therefore not cosmetic: it is what turns one
+# server-side bug into an infinite client loop with no error shown.
+#
+# Returning JSON with a real status means the client can classify the failure
+# and, at the limit, stop and show the user something.
+# ---------------------------------------------------------------------------
+
+
+def _parse_tmdb_id(raw) -> int | None:
+    """Return a sane TMDB id, or None if `raw` is not one.
+
+    The id reaches both a TMDB URL path and an embed URL, so an unchecked value
+    previously produced a confident 200 carrying a stream that can never play.
+    Two distinct mistakes are covered:
+
+    - not a number, or <= 0: rejected as a malformed request
+    - absurdly large: Python ints are unbounded, so a 40-digit value parses
+      cleanly and would just be a guaranteed upstream 404
+
+    Shared by /api/get-stream and /api/episodes so both classify a bad id the
+    same way instead of one 400-ing and the other 404-ing with a message that
+    blames the title.
+    """
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    if value <= 0 or value > 2**31 - 1:
+        return None
+    return value
+
+
+def _json_error(message: str, status: int, **extra):
+    payload = {"error": message, "status": status, "success": False, **extra}
+    return jsonify(payload), status
+
+
+@app.errorhandler(HTTPException)
+def _http_exception_handler(error: HTTPException):
+    return _json_error(error.description or error.name, error.code or 500)
+
+
+@app.errorhandler(Exception)
+def _unhandled_exception_handler(error: Exception):
+    # Log the detail server-side; return a generic message so internals are not
+    # echoed to the client. 500 rather than 502: nothing upstream failed, we
+    # did. The client treats any 5xx the same way, so this is about the status
+    # being truthful to anyone reading the response or the logs.
+    app.logger.exception("unhandled error on %s %s", request.method, request.path)
+    return _json_error("The movie backend could not fulfil this request.", 500)
 
 
 @app.after_request
@@ -392,6 +523,12 @@ def resolve_movie():
 
     payload = request.get_json(silent=True) or {} if request.method == "POST" else {}
 
+    # `silent=True` only suppresses the *parse* failure. A syntactically valid
+    # body that is not an object -- "x", [1,2], 5 -- stays truthy and then
+    # .get() raises, turning a bad request into a 500. Reject it as a 400.
+    if not isinstance(payload, dict):
+        return _json_error("Request body must be a JSON object.", 400)
+
     title = str(payload.get("title") or request.args.get("title", "")).strip()
     tmdb_id = payload.get("id") or payload.get("tmdb_id") or request.args.get("id")
     media_type = payload.get("media_type") or payload.get("type")
@@ -407,6 +544,13 @@ def resolve_movie():
         episode = 1
 
     year = payload.get("year") or request.args.get("year")
+
+    # Nothing to look up. Previously this fell through to the metadata lookup
+    # and answered 404 "Could not find metadata for ''" -- the wrong class for a
+    # request that never named a title, and a message that told the client
+    # nothing about what it got wrong.
+    if not title and not tmdb_id:
+        return _json_error("Provide a title or a TMDB id.", 400)
 
     # If we have a TMDB ID, fetch details directly
     if tmdb_id:
@@ -540,7 +684,12 @@ def get_stream_direct():
     refresh = request.args.get("refresh", "") in ("1", "true", "yes")
 
     if not tmdb_id:
-        return jsonify({"success": False, "error": "Invalid ID"}), 400
+        return _json_error("Invalid ID", 400)
+
+    parsed = _parse_tmdb_id(tmdb_id)
+    if parsed is None:
+        return _json_error("Invalid ID", 400)
+    tmdb_id = parsed
 
     media_type = _normalize_media_type(media_type)
     is_tv = media_type == "tv"
@@ -664,17 +813,21 @@ def get_episode_details():
     season = request.args.get("season", 1, type=int)
     episode = request.args.get("episode", 1, type=int)
 
-    if not tmdb_id:
-        return jsonify({"success": False, "error": "Invalid ID"}), 400
+    # Validated up front rather than inside the try below: int() raising was
+    # swallowed into "Episode not found", which tells the client the show is
+    # missing when really the request was malformed.
+    parsed = _parse_tmdb_id(tmdb_id)
+    if parsed is None:
+        return _json_error("Invalid ID", 400)
 
     try:
-        episode_data = tmdb.fetch_episode_details(int(tmdb_id), season, episode)
+        episode_data = tmdb.fetch_episode_details(parsed, season, episode)
     except Exception as e:
         print(f"[Episode Fetch Error]: {e}")
         episode_data = None
 
     if not episode_data:
-        return jsonify({"success": False, "error": "Episode not found"}), 404
+        return _json_error("Episode not found", 404)
 
     still_path = episode_data.get("still_path")
     still_url = f"https://image.tmdb.org/t/p/w500{still_path}" if still_path else ""

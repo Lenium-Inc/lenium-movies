@@ -45,28 +45,53 @@ def log(message: str) -> None:
         print(message, flush=True)
 
 
-def http_json(url: str, retries: int = 2, timeout: int = 30):
+def http_json(
+    url: str,
+    retries: int = 2,
+    timeout: int = 30,
+    deadline: float | None = None,
+):
+    """Fetch JSON, retrying transient failures.
+
+    `deadline` is an absolute `time.monotonic()` value. When supplied it caps
+    both the retry count and the per-attempt socket timeout, because
+    `urlopen` blocks for the full timeout on a hung connection and there is no
+    way to interrupt it. Without this a single scrape could occupy a worker
+    for minutes (see scrape_title)."""
     last_error: Exception | None = None
     for attempt in range(retries):
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"deadline exceeded before fetching {url}")
+            timeout = max(1, min(timeout, int(remaining)))
         try:
             req = urllib.request.Request(url, headers={"User-Agent": UA})
             with urllib.request.urlopen(req, timeout=timeout) as response:
                 return json.loads(response.read().decode("utf-8"))
         except Exception as error:  # noqa: BLE001 - retry any transient failure
             last_error = error
+            if deadline is not None and time.monotonic() >= deadline:
+                break
             time.sleep(1.5 * (attempt + 1))
     raise RuntimeError(f"failed to fetch {url}: {last_error}")
 
 
-def probe_stream(url: str) -> bool:
+def probe_stream(url: str, deadline: float | None = None) -> bool:
     """Verify the browser would get playable bytes (200/206 range response)."""
+    timeout = 25
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        timeout = max(1, min(timeout, int(remaining)))
     try:
         req = urllib.request.Request(
             url,
             method="GET",
             headers={"Range": "bytes=0-0", "User-Agent": UA},
         )
-        with urllib.request.urlopen(req, timeout=25) as response:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
             return response.status in (200, 206)
     except Exception:
         return False
@@ -320,9 +345,14 @@ def build_entry_by_identifier(
     identifier: str,
     topics: list[str] | None = None,
     extra: dict | None = None,
+    deadline: float | None = None,
 ) -> dict | None:
-    """Resolve one Archive.org item into a playable catalog entry or None."""
-    metadata = http_json(META_URL.format(id=identifier))
+    """Resolve one Archive.org item into a playable catalog entry or None.
+
+    `deadline` (absolute `time.monotonic()`) bounds the two network calls; see
+    http_json. Callers resolving several candidates in sequence should pass a
+    single shared deadline so the whole search is capped, not each attempt."""
+    metadata = http_json(META_URL.format(id=identifier), deadline=deadline)
     files = metadata.get("files") or []
     resolved = choose_streams(files, identifier)
     if not resolved:
@@ -330,7 +360,7 @@ def build_entry_by_identifier(
 
     streams, default = resolved
     stream_url = default["url"]
-    if not probe_stream(stream_url):
+    if not probe_stream(stream_url, deadline=deadline):
         return None
 
     subtitles = choose_subtitles(files, identifier)
@@ -363,6 +393,7 @@ def discover_catalog(
     rows: int = 60,
     sort: str = "downloads desc",
     extra_fields: list[str] | None = None,
+    deadline: float | None = None,
 ) -> list[dict]:
     fields = ["identifier", "title", "year", "downloads", "addeddate"]
     if extra_fields:
@@ -376,7 +407,7 @@ def discover_catalog(
             ("output", "json"),
         ]
     )
-    payload = http_json(f"{SEARCH_URL}?{params}")
+    payload = http_json(f"{SEARCH_URL}?{params}", deadline=deadline)
     return payload.get("response", {}).get("docs", [])
 
 
@@ -458,32 +489,56 @@ def pick_best_docs(
     return [item[0] for item in candidates]
 
 
+# Total wall-clock budget for one on-demand scrape.
+#
+# Worst case before this existed: one search (3 x 30s) plus five candidates,
+# each a 3 x 30s metadata fetch and a 25s stream probe -- roughly ten minutes
+# on a single worker. The client's fallback loop gave up long before that and
+# retried, so a title with no Archive.org copy multiplied the cost. Bounding
+# the whole search means "not on Archive.org" is answered in a predictable
+# time, and the client can show that answer instead of spinning.
+SCRAPE_BUDGET_SECONDS = 45
+
+
 def scrape_title(
     title: str,
     rows: int = 12,
     attempts: int = 5,
     requested_year=None,
+    budget_seconds: float = SCRAPE_BUDGET_SECONDS,
 ) -> dict | None:
     """Scrape a title on demand: search -> verify playable, trying ranked
     candidates until one resolves to a real, playable film. Only titles that
-    confidently match (and agree on year) are accepted — never a look-alike."""
+    confidently match (and agree on year) are accepted — never a look-alike.
+
+    One shared deadline covers the search and every candidate, so the function
+    has a hard upper bound rather than a per-call one that multiplies out."""
     query = title_query(title)
     if not query:
         return None
+    deadline = time.monotonic() + max(1.0, float(budget_seconds))
     try:
-        docs = discover_catalog(query, rows=rows)
+        docs = discover_catalog(query, rows=rows, deadline=deadline)
     except Exception as error:  # noqa: BLE001 - degrade to "not found"
         log(f"on-demand search failed for {title!r}: {error}")
         return None
     if not docs:
         return None
 
+    tried = 0
     for doc in pick_best_docs(docs, title, requested_year)[:attempts]:
+        if time.monotonic() >= deadline:
+            log(
+                f"on-demand scrape for {title!r} hit its {budget_seconds:g}s "
+                f"budget after {tried} candidate(s); stopping"
+            )
+            break
         identifier = str(doc.get("identifier", ""))
         if not identifier:
             continue
+        tried += 1
         try:
-            entry = build_entry_by_identifier(identifier)
+            entry = build_entry_by_identifier(identifier, deadline=deadline)
         except Exception as error:  # noqa: BLE001
             log(f"on-demand resolution failed for {title!r} ({identifier}): {error}")
             continue
