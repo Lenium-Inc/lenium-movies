@@ -52,7 +52,7 @@ import {
   tryAgain,
   tryAnotherSource,
 } from "@/lib/playbackCopy";
-import { EpisodeMatrix } from "@/components/movies/EpisodeMatrix";
+import { WatchTVControls, type SeasonInfo } from "@/components/stream/WatchTVControls";
 import { cancelInFlightPrefetch, prefetchForOpen } from "@/services/prefetch";
 import { attemptPlay } from "@/services/capGate";
 import { useLocalSession } from "@/context/LocalSessionContext";
@@ -62,6 +62,7 @@ import {
   subscribeStats,
 } from "@/services/stats";
 import type { Movie, ResolvedStream as ResolvedStreamType, StreamVariant as StreamVariantType } from "@/components/movies/types";
+import type { StreamEpisode } from "@/services/api";
 import { TrailerEmbed } from "@/components/movies/MediaCard";
 import {
   Select,
@@ -240,8 +241,9 @@ export function WatchPage() {
   const params = useParams();
 
   const tmdbId = params.id;
-  const searchParams = new URLSearchParams(
-    typeof window !== "undefined" ? window.location.search : ""
+  const searchParams = useMemo(
+    () => new URLSearchParams(String(location.search ?? "")),
+    [location.search]
   );
   const urlSeason = parseInt(searchParams.get("season") || "1", 10);
   const urlEpisode = parseInt(searchParams.get("episode") || "1", 10);
@@ -254,6 +256,13 @@ export function WatchPage() {
   const [playError, setPlayError] = useState<ReturnType<typeof classifyError> | null>(null);
   const [season, setSeason] = useState(urlSeason);
   const [episode, setEpisode] = useState(urlEpisode);
+
+  // The URL is the source of truth. Keep local state aligned with it so browser
+  // back/forward and shared links select the right episode.
+  useEffect(() => {
+    setSeason(urlSeason);
+    setEpisode(urlEpisode);
+  }, [urlSeason, urlEpisode]);
   const [myRating, setMyRating] = useState<number>(0);
   const [watchedSeconds, setWatchedSeconds] = useState(0);
   const [trailer, setTrailer] = useState<TrailerInfo | null>(null);
@@ -838,6 +847,74 @@ export function WatchPage() {
     runStreamFallback,
   ]);
 
+  // Season + episode data for the TV controls, taken from the resolved
+  // manifest when the backend supplies one and synthesised from the season
+  // counts when it does not (same fallback EpisodeMatrix uses).
+  const tvSeasons = useMemo<SeasonInfo[]>(() => {
+    const manifest = resolved?.stream?.episodes ?? [];
+    if (manifest.length) {
+      const counts = new Map<number, number>();
+      for (const ep of manifest) {
+        counts.set(ep.season, Math.max(counts.get(ep.season) ?? 0, ep.number));
+      }
+      return Array.from(counts.entries())
+        .map(([season_number, episode_count]) => ({ season_number, episode_count }))
+        .sort((a, b) => a.season_number - b.season_number);
+    }
+    if (movie?.mediaType === "tv") {
+      const total = movie.seasons ?? 1;
+      const perSeason = movie.episodes_per_season ?? 12;
+      return Array.from({ length: total }, (_, i) => ({
+        season_number: i + 1,
+        episode_count: perSeason,
+      }));
+    }
+    return [];
+  }, [resolved, movie]);
+
+  const currentSeasonEpisodes = useMemo<StreamEpisode[]>(() => {
+    const manifest = resolved?.stream?.episodes ?? [];
+    const fromManifest = manifest
+      .filter((ep) => ep.season === season)
+      .sort((a, b) => a.number - b.number);
+    if (fromManifest.length) return fromManifest;
+
+    const info = tvSeasons.find((s) => s.season_number === season);
+    if (!info) return [];
+    return Array.from({ length: info.episode_count }, (_, i) => ({
+      season,
+      number: i + 1,
+      title: `Episode ${i + 1}`,
+    }));
+  }, [resolved, season, tvSeasons]);
+
+  // Selecting an episode rewrites the query string client-side (no reload) and
+  // resets the mirror cursor so the new episode starts from the primary source.
+  const handleSelectEpisode = useCallback(
+    (nextSeason: number, nextEpisode: number) => {
+      setSeason(nextSeason);
+      setEpisode(nextEpisode);
+      setSourceIndex(0);
+      setStreamUnavailable(false);
+      setUseEmbedFallback(false);
+      setPlayError(null);
+      const qs = new URLSearchParams({
+        season: String(nextSeason),
+        episode: String(nextEpisode),
+        type: "tv",
+      });
+      navigate(`/watch/${tmdbId}?${qs.toString()}`);
+    },
+    [navigate, tmdbId]
+  );
+
+  // Manual source switch. Unlike the automatic failover this is user-initiated,
+  // so it is announced; the player then rotates mirrors on its own from there.
+  const handleTryAnotherSource = useCallback(() => {
+    toast.loading("Switching to backup source…", { id: "source-switch" });
+    setUseEmbedFallback(true);
+  }, []);
+
   // Determine quality variants for direct streams
   const qualityVariants: StreamVariant[] = useMemo(() => {
     if (!resolved?.stream?.streams) return [];
@@ -1064,7 +1141,7 @@ export function WatchPage() {
                               {embedTargetId ? (
                                 <button
                                   type="button"
-                                  onClick={() => setUseEmbedFallback(true)}
+                                  onClick={handleTryAnotherSource}
                                   className="inline-flex items-center gap-2 rounded-xl bg-white/10 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-white/20"
                                 >
                                   <Server className="h-4 w-4" />
@@ -1164,6 +1241,17 @@ export function WatchPage() {
                   </div>
                 )}
               </div>
+
+              {/* Season/episode navigation, directly below the player */}
+              {movie.mediaType === "tv" ? (
+                <WatchTVControls
+                  currentSeason={season}
+                  currentEpisode={episode}
+                  seasons={tvSeasons}
+                  episodes={currentSeasonEpisodes}
+                  onSelectEpisode={handleSelectEpisode}
+                />
+              ) : null}
             </div>
 
             {/* RIGHT PANEL: Episode List / Details Sidebar */}
