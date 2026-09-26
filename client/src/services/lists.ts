@@ -38,7 +38,9 @@ export function isEmptyList(): boolean {
   return coreGetMyList().length === 0;
 }
 
-/** Toggle a title in the list, defaulting to "Plan to Watch" on add. */
+/** Toggle a title in the list, defaulting to "Plan to Watch" on add.
+ *
+ */
 export function toggleListSave(entry: {
   id: number;
   title: string;
@@ -60,6 +62,7 @@ export function toggleListSave(entry: {
     score: entry.score,
   };
   const saved = coreToggleMyList(movie);
+
   return { saved, tag: saved ? "plan" : "plan" };
 }
 
@@ -100,6 +103,51 @@ import {
 
 export function hasRemoteSession(): boolean {
   return Boolean(getToken());
+}
+
+// ---------------------------------------------------------------------------
+// Embed consent
+//
+// The CookieBanner offers a real "essential only" choice, and this is where
+// that choice has to actually take effect -- otherwise the banner is just
+// text. When consent is not "accepted", no third-party embed frame may load.
+//
+// Undecided is treated as "not yet accepted" (consent by opt-in), which is the
+// correct default for a third-party frame that can set its own cookies. The
+// direct-source path is untouched, so declining costs the viewer embed
+// playback and nothing else.
+// ---------------------------------------------------------------------------
+
+const EMBED_CONSENT_KEY = "freestream-consent-v1";
+
+export type EmbedConsent = "accepted" | "essential" | "undecided";
+
+/**
+ * Tri-state on purpose: the banner has to distinguish "declined" (stay hidden)
+ * from "never asked" (show it). A boolean cannot do both, and collapsing them
+ * would either nag forever or silently grant consent on first visit.
+ */
+export function readEmbedConsent(): EmbedConsent {
+  try {
+    const raw = window.localStorage.getItem(EMBED_CONSENT_KEY);
+    return raw === "accepted" || raw === "essential" ? raw : "undecided";
+  } catch {
+    // Storage blocked. Treat as undecided so the banner still appears and the
+    // viewer gets the essential-only path.
+    return "undecided";
+  }
+}
+
+export function hasEmbedConsent(): boolean {
+  return readEmbedConsent() === "accepted";
+}
+
+export function setEmbedConsent(choice: "accepted" | "essential"): void {
+  try {
+    window.localStorage.setItem(EMBED_CONSENT_KEY, choice);
+  } catch {
+    /* choice still applies in memory for this page view */
+  }
 }
 
 /** Pull the account's `saved_media` and merge it into the local list. */
