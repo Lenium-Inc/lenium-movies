@@ -5,7 +5,10 @@
  *   1. Directly playable URLs (HLS/MP4) resolved from the backend, played by
  *      <VideoPlayer>. Preferred -- no third-party frame in the way.
  *   2. When none of those resolve, fall back to one of the embed providers
- *      below, rendered by <EmbedPlayer> behind a server switcher.
+ *      below, rendered by <EmbedPlayer>. Selection and failover between them
+ *      are automatic -- the viewer is never shown which provider is in use or
+ *      offered a switcher -- so `label` and `title` below are registry
+ *      metadata for debugging only and are not rendered.
  *
  * Everything here is a pure URL builder: no scraping, no server-side proxying.
  * Each entry is just a template, so a provider going down is a one-line removal

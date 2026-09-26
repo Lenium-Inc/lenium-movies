@@ -44,6 +44,14 @@ import {
 import { VideoPlayer, type StreamVariant } from "@/components/stream/VideoPlayer";
 import { EmbedPlayer } from "@/components/stream/EmbedPlayer";
 import { formatRuntime } from "@/lib/format";
+import {
+  findingBestStream,
+  optimizingStream,
+  reconnecting,
+  titleUnavailable,
+  tryAgain,
+  tryAnotherSource,
+} from "@/lib/playbackCopy";
 import { EpisodeMatrix } from "@/components/movies/EpisodeMatrix";
 import { cancelInFlightPrefetch, prefetchForOpen } from "@/services/prefetch";
 import { attemptPlay } from "@/services/capGate";
@@ -1000,17 +1008,8 @@ export function WatchPage() {
                           <div className="relative z-20 flex flex-col items-center gap-4 rounded-xl border border-white/10 bg-black/60 px-8 py-6 text-center backdrop-blur-md">
                             <div className="h-10 w-10 animate-spin rounded-full border-[3px] border-white/20 border-t-white" />
                             <p className="text-white/90 font-medium text-sm tracking-wider">
-                              {wakingUp
-                                ? "Waking up stream server…"
-                                : "Reconnecting to stream…"}
+                              {wakingUp ? optimizingStream : reconnecting}
                             </p>
-                            {wakingUp ? (
-                              <p className="max-w-xs text-white/50 text-xs leading-relaxed">
-                                The backend scales to sleep when idle. Its first
-                                request after a pause can take up to half a
-                                minute to answer.
-                              </p>
-                            ) : null}
                           </div>
                         </div>
                       </div>
@@ -1025,11 +1024,7 @@ export function WatchPage() {
                           <div className="relative z-20 flex flex-col items-center gap-4 rounded-xl border border-white/10 bg-black/60 px-8 py-6 text-center backdrop-blur-md">
                             <div className="h-10 w-10 animate-spin rounded-full border-[3px] border-white/20 border-t-white" />
                             <p className="text-white/90 font-medium text-sm tracking-wider">
-                              Waking up stream server…
-                            </p>
-                            <p className="max-w-xs text-white/50 text-xs leading-relaxed">
-                              Resolving sources. A sleeping backend can take up to
-                              30 seconds to respond on its first request.
+                              {optimizingStream}
                             </p>
                           </div>
                         </div>
@@ -1055,7 +1050,7 @@ export function WatchPage() {
                           />
                           <div className="relative z-20 rounded-xl border border-white/10 bg-black/60 px-8 py-6 text-center backdrop-blur-md max-w-lg">
                             <p className="text-lg font-semibold text-white">
-                              Stream currently unavailable. Click to retry source.
+                              {titleUnavailable}
                             </p>
                             <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
                               <button
@@ -1064,7 +1059,7 @@ export function WatchPage() {
                                 className="inline-flex items-center gap-2 rounded-xl bg-white/10 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-white/20"
                               >
                                 <RefreshCw className="h-4 w-4" />
-                                Retry source
+                                {tryAgain}
                               </button>
                               {embedTargetId ? (
                                 <button
@@ -1073,7 +1068,7 @@ export function WatchPage() {
                                   className="inline-flex items-center gap-2 rounded-xl bg-white/10 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-white/20"
                                 >
                                   <Server className="h-4 w-4" />
-                                  Use another server
+                                  {tryAnotherSource}
                                 </button>
                               ) : null}
                             </div>
@@ -1091,7 +1086,7 @@ export function WatchPage() {
                           <div className="relative z-20 flex flex-col items-center gap-4 rounded-xl border border-white/10 bg-black/60 px-8 py-6 text-center backdrop-blur-md">
                             <div className="h-10 w-10 animate-spin rounded-full border-[3px] border-white/20 border-t-white" />
                             <p className="text-white/90 font-medium text-sm tracking-wider">
-                              Finding the best stream…
+                              {findingBestStream}
                             </p>
                           </div>
                         </div>

@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import Hls from "hls.js";
 import { formatPlayerTime } from "@/lib/format";
+import { titleUnavailable } from "@/lib/playbackCopy";
 
 export interface StreamVariant {
   quality: string | null;
@@ -327,7 +328,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       // flashing an error card — the next source is already queued.
       if (!autoCycling) {
         setPlaybackError(
-          "Stream currently unavailable. Click to retry source."
+          titleUnavailable
         );
         setIsLoading(false);
       }
@@ -381,7 +382,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           if (data.fatal) {
             if (!autoCycling) {
               setPlaybackError(
-                "Stream currently unavailable. Click to retry source."
+                titleUnavailable
               );
               setIsLoading(false);
             }
@@ -393,7 +394,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         video.src = streamUrl;
       } else {
         if (!autoCycling) {
-          setPlaybackError("Stream currently unavailable. Click to retry source.");
+          setPlaybackError(titleUnavailable);
           setIsLoading(false);
         }
         onSourceError?.();
@@ -403,7 +404,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         video.src = streamUrl;
       } else {
         if (!autoCycling) {
-          setPlaybackError("Stream currently unavailable. Click to retry source.");
+          setPlaybackError(titleUnavailable);
           setIsLoading(false);
         }
         onSourceError?.();
