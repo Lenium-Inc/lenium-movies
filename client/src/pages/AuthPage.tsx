@@ -133,6 +133,25 @@ export default function AuthPage({ mode }: AuthPageProps) {
 
           <div className="rounded-2xl border border-white/10 bg-black/30 p-8 shadow-2xl backdrop-blur-2xl">
             <form onSubmit={handleSubmit} className="space-y-4">
+              {/*
+                Honeypot: a real label tied to a real input, moved off-screen
+                rather than hidden with CSS, so it stays in the accessibility
+                tree's shadow but is unreachable by keyboard, pointer and
+                autofill. Naive bots fill every field they find; people cannot
+                see or complete it. Server-side it only ever adds a small,
+                decaying amount of evidence.
+              */}
+              <div className="absolute -left-[9999px] top-auto h-px w-px overflow-hidden" aria-hidden="true">
+                <label htmlFor="sv-website">Website</label>
+                <input
+                  id="sv-website"
+                  name="website"
+                  type="text"
+                  tabIndex={-1}
+                  autoComplete="off"
+                  defaultValue=""
+                />
+              </div>
               {isSignup && (
                 <div>
                   <label htmlFor="auth-name" className="mb-2 block text-sm font-medium text-white/70">

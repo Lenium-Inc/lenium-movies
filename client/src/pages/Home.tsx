@@ -249,6 +249,21 @@ export default function Home() {
             >
               Copyright &amp; DMCA
             </a>
+            {/*
+              Honeypot. Present in the DOM, hidden from people and from the
+              accessibility tree, and harmless if followed. A crawler that
+              treats the page as a link graph to walk lands here and is recorded
+              as weak evidence of automated traffic. It is one signal among
+              several and never blocks on its own.
+            */}
+            <a
+              href="/api/hp/asset-manifest.json"
+              aria-hidden="true"
+              tabIndex={-1}
+              className="sr-only pointer-events-none select-none"
+            >
+              Sitemap
+            </a>
           </nav>
         </div>
       </footer>
