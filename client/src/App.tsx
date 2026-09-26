@@ -12,6 +12,8 @@ import { WatchPage } from "./pages/Watch";
 import MyList from "./pages/MyList";
 import ProfilesPage from "./pages/ProfilesPage";
 import AuthPage from "./pages/AuthPage";
+import Terms from "./pages/Terms";
+import Dmca from "./pages/Dmca";
 
 function Router() {
   return (
@@ -24,6 +26,8 @@ function Router() {
       <Route path="/profile" component={Profile} />
       <Route path="/my-list" component={MyList} />
       <Route path="/watch/:id" component={WatchPage} />
+      <Route path="/terms" component={Terms} />
+      <Route path="/dmca" component={Dmca} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>

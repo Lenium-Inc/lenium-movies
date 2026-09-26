@@ -5,10 +5,12 @@
  *   1. Directly playable URLs (HLS/MP4) resolved from the backend, played by
  *      <VideoPlayer>. Preferred -- no third-party frame in the way.
  *   2. When none of those resolve, fall back to one of the embed providers
- *      below, rendered by <EmbedPlayer>. Selection and failover between them
- *      are automatic -- the viewer is never shown which provider is in use or
- *      offered a switcher -- so `label` and `title` below are registry
- *      metadata for debugging only and are not rendered.
+ *      below, rendered by <EmbedPlayer>. Failover is automatic, but the viewer
+ *      is also offered an explicit switcher: providers differ in quality far
+ *      more than they differ in uptime, and a mislabelled CAM rip or a
+ *      mis-encoded upload is a content problem no amount of retrying fixes.
+ *      Letting someone pick the next source is the only real remedy available
+ *      without server-side access to the media.
  *
  * Everything here is a pure URL builder: no scraping, no server-side proxying.
  * Each entry is just a template, so a provider going down is a one-line removal
@@ -45,21 +47,11 @@ export interface ResolvedEmbedSource extends EmbedSource {
  * provider first and the shakiest last.
  */
 export const EMBED_SOURCES: readonly EmbedSource[] = [
-  { id: "vidsrc", label: "Server 1", title: "Server 1 - VidSrc", host: "vidsrc.to" },
-  {
-    id: "autoembed",
-    label: "Server 2",
-    title: "Server 2 - AutoEmbed",
-    host: "autoembed.to",
-  },
-  { id: "mycima", label: "MyCima Stream", title: "MyCima Stream", host: "mycima.tv" },
-  { id: "2embed", label: "Server 4", title: "Server 4 - 2Embed", host: "2embed.org" },
-  {
-    id: "multiembed",
-    label: "Server 5",
-    title: "Server 5 - MultiEmbed",
-    host: "multiembed.mov",
-  },
+  { id: "vidsrc", label: "Server 1", title: "Server 1", host: "vidsrc.to" },
+  { id: "autoembed", label: "Server 2", title: "Server 2", host: "autoembed.to" },
+  { id: "mycima", label: "Server 3", title: "Server 3", host: "mycima.tv" },
+  { id: "2embed", label: "Server 4", title: "Server 4", host: "2embed.org" },
+  { id: "multiembed", label: "Server 5", title: "Server 5", host: "multiembed.mov" },
 ] as const;
 
 /** IDs are `[a-z0-9-]`; anything else could break out of the URL path. */

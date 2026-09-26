@@ -213,6 +213,36 @@ export default function Home() {
           </>
         )}
       </main>
+
+      <footer className="border-t border-white/5 px-4 py-8 sm:px-6 lg:px-8">
+        <div className="mx-auto flex max-w-[1400px] flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <p className="max-w-xl text-xs leading-5 text-zinc-500">
+            An indexing interface for third-party providers. No media is hosted
+            on our servers — see the{" "}
+            <a
+              href="/terms"
+              className="text-zinc-400 underline underline-offset-4 transition hover:text-zinc-200"
+            >
+              Terms of Service
+            </a>
+            .
+          </p>
+          <nav className="flex items-center gap-5 text-xs text-zinc-400">
+            <a
+              href="/terms"
+              className="transition hover:text-white"
+            >
+              Terms
+            </a>
+            <a
+              href="/dmca"
+              className="transition hover:text-white"
+            >
+              Copyright &amp; DMCA
+            </a>
+          </nav>
+        </div>
+      </footer>
       </div>
       {selected && (
         <Details

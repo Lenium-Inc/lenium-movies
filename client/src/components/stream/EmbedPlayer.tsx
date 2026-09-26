@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Loader2, RotateCw } from "lucide-react";
+import { AlertTriangle, ChevronRight, Loader2, RotateCw } from "lucide-react";
 import { resolveEmbedSources, type ResolvedEmbedSource } from "@/lib/embedSources";
 import { cn } from "@/lib/utils";
 import {
@@ -21,6 +21,14 @@ const LOAD_TIMEOUT_MS = 12_000;
  * misread as a refusal.
  */
 const REFUSAL_SETTLE_MS = 1_200;
+
+/**
+ * Last source the viewer settled on, kept for the life of the tab so a choice
+ * made on one episode carries to the next. Survives remounts of this component
+ * (the player is remounted on every source swap), which component state would
+ * not.
+ */
+let preferredSourceId: string | null = null;
 
 export interface EmbedPlayerProps {
   tmdbId?: number | string | null;
@@ -70,11 +78,29 @@ export function EmbedPlayer({
   const goTo = useCallback(
     (next: number) => {
       if (total === 0) return;
-      setIndex(((next % total) + total) % total);
+      const wrapped = ((next % total) + total) % total;
+      // Every path here is a deliberate settle: either the viewer chose it, or
+      // the current one was ruled out. Both are worth remembering.
+      preferredSourceId = sources[wrapped]?.id ?? null;
+      setIndex(wrapped);
       setLoadState("loading");
       setAttempt((n) => n + 1);
     },
-    [total],
+    [total, sources],
+  );
+
+  /**
+   * Explicit viewer choice. Clears the dead-source memory for the target so a
+   * server that was ruled out for *this* title gets a genuine second chance --
+   * some providers rate-limit per title rather than being actually broken.
+   */
+  const selectSource = useCallback(
+    (next: number) => {
+      if (next < 0 || next >= total || next === index) return;
+      blockedIds.current.delete(sources[next]?.id);
+      goTo(next);
+    },
+    [index, total, sources, goTo],
   );
 
   /** Next source after `from` that has not already been ruled out, or -1. */
@@ -88,6 +114,17 @@ export function EmbedPlayer({
     },
     [sources, total],
   );
+
+  const goToNextSource = useCallback(() => {
+    const next = nextViableIndex(index);
+    if (next === -1) {
+      // Everything is ruled out; fall back to a plain rotation so the viewer is
+      // not stuck on a dead frame.
+      goTo(index + 1);
+      return;
+    }
+    goTo(next);
+  }, [index, nextViableIndex, goTo]);
 
   const advance = useCallback(() => {
     const next = nextViableIndex(index);
@@ -105,7 +142,10 @@ export function EmbedPlayer({
 
   // Reset whenever the underlying target changes (new season/episode, new title).
   useEffect(() => {
-    setIndex(0);
+    const remembered = preferredSourceId
+      ? sources.findIndex((src) => src.id === preferredSourceId)
+      : -1;
+    setIndex(remembered >= 0 ? remembered : 0);
     setLoadState("loading");
     setAttempt((n) => n + 1);
     blockedIds.current = new Set();
@@ -122,19 +162,6 @@ export function EmbedPlayer({
     return () => window.clearTimeout(timer);
   }, [loadState, active, advance]);
 
-  /**
-   * A frame refused for anti-framing reasons (`X-Frame-Options` or a CSP
-   * `frame-ancestors` directive) still fires `onLoad`, so the watchdog above
-   * never sees it and the viewer is left staring at the browser's own refusal
-   * page. The document is unreadable cross-origin, but `window.length` is on
-   * the cross-origin allow list: a working provider player nests at least one
-   * frame, while the refusal page nests none. Reading it lets a blocked source
-   * be ruled out and the failover continue.
-   *
-   * Conservative by design -- a source is only ruled out on a confirmed empty
-   * frame, and a false positive costs one skipped source rather than playback,
-   * because the remaining candidates are still tried in order.
-   */
   const handleLoad = useCallback(() => {
     setLoadState("ready");
   }, []);
@@ -242,7 +269,46 @@ export function EmbedPlayer({
         </div>
       ) : null}
 
-      {/* Source selection is automatic, so only the close control is offered. */}
+      {/* Manual source switcher. Top-left so it clears the provider's own
+          transport controls along the bottom edge. */}
+      {total > 1 ? (
+        <div className="absolute left-3 top-3 z-30 flex items-center gap-1 rounded-lg bg-black/70 p-1 backdrop-blur">
+          {sources.map((src, i) => {
+            const isActive = i === index;
+            const isBlocked = blockedIds.current.has(src.id);
+            return (
+              <button
+                key={src.id}
+                type="button"
+                onClick={() => selectSource(i)}
+                title={isBlocked ? `${src.title} (failed, try again)` : src.title}
+                aria-current={isActive ? "true" : undefined}
+                className={cn(
+                  "rounded-md px-2.5 py-1 text-[11px] font-semibold transition",
+                  isActive
+                    ? "bg-violet-500 text-white"
+                    : isBlocked
+                      ? "text-white/35 line-through hover:bg-white/10 hover:text-white/70"
+                      : "text-white/70 hover:bg-white/10 hover:text-white",
+                )}
+              >
+                {src.label}
+              </button>
+            );
+          })}
+          <button
+            type="button"
+            onClick={goToNextSource}
+            title="Next server"
+            aria-label="Next server"
+            className="ml-0.5 rounded-md p-1 text-white/70 transition hover:bg-white/10 hover:text-white"
+          >
+            <ChevronRight className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ) : null}
+
+      {/* Close control */}
       {onClose ? (
         <button
           type="button"
