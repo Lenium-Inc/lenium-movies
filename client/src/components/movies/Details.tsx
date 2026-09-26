@@ -11,6 +11,7 @@ import {
 import { useLocation } from "wouter";
 import { useAuth } from "@/context/AuthContext";
 import { formatRuntime } from "@/lib/format";
+import { buildWatchPath, resolveMediaType } from "@/lib/watchRoute";
 import { toast } from "sonner";
 import { getRating, setRating, subscribeRatings } from "@/services/ratings";
 import {
@@ -145,10 +146,7 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
       setEpisode(targetEpisode);
 
       let playable: StreamMovie = base;
-      const mediaType: "movie" | "tv" | null =
-        base.media_type === "movie" || base.media_type === "tv"
-          ? base.media_type
-          : null;
+      const mediaType = resolveMediaType({ localMediaType: movie.mediaType });
       if (mediaType && /^\d+$/.test(base.id)) {
         try {
           const source = await getStreamSource({
@@ -187,7 +185,11 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
       setResolved({ stream: playable, exact: true });
       prefetchForOpen(playable);
       navigate(
-        `/watch/${movie.providerId}${movie.mediaType === "tv" ? `?season=${targetSeason}&episode=${targetEpisode}&type=tv` : ""}`
+        buildWatchPath(movie.providerId, {
+          mediaType: movie.mediaType,
+          season: targetSeason,
+          episode: targetEpisode,
+        })
       );
     } catch (error) {
       const isNotFound = error instanceof StreamNotFoundError;
@@ -209,10 +211,14 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
     if (resolving) return;
     if (!attemptPlay()) return;
     if (resolved) {
-      const isSeries = resolved.stream.media_type === "tv";
+      const isSeries = movie.mediaType === "tv";
       await resolveAndPlay(isSeries ? season : 1, isSeries ? episode : 1);
       navigate(
-        `/watch/${movie.providerId}${isSeries ? `?season=${season}&episode=${episode}&type=tv` : ""}`
+        buildWatchPath(movie.providerId, {
+          mediaType: isSeries ? "tv" : "movie",
+          season,
+          episode,
+        })
       );
       return;
     }
@@ -220,8 +226,7 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
     navigate(`/watch/${movie.providerId}`);
   };
 
-  const showMainPlayButton =
-    !resolved?.stream.media_type || resolved.stream.media_type !== "tv";
+  const showMainPlayButton = movie.mediaType !== "tv";
 
   const playEpisode = (targetSeason: number, targetEpisode: number) => {
     void resolveAndPlay(targetSeason, targetEpisode);
@@ -477,12 +482,18 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
             </p>
           )}
 
-          {resolved && resolved.stream.media_type === "tv" ? (
+          {resolved && movie.mediaType === "tv" ? (
             <EpisodeMatrix
               movie={resolved.stream}
               onPlay={ep => {
                 playEpisode(ep.season, ep.number);
-                navigate(`/watch/${movie.id}`);
+                navigate(
+                  buildWatchPath(movie.providerId, {
+                    mediaType: "tv",
+                    season: ep.season,
+                    episode: ep.number,
+                  })
+                );
               }}
             />
           ) : detailsLoaded ? null : (

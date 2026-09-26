@@ -63,6 +63,7 @@ import {
 } from "@/services/stats";
 import type { Movie, ResolvedStream as ResolvedStreamType, StreamVariant as StreamVariantType } from "@/components/movies/types";
 import type { StreamEpisode } from "@/services/api";
+import { buildWatchPath, resolveMediaType } from "@/lib/watchRoute";
 import { TrailerEmbed } from "@/components/movies/MediaCard";
 import {
   Select,
@@ -263,6 +264,35 @@ export function WatchPage() {
     setSeason(urlSeason);
     setEpisode(urlEpisode);
   }, [urlSeason, urlEpisode]);
+
+  /**
+   * Authoritative media type for this title.
+   *
+   * Our own TMDB-backed metadata wins over the external stream resolver's
+   * `media_type`, which has been observed to report some films as series.
+   * Trusting it wrote a bogus `?type=tv&season=1&episode=1` into the URL, after
+   * which every resolve hunted for an episode of a film and the stream failed.
+   * Falls back to the URL only while local metadata is still loading.
+   */
+  const isSeries = useMemo<boolean>(
+    () =>
+      resolveMediaType({
+        localMediaType: movie?.mediaType,
+        resolverMediaType: resolved?.stream?.media_type,
+        urlType,
+      }) === "tv",
+    [movie, resolved?.stream?.media_type, urlType],
+  );
+
+  // A film must never carry season/episode. Once local metadata says "movie",
+  // force them to 1 so a stale, shared or hand-edited ?type=tv URL cannot make
+  // the resolver look for an episode that does not exist.
+  useEffect(() => {
+    if (movie && movie.mediaType === "movie" && (season !== 1 || episode !== 1)) {
+      setSeason(1);
+      setEpisode(1);
+    }
+  }, [movie, season, episode]);
   const [myRating, setMyRating] = useState<number>(0);
   const [watchedSeconds, setWatchedSeconds] = useState(0);
   const [trailer, setTrailer] = useState<TrailerInfo | null>(null);
@@ -431,10 +461,7 @@ export function WatchPage() {
         setEpisode(targetEpisode);
 
         let playable: StreamMovie = base;
-        const mediaType: "movie" | "tv" | null =
-          base.media_type === "movie" || base.media_type === "tv"
-            ? base.media_type
-            : null;
+        const mediaType: "movie" | "tv" = isSeries ? "tv" : "movie";
 
         // Try to get stream source from backend
         if (mediaType && /^\d+$/.test(base.id)) {
@@ -466,8 +493,11 @@ export function WatchPage() {
         prefetchForOpen(playable);
 
         // Update URL without navigation
-        const isSeries = playable.media_type === "tv";
-        const newUrl = `/watch/${movie.providerId}${isSeries ? `?season=${targetSeason}&episode=${targetEpisode}&type=tv` : ""}`;
+        const newUrl = buildWatchPath(movie.providerId, {
+          mediaType: isSeries ? "tv" : "movie",
+          season: targetSeason,
+          episode: targetEpisode,
+        });
         navigate(newUrl, { replace: true });
       } catch (error) {
         const playbackError = classifyError(error);
@@ -494,7 +524,6 @@ export function WatchPage() {
     if (resolving || !movie) return;
     if (!attemptPlay()) return;
     if (resolved) {
-      const isSeries = resolved.stream.media_type === "tv";
       await resolveAndPlay(isSeries ? season : 1, isSeries ? episode : 1);
       return;
     }
@@ -512,7 +541,7 @@ export function WatchPage() {
   const handleRetry = useCallback(() => {
     if (playError?.recoverable) {
       setPlayError(null);
-      if (resolved?.stream.media_type === "tv") {
+      if (isSeries) {
         resolveAndPlay(season, episode);
       } else {
         resolveAndPlay(1, 1);
@@ -715,10 +744,7 @@ export function WatchPage() {
     async (manual: boolean) => {
       const stream = resolved?.stream;
       if (!stream || reconnecting) return;
-      const mediaType: "movie" | "tv" | undefined =
-        stream.media_type === "movie" || stream.media_type === "tv"
-          ? stream.media_type
-          : undefined;
+      const mediaType: "movie" | "tv" = isSeries ? "tv" : "movie";
       if (mediaType && !/^\d+$/.test(stream.id)) {
         setStreamUnavailable(true);
         return;
