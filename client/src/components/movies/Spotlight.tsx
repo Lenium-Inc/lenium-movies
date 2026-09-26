@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import { fetchTrailerByTmdbId, type TrailerInfo } from "@/services/api";
 import type { Movie } from "./types";
 import { formatRuntime } from "@/lib/format";
+import { glowBackground, glowPalette } from "@/lib/glow";
 
 const TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p";
 
@@ -69,7 +70,7 @@ const PrimaryActionButton = ({
     disabled={disabled}
     className={`inline-flex items-center gap-2 rounded-full px-7 py-3.5 text-sm font-semibold transition-all duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-500 disabled:opacity-50 disabled:cursor-not-allowed ${className}`}
   >
-    <Icon className="h-5 w-5" />
+    <Icon className="h-5 w-5 fill-current" />
     {label}
   </button>
 );
@@ -201,6 +202,7 @@ export function Spotlight({
             <motion.div
               key={current.id}
               className="absolute inset-0"
+              style={{ filter: "brightness(1.08) saturate(1.06)" }}
               initial={{ opacity: 0, scale: 1.06 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 1.02 }}
@@ -239,25 +241,41 @@ export function Spotlight({
         </AnimatePresence>
       </div>
 
-      {/* Gradient architecture into void black — constant across state switches */}
+      {/* Genre-driven aura. This lives inside the hero rather than behind it:
+          the hero paints its own opaque #050505, so an aura rendered outside
+          this subtree is covered and never seen. */}
+      <AnimatePresence initial={false}>
+        {current ? (
+          <motion.div
+            key={`aura-${current.id}`}
+            aria-hidden
+            className="pointer-events-none absolute inset-x-0 -top-24 h-[130%] opacity-90 blur-3xl"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 0.9 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.9, ease: EASE }}
+            style={{
+              background: glowBackground(glowPalette(current.genres, current.id)),
+            }}
+          />
+        ) : null}
+      </AnimatePresence>
+
+      {/* Warm ambient wash behind the sticky header. */}
       <div
         aria-hidden
-        className="absolute inset-0 bg-[radial-gradient(ellipse_130%_110%_at_18%_-12%,transparent_0%,rgba(5,5,5,0.30)_40%,#050505_80%)]"
+        className="absolute inset-x-0 top-0 h-40 bg-gradient-to-b from-white/[0.07] to-transparent"
       />
-      {/* Directional scrim: the void hangs from the bottom-left corner, sweeping
-          diagonally toward the top-right so left-aligned content reads. */}
+      {/* Localised left vignette — darkens only where the copy is docked
+          instead of dimming the whole frame. */}
       <div
         aria-hidden
-        className="absolute inset-0 bg-[linear-gradient(115deg,#050505_0%,rgba(5,5,5,0.88)_34%,rgba(5,5,5,0.45)_58%,transparent_82%)]"
+        className="absolute inset-y-0 left-0 w-[62%] bg-gradient-to-r from-zinc-950/95 via-zinc-950/55 to-transparent"
       />
-      {/* Cinematic zinc fade from the bottom so the left-docked content reads against a theatrical backdrop */}
+      {/* Short bottom fade blending into the catalogue below. */}
       <div
         aria-hidden
-        className="absolute inset-x-0 bottom-0 h-[70%] bg-gradient-to-t from-zinc-950 via-zinc-950/50 to-transparent"
-      />
-      <div
-        aria-hidden
-        className="absolute inset-x-0 bottom-0 h-48 bg-[linear-gradient(180deg,transparent_0%,#050505_92%)]"
+        className="absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-zinc-950 via-zinc-950/40 to-transparent"
       />
 
       {/* Cross-fading content block - left-aligned and docked toward the bottom */}
@@ -299,7 +317,6 @@ export function Spotlight({
                       <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-400/10 px-2.5 py-1 text-xs font-bold text-amber-400 backdrop-blur-sm">
                         <Star className="h-3 w-3 fill-current" />
                         {formatRating(current.vote_average)}
-                        <span className="text-white/50">TMDB</span>
                       </span>
                     </>
                   )}

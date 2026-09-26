@@ -1,9 +1,7 @@
 import { useEffect, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
 import { genreFilterOptions, INFINITE_VIEWS, useCatalog } from "@/hooks/useCatalog";
 import { Navbar } from "@/components/layout/Navbar";
 import { APPLY_SEARCH_EVENT } from "@/components/CommandPalette";
-import { glowBackground, glowPalette } from "@/lib/glow";
 import {
   CatalogEmptyState,
   SearchStatusBar,
@@ -135,27 +133,6 @@ export default function Home() {
                 {/* Ambient aura. Sits at -z-10 inside this wrapper's stacking
                     context, so it spills around the card without escaping
                     behind the page. */}
-                <AnimatePresence initial={false}>
-                  {heroActive ? (
-                    <motion.div
-                      key={heroActive.id}
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 0.6 }}
-                      exit={{ opacity: 0 }}
-                      transition={{ duration: 1, ease: "easeInOut" }}
-                      aria-hidden
-                      className="pointer-events-none absolute -top-20 left-1/2 -z-10 h-96 w-full max-w-6xl -translate-x-1/2 blur-3xl"
-                      style={{
-                        background: glowBackground(
-                          glowPalette(
-                            heroActive.genres ?? heroActive.genre,
-                            heroActive.id
-                          )
-                        ),
-                      }}
-                    />
-                  ) : null}
-                </AnimatePresence>
                 <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-zinc-900/70 shadow-2xl backdrop-blur-2xl">
                   <Spotlight
                     items={filtered}
