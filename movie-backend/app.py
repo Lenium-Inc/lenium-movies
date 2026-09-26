@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -132,20 +133,80 @@ def _get_tv_metadata(tmdb_id: int | str, current_season: int = 1) -> tuple[int, 
     return total_seasons, episodes_count, release_year
 
 
+# ---------------------------------------------------------------------------
+# CORS
+#
+# This used to answer `Access-Control-Allow-Origin: *` to everything, on
+# endpoints that read and write per-account state. A wildcard is only harmless
+# for a token in the URL; the moment a browser is willing to attach credentials
+# it becomes "any site on the internet may act as the signed-in user", and
+# `*` cannot legally be combined with Allow-Credentials anyway.
+#
+# The rule is deliberately exact-match: reflect the origin only when it is on
+# the allowlist, and send no CORS headers at all otherwise, so the browser
+# blocks it. A wildcard on `*.vercel.app` is NOT a safe shortcut -- every
+# unrelated Vercel project owns a hostname on that domain.
+#
+# Vary: Origin is not optional. Without it a shared cache can hand an allowlisted
+# origin's response to a different origin, which is the same hole with extra
+# steps.
+# ---------------------------------------------------------------------------
+
+_DEFAULT_ALLOWED_ORIGINS = (
+    "https://vy-virid.vercel.app,http://localhost:5173,http://127.0.0.1:5173,"
+    "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5193,http://127.0.0.1:5193"
+)
+
+
+def _allowed_origins() -> frozenset[str]:
+    raw = os.environ.get("ALLOWED_ORIGINS", "").strip() or _DEFAULT_ALLOWED_ORIGINS
+    return frozenset(
+        origin.strip().rstrip("/").lower()
+        for origin in raw.split(",")
+        if origin.strip()
+    )
+
+
+_ALLOWED_ORIGINS = _allowed_origins()
+
+
 @app.after_request
 def add_cors_headers(response):
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
+    origin = (request.headers.get("Origin") or "").strip().rstrip("/").lower()
+    if origin and origin in _ALLOWED_ORIGINS:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        # The app authenticates with a bearer token rather than a cookie, so
+        # this is not load-bearing today. It is set only alongside an
+        # allowlisted origin, which is the only combination that is safe.
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
+        response.headers["Access-Control-Max-Age"] = "600"
     response.headers["Access-Control-Expose-Headers"] = "Content-Length, Accept-Ranges, Content-Type"
+    response.vary.add("Origin")
     response.headers.pop("X-Powered-By", None)
     return response
 
 
 # Headers the WSGI layer stamps on every response identify the exact server and
 # Python build. Flask can only drop headers it owns, so filter the rest here.
+#
+# Scope note: this removes headers the application itself sets. `X-Render-
+# Origin-Server` and `rndr-id` are injected by Render's edge *after* this
+# process, so no in-process change can remove them -- see the deployment note
+# in the README. They are listed defensively in case a future proxy in front of
+# the app forwards them as ordinary response headers.
 _SCRUBBED_HEADERS = frozenset(
-    {"server", "x-powered-by", "x-aspnet-version", "x-aspnetmvc-version"}
+    {
+        "server",
+        "x-powered-by",
+        "x-aspnet-version",
+        "x-aspnetmvc-version",
+        "x-render-origin-server",
+        "x-render-routing",
+        "rndr-id",
+        "x-request-id",
+    }
 )
 
 
@@ -185,6 +246,89 @@ def _auth_user() -> dict | None:
 
 def _normalize_media_type(value) -> str:
     return value if value in ("movie", "tv") else "movie"
+
+
+# ---------------------------------------------------------------------------
+# History payload validation
+#
+# The endpoint is authenticated, but "authenticated" is not "trusted": any
+# signed-in client can send anything, and this one is called from a background
+# buffer flush that can be interrupted mid-flight. Unvalidated input here was a
+# reliable 500 generator -- `int()` on a junk string raised, and a missing
+# title hit the NOT NULL constraint -- which turns a bad request into a server
+# error and fills the logs with tracebacks.
+#
+# So: coerce defensively, clamp the numbers, cap the strings, and fall back to
+# a placeholder title rather than letting the database reject the row.
+# ---------------------------------------------------------------------------
+
+_HISTORY_TEXT_LIMITS = {
+    "title": 300,
+    "poster": 2048,
+    "backdrop": 2048,
+}
+# A watch position longer than this is a client bug, not a long film.
+_MAX_SECONDS = 60 * 60 * 12
+
+
+def _clean_text(payload: dict, key: str) -> str | None:
+    raw = payload.get(key)
+    if raw is None:
+        return None
+    if not isinstance(raw, (str, int, float)):
+        return None
+    text = str(raw).strip()
+    return text[: _HISTORY_TEXT_LIMITS[key]] or None
+
+
+def _clean_int(payload: dict, key: str, default: int, low: int, high: int) -> int:
+    raw = payload.get(key)
+    if raw is None or isinstance(raw, bool):
+        return default
+    try:
+        value = int(float(raw))
+    except (TypeError, ValueError):
+        return default
+    return max(low, min(high, value))
+
+
+def _clean_history_fields(payload) -> tuple[dict, str]:
+    """Return (fields, problem). `problem` is a client-safe message, or ""."""
+    if not isinstance(payload, dict):
+        return {}, "Body must be a JSON object."
+
+    raw_key = payload.get("movie_key") or payload.get("id")
+    if not isinstance(raw_key, (str, int, float)) or isinstance(raw_key, bool):
+        return {}, "Missing movie key."
+    movie_key = str(raw_key).strip()[:200]
+    if not movie_key:
+        return {}, "Missing movie key."
+
+    title = _clean_text(payload, "title")
+    year = payload.get("year")
+    try:
+        year = int(year) if year not in (None, "") else None
+    except (TypeError, ValueError):
+        year = None
+    if year is not None:
+        year = max(1800, min(2200, year))
+
+    return (
+        {
+            "movie_key": movie_key,
+            # NOT NULL in Postgres; a poster-only flush has no title.
+            "title": title or movie_key,
+            "year": year,
+            "poster": _clean_text(payload, "poster"),
+            "backdrop": _clean_text(payload, "backdrop"),
+            "media_type": _normalize_media_type(payload.get("media_type")),
+            "progress_seconds": _clean_int(payload, "progress_seconds", 0, 0, _MAX_SECONDS),
+            "duration_seconds": _clean_int(payload, "duration_seconds", 0, 0, _MAX_SECONDS),
+            "completed": 1 if payload.get("completed") else 0,
+            "watched_at": _clean_int(payload, "watched_at", int(time.time() * 1000), 0, 2**53),
+        },
+        "",
+    )
 
 
 @app.route("/api/search", methods=["GET", "OPTIONS"])
@@ -940,6 +1084,8 @@ def api_history():
     if request.method == "OPTIONS":
         return ("", 204)
 
+    # The user id comes from the verified bearer token and never from the
+    # request body, so one account cannot write history into another's.
     user = _auth_user()
     if not user:
         return _auth_error("Sign in to sync your watch history.")
@@ -953,10 +1099,10 @@ def api_history():
 
     if request.method == "POST":
         payload = request.get_json(silent=True) or {}
-        movie_key = str(payload.get("movie_key") or payload.get("id") or "").strip()
-        if not movie_key:
-            return _auth_error("Missing movie key.", 400)
-        store.add_history(user_id, movie_key, payload)
+        fields, problem = _clean_history_fields(payload)
+        if problem:
+            return _auth_error(problem, 400)
+        store.add_history(user_id, fields["movie_key"], fields)
         return jsonify({"success": True})
 
     history = store.history(user_id)

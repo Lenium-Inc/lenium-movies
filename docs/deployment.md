@@ -31,3 +31,52 @@ Track SLIs for public page availability, search p95, API error rate, playback-se
 ### Cost governance
 
 Create monthly budget envelopes for compute, database, search, storage, CDN egress, video processing, provider API usage, observability, and email. Attribute cost by environment, provider, title/media pipeline, and traffic class. Apply storage lifecycle rules, image/video derivative limits, provider quotas, CDN egress alerts, and emergency feature flags that disable expensive non-critical processing without disabling rights enforcement. Review unit cost per published title, search session, and playback hour before scaling.
+
+## Render hardening: what the application cannot do alone
+
+Three fingerprinting and policy items are only partly fixable in-process. The
+application-side changes are in the code; the rest needs the Render service
+configuration.
+
+### Start command
+
+Gunicorn writes `Server: gunicorn/<version>` at the HTTP layer, *below* the WSGI
+application, so the header scrubber in `movie-backend/app.py` cannot remove it.
+Only a server option can. Set the Render start command to:
+
+```
+gunicorn -c gunicorn.conf.py movie-backend.app:app
+```
+
+`gunicorn.conf.py` sets `no_server_header = True` and deliberately does not set
+`workers`, so it will not fight the process count already configured in the
+dashboard.
+
+### `ALLOWED_ORIGINS`
+
+CORS is exact-match, never a wildcard. `*.vercel.app` is not a safe shorthand:
+every unrelated Vercel project owns a hostname on that domain, so a wildcard
+there would let any of them act as a signed-in user. List origins explicitly:
+
+```
+ALLOWED_ORIGINS=https://vy-virid.vercel.app,https://your-staging-domain.example
+```
+
+Unlisted origins receive no `Access-Control-Allow-Origin` at all and are blocked
+by the browser. Requests with no `Origin` header — including the server-to-server
+call the Vercel proxy makes into Flask — are unaffected.
+
+### Headers Render injects after the app
+
+`X-Render-Origin-Server` and `rndr-id` are added by Render's edge *after* this
+process writes its response. No Flask or WSGI change can remove them, because the
+application never sees them. They are listed in the scrubber defensively in case
+a future proxy forwards them, but to actually drop them you need a hop in front
+of Render that can rewrite response headers:
+
+- a Cloudflare Worker or similar, or
+- the Vercel deployment, if requests are routed through it.
+
+Do not strip `rndr-id` blindly. Render uses it to route requests to the right
+service; removing it can break routing rather than just hiding a header. Verify
+behaviour on a preview deployment first.
