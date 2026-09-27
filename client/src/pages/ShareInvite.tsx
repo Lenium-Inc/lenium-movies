@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useRoute } from "wouter";
+import { Link, useParams } from "wouter";
 import { Bookmark, CheckCircle2, Film, Loader2 } from "lucide-react";
 import { useLocalSession } from "@/context/LocalSessionContext";
 import { hasRemoteSession } from "@/services/lists";
@@ -8,6 +8,7 @@ import {
   apiSharePreview,
   type ShareInvitePreview,
 } from "@/services/auth";
+import { sharePath } from "@/lib/shareLinks";
 
 type State =
   | { kind: "loading" }
@@ -22,8 +23,12 @@ type State =
  * link is a bearer credential and should not end up in someone else's logs.
  */
 export default function ShareInvite() {
-  const [, params] = useRoute("/share/:token");
-  const token = params?.token ?? "";
+  // `useParams` rather than `useRoute("/share/:token")`: the token is read
+  // regardless of which pattern matched, so the same page serves every accepted
+  // link shape (`/share/:token` and `/list/share/:token`) without a second copy
+  // of the component.
+  const { token = "" } = useParams<{ token?: string }>();
+  const currentPath = sharePath(token);
   const { hydrated, isAuthenticated } = useLocalSession();
   const [state, setState] = useState<State>({ kind: "loading" });
   const [accepting, setAccepting] = useState(false);
@@ -55,7 +60,9 @@ export default function ShareInvite() {
         setState({
           kind: "error",
           message:
-            err instanceof Error ? err.message : "This invite link is not valid.",
+            err instanceof Error
+              ? err.message
+              : "This invite link is not valid.",
         });
       });
     return () => {
@@ -69,14 +76,19 @@ export default function ShareInvite() {
       await apiAcceptShare(token);
       setState(prev =>
         prev.kind === "ready"
-          ? { kind: "ready", preview: { ...prev.preview, already_member: true } }
-          : prev,
+          ? {
+              kind: "ready",
+              preview: { ...prev.preview, already_member: true },
+            }
+          : prev
       );
     } catch (err) {
       setState({
         kind: "error",
         message:
-          err instanceof Error ? err.message : "This invite cannot be accepted.",
+          err instanceof Error
+            ? err.message
+            : "This invite cannot be accepted.",
       });
     } finally {
       setAccepting(false);
@@ -92,9 +104,7 @@ export default function ShareInvite() {
   );
 
   if (state.kind === "loading") {
-    return shell(
-      <Loader2 className="h-8 w-8 animate-spin text-white/40" />
-    );
+    return shell(<Loader2 className="h-8 w-8 animate-spin text-white/40" />);
   }
 
   if (state.kind === "error") {
@@ -170,8 +180,8 @@ export default function ShareInvite() {
         {preview.inviter_name} shared a list with you
       </h1>
       <p className="mt-3 text-white/60">
-        {preview.item_count} title{preview.item_count === 1 ? "" : "s"}. You will
-        be able to view them; you cannot change their list.
+        {preview.item_count} title{preview.item_count === 1 ? "" : "s"}. You
+        will be able to view them; you cannot change their list.
       </p>
 
       {isAuthenticated && !signedIn && (
@@ -193,7 +203,7 @@ export default function ShareInvite() {
           </button>
         ) : (
           <Link
-            href={`/login?next=/share/${token}`}
+            href={`/login?next=${encodeURIComponent(currentPath)}`}
             className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-6 py-3 text-sm font-bold text-white transition hover:bg-indigo-500"
           >
             Sign in to accept

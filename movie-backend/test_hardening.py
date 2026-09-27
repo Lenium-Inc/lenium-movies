@@ -199,6 +199,81 @@ def test_cors_is_not_a_wildcard():
     assert "Access-Control-Allow-Origin" not in denied.headers
 
 
+def test_every_share_route_answers_the_preflight():
+    """A share POST cannot be blocked by a failed preflight.
+
+    `POST /api/auth/shares` carries `Content-Type: application/json` and
+    `Authorization`, neither of which is CORS-safelisted, so the browser sends
+    `OPTIONS` first and only sends the real request if that preflight succeeds.
+    A preflight that 404s -- which is what a deploy predating the share routes
+    returns -- makes the browser drop the request before it is ever sent, and the
+    page sees a bare `TypeError: Failed to fetch` with no HTTP status, no body,
+    and no hint that the endpoint is fine.
+
+    The header assertions elsewhere in this file cannot catch that, because a 404
+    can still carry CORS headers. So the status is what gets pinned here, for
+    every route the share UI touches rather than just the collection endpoint.
+    """
+    _store, client = _fresh_client()
+
+    import app as application
+
+    # (path, method the browser will actually follow up with)
+    routes = [
+        ("/api/auth/shares", "POST"),
+        ("/api/auth/shares/some-token", "GET"),
+        ("/api/auth/shares/some-token/accept", "POST"),
+        ("/api/auth/shares/some-token/members", "GET"),
+        ("/api/auth/shares/some-token/members/some-user", "DELETE"),
+        ("/api/auth/shares/some-token/revoke", "POST"),
+        ("/api/auth/shared/some-owner/my-list", "GET"),
+    ]
+
+    for path, method in routes:
+        res = client.options(
+            path,
+            headers={
+                "Origin": "https://vy-virid.vercel.app",
+                "Access-Control-Request-Method": method,
+                "Access-Control-Request-Headers": "authorization,content-type",
+            },
+        )
+        # A non-2xx preflight is what breaks the flow, so assert it first and
+        # most directly -- the message names the route, which the header-only
+        # checks below could not.
+        assert 200 <= res.status_code < 300, (
+            f"preflight for {path} ({method}) returned {res.status_code}; the "
+            "browser would block the real request and the client would only see "
+            "'Failed to fetch'"
+        )
+        assert (
+            res.headers.get("Access-Control-Allow-Origin")
+            == "https://vy-virid.vercel.app"
+        ), f"{path} did not reflect the allowed origin"
+        for header in ("Authorization", "Content-Type"):
+            assert header in res.headers.get(
+                "Access-Control-Allow-Headers", ""
+            ), f"{path} preflight does not allow {header}"
+
+        # The advertised methods come from one global constant, so they are the
+        # same on every route and prove nothing about this one. What matters is
+        # that the rule really accepts the verb: a route that only declares GET
+        # still answers the preflight happily and then returns 405 to the actual
+        # request, which reaches the app as a real error rather than a blocked
+        # one, so it needs its own check.
+        adapter = application.app.url_map.bind("localhost")
+        try:
+            # `match(..., method=...)` raises rather than returning a rule that
+            # cannot serve the verb, so simply not raising is the check.
+            rule, _args = adapter.match(path, method=method, return_rule=True)
+        except Exception as error:  # noqa: BLE001
+            raise AssertionError(
+                f"{path} is not served for {method} by any registered rule "
+                f"({type(error).__name__}: {error})"
+            ) from error
+        assert method in rule.methods, f"{path} matched {rule} without {method}"
+
+
 def test_fingerprint_headers_are_scrubbed():
     _store, client = _fresh_client()
     res = client.get("/")

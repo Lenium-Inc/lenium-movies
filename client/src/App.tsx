@@ -5,7 +5,6 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { MindfulCapModal } from "./components/player/MindfulCapModal";
 import { CookieBanner } from "./components/CookieBanner";
-import { CommandPalette } from "./components/CommandPalette";
 import Home from "./pages/Home";
 import HeroPreview from "./pages/HeroPreview";
 import Profile from "./pages/Profile";
@@ -28,6 +27,11 @@ function Router() {
       <Route path="/signup" component={() => <AuthPage mode="signup" />} />
       <Route path="/profile" component={Profile} />
       <Route path="/my-list" component={MyList} />
+      {/* Canonical invite link shape, plus the `/list/share/...` prefix that
+          links minted outside this app (and older share messages) use. Both
+          resolve to the same public page, which reads the token itself. */}
+      <Route path="/list/share/:token" component={ShareInvite} />
+      <Route path="/list/share/shared/:ownerId" component={SharedList} />
       <Route path="/share/shared/:ownerId" component={SharedList} />
       <Route path="/share/:token" component={ShareInvite} />
       <Route path="/watch/:id" component={WatchPage} />
@@ -45,7 +49,6 @@ export default function App() {
       <ThemeProvider defaultTheme="dark">
         <Toaster />
         <MindfulCapModal />
-        <CommandPalette />
         <Router />
         <CookieBanner />
       </ThemeProvider>

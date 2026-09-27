@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { genreFilterOptions, INFINITE_VIEWS, useCatalog } from "@/hooks/useCatalog";
 import { Navbar } from "@/components/layout/Navbar";
-import { APPLY_SEARCH_EVENT } from "@/components/CommandPalette";
+import { APPLY_SEARCH_EVENT } from "@/components/layout/NavbarSearch";
 import {
   CatalogEmptyState,
   SearchStatusBar,
@@ -51,8 +51,8 @@ export default function Home() {
   const [selected, setSelected] = useState<Movie | null>(null);
   const [heroActive, setHeroActive] = useState<Movie | null>(null);
 
-  // The global command palette can push a plain query back into the catalog
-  // grid ("See all results") — apply it to the shared search state.
+  // The navbar search can push a plain query back into the catalog
+  // grid ("Show all results") — apply it to the shared search state.
   useEffect(() => {
     const onApply = (event: Event) => {
       const query = (event as CustomEvent<{ query?: string }>).detail?.query;

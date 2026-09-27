@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { Bookmark, Menu, Play, Search, X } from "lucide-react";
+import { Bookmark, Menu, Play, X } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import type { View } from "@/components/layout/navigation";
 import { ProfileMenu } from "@/components/layout/ProfileMenu";
-import { OPEN_SEARCH_EVENT } from "@/components/CommandPalette";
+import { NavbarSearch } from "@/components/layout/NavbarSearch";
 import { savedListIds, subscribeList } from "@/services/lists";
 
 interface NavbarProps {
@@ -17,10 +17,6 @@ const NAV_LINKS: { id: View; label: string }[] = [
   { id: "trending", label: "Trending" },
   { id: "tv", label: "Shows" },
 ];
-
-function openSearchPalette() {
-  window.dispatchEvent(new Event(OPEN_SEARCH_EVENT));
-}
 
 /**
  * "My List" is a route (`/my-list`), not one of the single-page `View` modes,
@@ -105,7 +101,7 @@ export function Navbar({ view, onNavigate }: NavbarProps) {
 
         {/* Core navigation (desktop) */}
         <nav className="ml-2 hidden items-center gap-5 lg:flex">
-          {NAV_LINKS.map((link) => {
+          {NAV_LINKS.map(link => {
             const active = view === link.id;
             return (
               <button
@@ -123,39 +119,31 @@ export function Navbar({ view, onNavigate }: NavbarProps) {
           <MyListLink className="text-sm font-medium" />
         </nav>
 
-        <div className="ml-auto flex items-center gap-2.5">
-          {/* Desktop search trigger -> command palette */}
-          <button
-            type="button"
-            onClick={openSearchPalette}
-            aria-label="Open search (Ctrl/⌘ K)"
-            className="hidden items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-3.5 py-2 text-xs text-white/50 transition hover:border-white/25 hover:bg-white/10 hover:text-white/80 sm:flex"
-          >
-            <Search className="h-3.5 w-3.5 text-white/50" />
-            <span className="min-w-[120px] text-left">Search titles…</span>
-            <kbd className="rounded border border-white/10 bg-white/5 px-1.5 py-px text-[9px] font-semibold text-white/40">
-              ⌘K
-            </kbd>
-          </button>
+        <div className="ml-auto flex min-w-0 items-center gap-2.5">
+          {/*
+            A real input, not a button that opens one. It used to be two
+            separate controls -- a wide pill on desktop and an icon on mobile --
+            both of which dispatched an event to a full-screen command palette
+            behind an opaque backdrop. One inline field covers every viewport, and
+            its results drop down underneath instead of taking over the page.
+          */}
+          <NavbarSearch />
 
-          {/* Mobile: search + menu toggles */}
-          <button
-            type="button"
-            aria-label="Search titles"
-            onClick={openSearchPalette}
-            className="grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-white/[0.06] text-white/80 transition hover:bg-white/15 sm:hidden"
-          >
-            <Search className="h-4 w-4" />
-          </button>
           <button
             type="button"
             aria-label={menuOpen ? "Close menu" : "Open menu"}
-            onClick={() => setMenuOpen((open) => !open)}
-            className="grid h-9 w-9 place-items-center rounded-lg border border-white/10 text-white/70 transition hover:bg-white/10 hover:text-white lg:hidden"
+            onClick={() => setMenuOpen(open => !open)}
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-white/10 text-white/70 transition hover:bg-white/10 hover:text-white lg:hidden"
           >
-            {menuOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
+            {menuOpen ? (
+              <X className="h-4 w-4" />
+            ) : (
+              <Menu className="h-4 w-4" />
+            )}
           </button>
-          <ProfileMenu />
+          <div className="shrink-0">
+            <ProfileMenu />
+          </div>
         </div>
       </div>
 
@@ -163,13 +151,15 @@ export function Navbar({ view, onNavigate }: NavbarProps) {
       {menuOpen && (
         <div className="border-t border-white/10 bg-[#050505]/85 backdrop-blur-[18px] lg:hidden">
           <nav className="flex items-center gap-6 px-4 py-3">
-            {NAV_LINKS.map((link) => (
+            {NAV_LINKS.map(link => (
               <button
                 key={link.id}
                 type="button"
                 onClick={() => handleNavigate(link.id)}
                 className={`text-sm font-medium transition ${
-                  view === link.id ? "text-white" : "text-white/60 hover:text-white"
+                  view === link.id
+                    ? "text-white"
+                    : "text-white/60 hover:text-white"
                 }`}
               >
                 {link.label}

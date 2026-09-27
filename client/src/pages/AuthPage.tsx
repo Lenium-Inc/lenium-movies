@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/context/AuthContext";
 import { fetchTrending, type StreamMovie } from "@/services/api";
+import { DEFAULT_POST_AUTH_PATH, nextPathFromSearch } from "@/lib/safeRedirect";
 
 const TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p";
 
@@ -32,7 +33,16 @@ function normalizeAuthError(error: unknown): string {
  */
 export default function AuthPage({ mode }: AuthPageProps) {
   const { login, signup } = useAuth();
-  const [, navigate] = useLocation();
+  const [location, navigate] = useLocation();
+
+  // A share invite links here with `?next=/list/share/<token>` so the invite
+  // survives the sign-in detour. The value is untrusted, so it is validated in
+  // `safeRedirect` before it can influence where we navigate.
+  const nextPath = useMemo(
+    () => nextPathFromSearch(location.split("?")[1] ?? ""),
+    [location]
+  );
+  const hasNext = nextPath !== DEFAULT_POST_AUTH_PATH;
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -48,11 +58,15 @@ export default function AuthPage({ mode }: AuthPageProps) {
     fetchTrending({ time_window: "week", media_type: "movie" })
       .then((items: StreamMovie[]) => {
         if (!mounted) return;
-        const withArt = items.filter((i) => i.backdrop_url);
+        const withArt = items.filter(i => i.backdrop_url);
         const pick = withArt[Math.floor(Math.random() * withArt.length)];
         if (pick?.backdrop_url) {
           const url = pick.backdrop_url;
-          setBackdrop(url.startsWith("http") ? url : `${TMDB_IMAGE_BASE_URL}/original${url}`);
+          setBackdrop(
+            url.startsWith("http")
+              ? url
+              : `${TMDB_IMAGE_BASE_URL}/original${url}`
+          );
         }
       })
       .catch(() => {
@@ -85,7 +99,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
       } else {
         await login({ email, password });
       }
-      navigate("/profiles");
+      navigate(nextPath);
     } catch (err) {
       setError(normalizeAuthError(err));
     } finally {
@@ -141,7 +155,10 @@ export default function AuthPage({ mode }: AuthPageProps) {
                 see or complete it. Server-side it only ever adds a small,
                 decaying amount of evidence.
               */}
-              <div className="absolute -left-[9999px] top-auto h-px w-px overflow-hidden" aria-hidden="true">
+              <div
+                className="absolute -left-[9999px] top-auto h-px w-px overflow-hidden"
+                aria-hidden="true"
+              >
                 <label htmlFor="sv-website">Website</label>
                 <input
                   id="sv-website"
@@ -154,14 +171,17 @@ export default function AuthPage({ mode }: AuthPageProps) {
               </div>
               {isSignup && (
                 <div>
-                  <label htmlFor="auth-name" className="mb-2 block text-sm font-medium text-white/70">
+                  <label
+                    htmlFor="auth-name"
+                    className="mb-2 block text-sm font-medium text-white/70"
+                  >
                     Display Name
                   </label>
                   <input
                     id="auth-name"
                     type="text"
                     value={name}
-                    onChange={(e) => setName(e.target.value)}
+                    onChange={e => setName(e.target.value)}
                     placeholder="How should we address you?"
                     autoComplete="name"
                     autoFocus
@@ -171,14 +191,17 @@ export default function AuthPage({ mode }: AuthPageProps) {
                 </div>
               )}
               <div>
-                <label htmlFor="auth-email" className="mb-2 block text-sm font-medium text-white/70">
+                <label
+                  htmlFor="auth-email"
+                  className="mb-2 block text-sm font-medium text-white/70"
+                >
                   Email
                 </label>
                 <input
                   id="auth-email"
                   type="email"
                   value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  onChange={e => setEmail(e.target.value)}
                   placeholder="you@example.com"
                   autoComplete="email"
                   autoFocus={!isSignup}
@@ -187,14 +210,17 @@ export default function AuthPage({ mode }: AuthPageProps) {
                 />
               </div>
               <div>
-                <label htmlFor="auth-password" className="mb-2 block text-sm font-medium text-white/70">
+                <label
+                  htmlFor="auth-password"
+                  className="mb-2 block text-sm font-medium text-white/70"
+                >
                   Password
                 </label>
                 <input
                   id="auth-password"
                   type="password"
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  onChange={e => setPassword(e.target.value)}
                   placeholder="At least 8 characters"
                   autoComplete={isSignup ? "new-password" : "current-password"}
                   maxLength={128}
@@ -230,14 +256,28 @@ export default function AuthPage({ mode }: AuthPageProps) {
               {isSignup ? (
                 <>
                   Already have an account?{" "}
-                  <Link href="/login" className="font-semibold text-white hover:underline">
+                  <Link
+                    href={
+                      hasNext
+                        ? `/login?next=${encodeURIComponent(nextPath)}`
+                        : "/login"
+                    }
+                    className="font-semibold text-white hover:underline"
+                  >
                     Sign in
                   </Link>
                 </>
               ) : (
                 <>
                   New to Stream Vy?{" "}
-                  <Link href="/signup" className="font-semibold text-white hover:underline">
+                  <Link
+                    href={
+                      hasNext
+                        ? `/signup?next=${encodeURIComponent(nextPath)}`
+                        : "/signup"
+                    }
+                    className="font-semibold text-white hover:underline"
+                  >
                     Sign up now
                   </Link>
                 </>

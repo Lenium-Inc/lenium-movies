@@ -75,20 +75,77 @@ export class AuthApiError extends Error {
   }
 }
 
+/**
+ * A `fetch` that never produced an HTTP response: DNS failure, a connection the
+ * host refused, a TLS problem, or -- most often here -- a blocked CORS preflight.
+ *
+ * The browser reports every one of those identically, as a bare
+ * `TypeError: Failed to fetch`, with the real reason deliberately withheld from
+ * page scripts. So the raw error was being surfaced verbatim in the share
+ * dialog's error slot, which told the user nothing about *which* request died or
+ * *why*. It is worth reconstructing the likely cause: on a POST carrying
+ * `Content-Type: application/json` and `Authorization`, the browser sends an
+ * `OPTIONS` preflight first, and if that comes back non-2xx (an older deploy
+ * that predates the route answers 404) or omits the CORS headers entirely, the
+ * real request is never sent and the failure surfaces here even though the
+ * endpoint is perfectly healthy.
+ */
+export class AuthNetworkError extends Error {
+  /** The fully-resolved URL that was requested, base origin included. */
+  url: string;
+  constructor(url: string, method: string) {
+    const origin = MOVIE_API_BASE_URL || "this origin (relative request)";
+    super(
+      `Could not reach the account API at ${origin} — the browser blocked the ` +
+        "response, so this is a network or CORS fault rather than a rejected " +
+        "request. The backend may be asleep, or deployed from a build older " +
+        "than this route. Details are in the console."
+    );
+    this.name = "AuthNetworkError";
+    this.url = url;
+    // The cause is invisible to page scripts, and the full URL is what makes
+    // "which deployment?" answerable, so it goes to the console rather than
+    // being crammed into a dialog's one-line error slot.
+    console.error(
+      `[auth] ${method} ${url} never reached the app. The ` +
+        "request had no HTTP response: the origin is unreachable, or an OPTIONS " +
+        "preflight for it did not return 2xx with matching CORS headers. A " +
+        "deploy that predates this route answers the preflight with 404, which " +
+        "fails the request even though the endpoint is correct on the current " +
+        "code. Checked origin: " +
+        `${origin}. (VITE_MOVIE_API_BASE_URL is inlined at build time.)`
+    );
+  }
+}
+
 async function request<T>(
   path: string,
   options: { method?: string; body?: unknown; auth?: boolean } = {}
 ): Promise<T> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
   if (options.auth) {
     const token = getToken();
     if (token) headers.Authorization = `Bearer ${token}`;
   }
-  const response = await fetch(`${MOVIE_API_BASE_URL}${path}`, {
-    method: options.method ?? "GET",
-    headers,
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
+  const url = `${MOVIE_API_BASE_URL}${path}`;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: options.method ?? "GET",
+      headers,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    });
+  } catch (cause) {
+    // Only a genuine transport failure reaches this branch; an HTTP error
+    // status is a normal response and is handled below.
+    if (cause instanceof DOMException && cause.name === "AbortError")
+      throw cause;
+    throw new AuthNetworkError(url, options.method ?? "GET");
+  }
+
   if (!response.ok) {
     let message = `Request failed (${response.status})`;
     try {
@@ -148,7 +205,9 @@ export async function apiLogin(input: {
 export async function apiMe(): Promise<ApiUser | null> {
   if (!getToken()) return null;
   try {
-    const payload = await request<{ user: ApiUser }>("/api/auth/me", { auth: true });
+    const payload = await request<{ user: ApiUser }>("/api/auth/me", {
+      auth: true,
+    });
     setSession(getToken() ?? "", payload.user);
     return payload.user;
   } catch (error) {
@@ -173,9 +232,12 @@ export async function apiLogout(): Promise<void> {
 }
 
 export async function apiHistory(): Promise<RemoteHistoryItem[]> {
-  const payload = await request<{ history: RemoteHistoryItem[] }>("/api/auth/history", {
-    auth: true,
-  });
+  const payload = await request<{ history: RemoteHistoryItem[] }>(
+    "/api/auth/history",
+    {
+      auth: true,
+    }
+  );
   return payload.history;
 }
 
@@ -191,7 +253,11 @@ export async function apiHistoryAdd(item: {
   completed?: boolean;
   watched_at?: number;
 }): Promise<void> {
-  await request("/api/auth/history", { method: "POST", body: item, auth: true });
+  await request("/api/auth/history", {
+    method: "POST",
+    body: item,
+    auth: true,
+  });
 }
 
 export async function apiHistoryRemove(movieKey: string): Promise<void> {
@@ -312,7 +378,9 @@ export async function apiShares(): Promise<{
 export async function apiSharePreview(
   token: string
 ): Promise<ShareInvitePreview> {
-  return request(`/api/auth/shares/${encodeURIComponent(token)}`, { auth: true });
+  return request(`/api/auth/shares/${encodeURIComponent(token)}`, {
+    auth: true,
+  });
 }
 
 export async function apiAcceptShare(token: string): Promise<void> {

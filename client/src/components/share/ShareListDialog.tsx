@@ -15,9 +15,16 @@ import {
   type ShareInvite,
   type ShareMember,
 } from "@/services/auth";
+import { sharePath } from "@/lib/shareLinks";
 
+/**
+ * Built from `window.location.origin` rather than a configured host so the link
+ * always points back at the deployment the owner is actually using; a
+ * server-side base URL would have to be kept in sync per environment and would
+ * hand out links to the wrong host the first time it drifted.
+ */
 function shareUrl(token: string): string {
-  return `${window.location.origin}/share/${token}`;
+  return `${window.location.origin}${sharePath(token)}`;
 }
 
 function expiresIn(iso: string | null): string {
@@ -89,7 +96,9 @@ export function ShareListDialog({
       await refresh();
       await copy(share.token);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not create an invite.");
+      setError(
+        err instanceof Error ? err.message : "Could not create an invite."
+      );
     } finally {
       setBusy(false);
     }
@@ -118,7 +127,9 @@ export function ShareListDialog({
       await apiRevokeShare(token);
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not revoke that invite.");
+      setError(
+        err instanceof Error ? err.message : "Could not revoke that invite."
+      );
     } finally {
       setBusy(false);
     }
@@ -130,7 +141,9 @@ export function ShareListDialog({
       await apiRemoveShareMember(token, userId);
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not remove that person.");
+      setError(
+        err instanceof Error ? err.message : "Could not remove that person."
+      );
     } finally {
       setBusy(false);
     }

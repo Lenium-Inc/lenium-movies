@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useRoute } from "wouter";
+import { Link, useParams } from "wouter";
 import { Film, Loader2, Lock } from "lucide-react";
 import { apiSharedSavedMedia, type SavedMediaItem } from "@/services/auth";
 
@@ -12,10 +12,13 @@ import { apiSharedSavedMedia, type SavedMediaItem } from "@/services/auth";
  * verifies membership before it reads anything.
  */
 export default function SharedList() {
-  const [, params] = useRoute("/share/shared/:ownerId");
-  const ownerId = params?.ownerId ?? "";
+  // Pattern-agnostic, so both `/share/shared/:ownerId` and
+  // `/list/share/shared/:ownerId` render from this one component.
+  const { ownerId = "" } = useParams<{ ownerId?: string }>();
   const [state, setState] = useState<
-    { kind: "loading" } | { kind: "ready"; owner: string; items: SavedMediaItem[] } | { kind: "error"; message: string }
+    | { kind: "loading" }
+    | { kind: "ready"; owner: string; items: SavedMediaItem[] }
+    | { kind: "error"; message: string }
   >({ kind: "loading" });
 
   useEffect(() => {
@@ -28,7 +31,11 @@ export default function SharedList() {
     apiSharedSavedMedia(ownerId)
       .then(payload => {
         if (!cancelled) {
-          setState({ kind: "ready", owner: payload.owner, items: payload.items });
+          setState({
+            kind: "ready",
+            owner: payload.owner,
+            items: payload.items,
+          });
         }
       })
       .catch(err => {
