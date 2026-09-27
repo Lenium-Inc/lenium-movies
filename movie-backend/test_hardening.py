@@ -286,6 +286,54 @@ def test_fingerprint_headers_are_scrubbed():
         assert header not in res.headers, f"{header} leaked: {dict(res.headers)}"
 
 
+def test_trailer_route_validates_and_looks_up_by_media_type():
+    """`/api/catalog/movieTrailer` is what the home hero calls.
+
+    It was dropped in 33bd5c7 as collateral from a client-only change, so every
+    hero trailer 404ed and the client reported "no trailer" for every title.
+    These pin the validation, the media-type hand-off and the payload shape --
+    the client parses `{trailer: {provider, id}}` and nothing else.
+    """
+    _store, client = _fresh_client()
+    import app as application
+
+    calls = []
+
+    def fake_key(media_id, media_type):
+        calls.append((media_id, media_type))
+        return "L2NAh3CIdig" if media_type == "movie" else None
+
+    original = application.tmdb.get_trailer_key
+    application.tmdb.get_trailer_key = fake_key
+    try:
+        assert client.get("/api/catalog/movieTrailer").status_code == 400
+        assert client.get("/api/catalog/movieTrailer?id=abc").status_code == 400
+
+        res = client.get("/api/catalog/movieTrailer?id=299534&media_type=movie")
+        assert res.status_code == 200, res.get_json()
+        assert res.get_json() == {
+            "trailer": {"provider": "youtube", "id": "L2NAh3CIdig"}
+        }
+        assert calls[-1] == (299534, "movie")
+
+        # A TMDB id is only meaningful against its own type: the same number can
+        # name a film and a series, and asking for the wrong one returns a real
+        # but incorrect trailer rather than an error.
+        res = client.get("/api/catalog/movieTrailer?id=66732&media_type=tv")
+        assert res.status_code == 200
+        assert res.get_json() == {"trailer": None}
+        assert calls[-1] == (66732, "tv")
+
+        # An unrecognised media type falls back to movie instead of erroring.
+        res = client.get("/api/catalog/movieTrailer?id=1&media_type=audiobook")
+        assert res.status_code == 200
+        assert calls[-1] == (1, "movie")
+
+        assert client.options("/api/catalog/movieTrailer").status_code == 204
+    finally:
+        application.tmdb.get_trailer_key = original
+
+
 def main() -> int:
     tests = [value for name, value in sorted(globals().items()) if name.startswith("test_")]
     failures = 0

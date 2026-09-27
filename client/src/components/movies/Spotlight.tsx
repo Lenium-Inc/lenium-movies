@@ -149,7 +149,10 @@ export function Spotlight({
       setTrailer(null);
       return;
     }
-    const key = String(current.providerId);
+    // Movie and TV id spaces are independent in TMDB, so the same number can
+    // name a film and a series. The media type is part of the cache key for the
+    // same reason it is part of the request.
+    const key = `${current.mediaType}:${current.providerId}`;
     const cached = trailerCache.current.get(key);
     if (cached !== undefined) {
       setTrailer(cached);
@@ -157,7 +160,7 @@ export function Spotlight({
     }
     const seq = ++loaderSeq.current;
     setTrailer(null);
-    fetchTrailerByTmdbId(key)
+    fetchTrailerByTmdbId(current.providerId, current.mediaType)
       .then((info) => {
         if (seq !== loaderSeq.current) return;
         trailerCache.current.set(key, info ?? null);
@@ -168,7 +171,7 @@ export function Spotlight({
         trailerCache.current.set(key, null);
         setTrailer(null);
       });
-  }, [current?.providerId]);
+  }, [current?.providerId, current?.mediaType]);
 
   // Report the active title so the page can drive its ambient glow.
   useEffect(() => {

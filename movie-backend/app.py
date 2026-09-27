@@ -1155,6 +1155,43 @@ def get_trailer():
     return jsonify({"trailer": {"provider": "youtube", "id": trailer_key}})
 
 
+@app.route("/api/catalog/movieTrailer", methods=["GET", "OPTIONS"])
+def get_trailer_by_tmdb_id():
+    """Fetch a trailer straight from a TMDB id (used by fetchTrailerByTmdbId).
+
+    The id form is what the Spotlight uses, because it rotates through whatever
+    the catalog handed it and cannot re-derive a title/year pair that matches
+    the same film. This route was deleted in 33bd5c7 as collateral damage from an
+    otherwise client-only change, which left every trailer request 404ing and
+    the hero silently falling back to backdrop art.
+    """
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    raw_id = request.args.get("id")
+    media_type = request.args.get("media_type") or "movie"
+
+    if not raw_id:
+        return _json_error("Missing id", 400)
+
+    try:
+        tmdb_id = int(raw_id)
+    except (ValueError, TypeError):
+        return _json_error("Invalid id", 400)
+
+    # A TMDB id is only meaningful against its own media type. 1396 is Breaking
+    # Bad on TMDB, yet asking the movie endpoint for it answers with a real but
+    # different title's trailer -- a wrong trailer, not an error.
+    if media_type not in ("movie", "tv"):
+        media_type = "movie"
+
+    trailer_key = tmdb.get_trailer_key(tmdb_id, media_type)
+    if not trailer_key:
+        return jsonify({"trailer": None})
+
+    return jsonify({"trailer": {"provider": "youtube", "id": trailer_key}})
+
+
 def extract_year(date_str: str | None) -> str:
     """Extract 4-digit year from various date formats (YYYY-MM-DD, YYYY, etc.)."""
     if not date_str:

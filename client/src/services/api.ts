@@ -373,6 +373,40 @@ function normalizeResolvedMovie(value: unknown): StreamMovie | null {
     ...(sanitizeSubtitles(value.subtitles).length > 0
       ? { subtitles: sanitizeSubtitles(value.subtitles) }
       : {}),
+    // Same bug, second time, for the stream list. `pickDownloadCandidate`
+    // prefers `streams` over `stream_url` precisely because the primary URL is
+    // often the HLS playlist or an embed while the list holds a saveable file;
+    // dropping the list here quietly removed that preference. The backend sends
+    // {height, quality, size, url, width} per entry, and `quality` is a closed
+    // union here, so an unrecognised label is resolved against the real
+    // resolution rather than cast through.
+    ...(Array.isArray(value.streams) && value.streams.length > 0
+      ? {
+          streams: value.streams
+            .map((entry): StreamVariant | null => {
+              const record = entry as Record<string, unknown>;
+              if (typeof record.url !== "string" || !record.url) return null;
+              const height =
+                typeof record.height === "number" ? record.height : 0;
+              const label =
+                typeof record.quality === "string" ? record.quality : "";
+              const quality =
+                STREAM_QUALITY_ORDER.find((q) => label.includes(q)) ??
+                STREAM_QUALITY_ORDER.find(
+                  (q) => height >= Number.parseInt(q, 10)
+                ) ??
+                "480p";
+              return {
+                url: record.url,
+                quality,
+                width: typeof record.width === "number" ? record.width : 0,
+                height,
+                size: typeof record.size === "number" ? record.size : 0,
+              };
+            })
+            .filter((entry): entry is StreamVariant => entry !== null),
+        }
+      : {}),
     ...(value.mirrors && Array.isArray(value.mirrors)
       ? {
           mirrors: value.mirrors.filter((mirror): mirror is StreamMirror =>
@@ -701,22 +735,31 @@ export async function fetchTrailer(
 /**
  * Fetch trailer by TMDB ID directly from TMDB via backend.
  * Uses append_to_response=videos to get YouTube trailer key.
+ *
+ * `mediaType` defaults to `movie` to match the backend, but callers have to pass
+ * the real one: a TMDB id is only meaningful against its own type, and relying
+ * on the default asked for the wrong title's trailer for every series.
  */
 export async function fetchTrailerByTmdbId(
-  tmdbId: string | number
+  tmdbId: string | number,
+  mediaType: "movie" | "tv" = "movie"
 ): Promise<TrailerInfo | null> {
+  const params = new URLSearchParams({ id: String(tmdbId), media_type: mediaType });
   const response = await fetch(
-    `${MOVIE_API_BASE_URL}/api/catalog/movieTrailer?id=${tmdbId}`
+    `${MOVIE_API_BASE_URL}/api/catalog/movieTrailer?${params.toString()}`
   );
   if (response.status === 404) return null;
   if (!response.ok) {
     throw new Error(`Movie backend responded with status ${response.status}`);
   }
-  const data = await response.json();
-  if (data && typeof data === "string") {
-    return { provider: "youtube", id: data };
+  const payload: unknown = await response.json();
+  if (!isTrailerPayload(payload)) {
+    throw new Error("Movie backend returned an unexpected trailer shape");
   }
-  return null;
+  // The backend answers `{"trailer": {"provider", "id"}}`, not a bare string.
+  // This used to accept only a bare string and returned null for the documented
+  // object, so the hero stayed on backdrop art even with the route restored.
+  return payload.trailer ?? null;
 }
 
 /**
