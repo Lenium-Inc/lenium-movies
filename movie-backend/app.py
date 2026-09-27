@@ -301,6 +301,65 @@ def _unhandled_exception_handler(error: Exception):
     return _json_error("The movie backend could not fulfil this request.", 500)
 
 
+# Cap the upstream subtitle fetch so a slow Archive.org node cannot pin a
+# worker thread. Subtitle files are small (tens of KB), so a hard byte ceiling
+# also prevents this endpoint being used to pull an arbitrary large file.
+SUBTITLE_TIMEOUT_SECONDS = 15
+SUBTITLE_MAX_BYTES = 4 * 1024 * 1024
+
+
+@app.route("/api/subtitles", methods=["GET"])
+def proxy_subtitles():
+    """Serve a subtitle track as CORS-enabled WebVTT.
+
+    A `<track>` element fetches its `src` with CORS, and Archive.org's download
+    nodes return neither `Access-Control-Allow-Origin` nor a WebVTT content
+    type (they serve `text/plain`). Pointing a track straight at the archive
+    therefore fails silently in the browser: the track is rejected, no cues
+    ever fire, and the UI still reports a subtitle as "selected". Proxying the
+    file server-side is what makes subtitles actually work.
+
+    `.srt` upstreams are converted to WebVTT here, because a browser cannot
+    render SubRip at all. Only archive.org hosts are accepted, matching the
+    stream proxy, so this cannot be turned into a general-purpose fetcher.
+    """
+    url = (request.args.get("url") or "").strip()
+    if not url:
+        return _json_error("Missing url", 400)
+
+    # Host and scheme validation happens inside `fetch_bounded_text`, which
+    # shares its allowlist with the stream relay.
+    try:
+        text = catalog_lib.fetch_bounded_text(
+            url, SUBTITLE_TIMEOUT_SECONDS, SUBTITLE_MAX_BYTES
+        )
+    except ValueError as error:
+        # Host allowlist rejection and the byte cap both land here.
+        message = str(error)
+        if "archive.org" in message:
+            return _json_error(message, 400)
+        return _json_error(message, 502)
+    except urllib.error.HTTPError as exc:
+        return _json_error(f"Subtitle upstream returned {exc.code}", 502)
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return _json_error("Subtitle upstream unavailable", 502)
+
+    # The upstream extension is only a hint: archive.org serves `.srt` files as
+    # `text/plain` and occasionally mislabels the container, so the body is
+    # sniffed for the WEBVTT signature and converted when it is missing.
+    is_srt = urllib.parse.urlparse(url).path.lower().endswith(".srt")
+    if is_srt or not text.lstrip("\ufeff").lstrip().upper().startswith("WEBVTT"):
+        text = catalog_lib.srt_to_vtt(text)
+
+    response = Response(text, mimetype="text/vtt")
+    response.headers["Content-Type"] = "text/vtt; charset=utf-8"
+    # Cues are immutable for a given archive item, but the upstream node
+    # rotates; a short shared cache absorbs repeated seeks without pinning
+    # stale data.
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return response
+
+
 @app.after_request
 def add_cors_headers(response):
     origin = (request.headers.get("Origin") or "").strip().rstrip("/").lower()
@@ -720,13 +779,20 @@ def get_stream_direct():
         for url in [default] + [s.get("url", "") for s in streams]:
             if url and url not in sources:
                 sources.append(url)
-        return jsonify({
+        payload = {
             "success": True,
             "activeSource": default,
             "sources": sources,
             "mirrors": mirrors,
             "is_embed": False,
-        })
+        }
+        # The player reads tracks from whichever payload it was handed, and
+        # `/api/get-stream` is what a re-resolve actually returns. Omitting
+        # subtitles here is what made the track list vanish on refresh even
+        # though `/api/movies/resolve` reported it.
+        if direct.get("subtitles"):
+            payload["subtitles"] = direct["subtitles"]
+        return jsonify(payload)
 
     if is_tv:
         stream_url = f"https://vidsrc.me/embed/tv?tmdb={tmdb_id}&season={season}&episode={episode}"
@@ -772,6 +838,79 @@ def stream_relay():
     response.headers["Access-Control-Allow-Origin"] = "*"
     response.headers["Accept-Ranges"] = "bytes"
     response.headers["Cache-Control"] = "public, max-age=3600"
+    return response
+
+
+# `Content-Disposition` is the only reliable way to make a browser save a
+# cross-origin file. An <a download> attribute is ignored for a cross-origin
+# href, so the save has to originate from a response header the backend sets.
+#
+# A deny-list, not an allow-list: quoting the header proves what the *safe* set
+# is, while an allow-list silently drops every non-ASCII character and would
+# turn "Amelie" into "Amlie" in the UTF-8 `filename*` form that exists
+# precisely to carry those titles. So only characters that can break out of the
+# header or the filesystem are removed.
+DOWNLOAD_NAME_FORBIDDEN = re.compile(r'[\x00-\x1f\x7f"\\/:;*?<>|]')
+
+
+def _safe_download_name(raw: str | None, fallback: str) -> str:
+    """Reduce a caller-supplied filename to something safe for a header.
+
+    Strips control characters (so no CR/LF header injection), quotes (which
+    would terminate the `filename="..."` value), and the path separators and
+    `:` that have no business in a media filename. Leading and trailing
+    dots/spaces are dropped because a name of `..` or a trailing space is
+    ambiguous on the receiving filesystem.
+    """
+    candidate = DOWNLOAD_NAME_FORBIDDEN.sub("", raw or "").strip()
+    candidate = candidate.strip(". ")
+    # Collapse internal runs of whitespace, which headers fold to nothing.
+    candidate = re.sub(r"\s+", " ", candidate).strip()
+    if not candidate:
+        return fallback
+    # Keep the header well under any proxy's limit and leave room for the
+    # extension the caller appended.
+    return candidate[:120]
+
+
+@app.route("/api/movies/download", methods=["GET"])
+def movie_download():
+    """Stream a direct Archive.org file to the browser as an attachment.
+
+    Scope is deliberately narrow: only archive.org hosts (enforced by
+    `open_archive_stream`) and only a GET. The bytes are relayed rather than
+    redirected so the `Content-Disposition` header is same-origin and the save
+    dialog appears instead of the browser navigating away to the archive node.
+    """
+    url = (request.args.get("url") or "").strip()
+    if not url:
+        return _json_error("Missing url", 400)
+
+    # Prefer a name the caller derived from the title, otherwise fall back to
+    # the archive filename so the saved file is not called "download".
+    fallback = os.path.basename(urllib.parse.urlparse(url).path) or "video"
+    filename = _safe_download_name(request.args.get("filename"), fallback)
+
+    try:
+        status, headers, body = catalog_lib.open_archive_stream(url, None)
+    except ValueError as error:
+        return _json_error(str(error), 400)
+    except Exception:  # noqa: BLE001 - upstream failure is not ours
+        return _json_error("Download source unavailable", 502)
+
+    response = Response(body, status=status)
+    for key, value in headers.items():
+        if key.lower() == "content-disposition":
+            continue
+        response.headers[key] = value
+    # RFC 6266: a plain `filename` is ASCII; the `filename*` form carries UTF-8
+    # titles correctly for non-Latin scripts.
+    ascii_name = filename.encode("ascii", "ignore").decode("ascii").strip() or "video"
+    quoted = urllib.parse.quote(filename)
+    response.headers["Content-Disposition"] = (
+        f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{quoted}'
+    )
+    response.headers["Cache-Control"] = "private, no-store"
     return response
 
 

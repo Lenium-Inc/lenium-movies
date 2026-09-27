@@ -237,9 +237,60 @@ button {
  *
  * `auto <fallback>` lets the browser reuse the real measured size once a card
  * has been rendered, so the scrollbar never jumps as cards enter the
- * viewport; the fallback only applies to cards never seen.
+ * viewport; the fallback only applies to cards never seen. The card is now the
+ * poster alone -- the caption is overlaid -- so this is roughly the 2:3 tile
+ * plus the border rather than the old poster-plus-text-block height.
  */
 .movie-card {
   content-visibility: auto;
-  contain-intrinsic-size: auto 420px;
+  contain-intrinsic-size: auto 356px;
+}
+
+/*
+ * Poster tiles reveal their caption, badges and save control on hover or
+ * keyboard focus, so a grid reads as a wall of artwork at rest.
+ *
+ * The show/hide is deliberately NOT written as a bare `.movie-card:hover`
+ * rule. That would also apply on touch, where there is no hover at all: the
+ * first tap navigates, so a hidden caption would mean a grid of unlabelled
+ * posters that can never be read. Gating on `hover: hover` means a
+ * hover-capable pointer gets the clean resting state and everything else keeps
+ * its labels permanently visible.
+ *
+ * `:focus-within` rather than `:focus-visible` because the tile is a button
+ * and the save control is a second tab stop; either one landing focus should
+ * reveal the overlay, otherwise a keyboard user tabs onto an invisible control.
+ */
+.movie-card-reveal,
+.movie-card-caption {
+  opacity: 1;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .movie-card-reveal,
+  .movie-card-caption {
+    opacity: 0;
+    transition: opacity 300ms ease;
+  }
+
+  /* Only the caption slides. The scrim is `inset-0`, so translating it would
+     uncover a strip of bare poster along the top edge. */
+  .movie-card-caption {
+    transform: translateY(0.5rem);
+    transition:
+      opacity 300ms ease,
+      transform 300ms ease;
+  }
+
+  .movie-card:hover .movie-card-reveal,
+  .movie-card:hover .movie-card-caption,
+  .movie-card:focus-within .movie-card-reveal,
+  .movie-card:focus-within .movie-card-caption {
+    opacity: 1;
+  }
+
+  .movie-card:hover .movie-card-caption,
+  .movie-card:focus-within .movie-card-caption {
+    transform: translateY(0);
+  }
 }

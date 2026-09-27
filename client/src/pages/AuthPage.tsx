@@ -4,8 +4,7 @@ import { Link, useLocation } from "wouter";
 import { useAuth } from "@/context/AuthContext";
 import { fetchTrending, type StreamMovie } from "@/services/api";
 import { DEFAULT_POST_AUTH_PATH, nextPathFromSearch } from "@/lib/safeRedirect";
-
-const TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p";
+import { tmdbImage } from "@/lib/tmdbImages";
 
 interface AuthPageProps {
   mode: "login" | "signup";
@@ -61,12 +60,11 @@ export default function AuthPage({ mode }: AuthPageProps) {
         const withArt = items.filter(i => i.backdrop_url);
         const pick = withArt[Math.floor(Math.random() * withArt.length)];
         if (pick?.backdrop_url) {
-          const url = pick.backdrop_url;
-          setBackdrop(
-            url.startsWith("http")
-              ? url
-              : `${TMDB_IMAGE_BASE_URL}/original${url}`
-          );
+          // Re-point the size segment rather than trusting the stored url; the
+          // backend bakes w1280 in, and the old `startsWith("http")` bail-out
+          // meant the ambient backdrop was never actually requested at
+          // `original`.
+          setBackdrop(tmdbImage(pick.backdrop_url, "original"));
         }
       })
       .catch(() => {

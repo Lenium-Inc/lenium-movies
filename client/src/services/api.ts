@@ -23,6 +23,38 @@ export interface StreamSubtitle {
   url: string;
 }
 
+/**
+ * Keep only well-formed subtitle descriptors.
+ *
+ * Every field is required for a `<track>` to work: `url` is the source, `lang`
+ * becomes `srcLang` and is how the player matches a selection back to a track,
+ * and `label` is what the menu shows. A descriptor missing `url` or `lang` is
+ * dropped rather than rendered as a dead row.
+ */
+export function sanitizeSubtitles(value: unknown): StreamSubtitle[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const tracks: StreamSubtitle[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") continue;
+    const record = entry as Record<string, unknown>;
+    const url = typeof record.url === "string" ? record.url.trim() : "";
+    const lang = typeof record.lang === "string" ? record.lang.trim() : "";
+    if (!url || !lang) continue;
+    // Two files for the same language would collide in the track list, since
+    // the player selects by language code.
+    const key = lang.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    tracks.push({
+      url,
+      lang,
+      label: typeof record.label === "string" && record.label.trim() ? record.label.trim() : lang,
+    });
+  }
+  return tracks;
+}
+
 /** An alternative playable embed/web source served by the backend's
  * `/api/get-stream` contract (`mirrors`). The player lets the viewer switch
  * between `stream_url` and these mirrors at runtime. */
@@ -113,6 +145,33 @@ export function pickStreamVariant(
 /** Same-origin relay URL for archive.org movie bytes (see /api/movies/stream). */
 export function proxiedStreamUrl(url: string): string {
   return `${MOVIE_API_BASE_URL}/api/movies/stream?url=${encodeURIComponent(url)}`;
+}
+
+/**
+ * Same-origin URL that saves an Archive.org file via `/api/movies/download`.
+ *
+ * The backend, not this function, is what makes the save work: it relays the
+ * bytes with a `Content-Disposition: attachment` header, and a browser ignores
+ * an `<a download>` attribute on a cross-origin href. Pointing an anchor here
+ * keeps the navigation same-origin, so the file lands in the downloads folder
+ * instead of the tab navigating to the archive node.
+ */
+export function proxiedDownloadUrl(url: string, filename: string): string {
+  const params = new URLSearchParams({ url, filename });
+  return `${MOVIE_API_BASE_URL}/api/movies/download?${params.toString()}`;
+}
+
+/**
+ * Relay a subtitle file through the backend's `/api/subtitles` route.
+ *
+ * A `<track src>` is fetched with CORS, and archive.org's download nodes send
+ * neither `Access-Control-Allow-Origin` nor a WebVTT content type, so a raw
+ * archive.org link is rejected before any cue loads. The proxy also converts
+ * `.srt` upstreams, which a browser cannot render at all. Playing the returned
+ * URL directly is therefore the only way subtitles appear on screen.
+ */
+export function subtitleTrackUrl(url: string): string {
+  return `${MOVIE_API_BASE_URL}/api/subtitles?url=${encodeURIComponent(url)}`;
 }
 
 /**
@@ -308,6 +367,12 @@ function normalizeResolvedMovie(value: unknown): StreamMovie | null {
     ...(value.episodes && Array.isArray(value.episodes)
       ? { episodes: value.episodes }
       : {}),
+    // The resolver reports subtitle tracks, but this normalizer rebuilt the
+    // movie field by field and never copied them -- so the array reached the
+    // player as `undefined` no matter what the backend sent.
+    ...(sanitizeSubtitles(value.subtitles).length > 0
+      ? { subtitles: sanitizeSubtitles(value.subtitles) }
+      : {}),
     ...(value.mirrors && Array.isArray(value.mirrors)
       ? {
           mirrors: value.mirrors.filter((mirror): mirror is StreamMirror =>
@@ -445,6 +510,11 @@ export interface StreamSource {
   sources?: string[];
   /** Alternate servers the player can switch between. */
   mirrors: StreamMirror[];
+  /**
+   * WebVTT tracks for the chosen source. Only a direct archive.org source has
+   * these; an embed payload carries none.
+   */
+  subtitles?: StreamSubtitle[];
 }
 
 export interface GetStreamRequest {
@@ -468,6 +538,7 @@ function isGetStreamPayload(value: unknown): value is {
   activeSource: string;
   sources?: string[];
   mirrors: StreamMirror[];
+  subtitles?: StreamSubtitle[];
 } {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
@@ -542,7 +613,14 @@ export async function getStreamSource(
   const sources = Array.from(
     new Set(rawSources.filter((url): url is string => typeof url === "string" && url.length > 0))
   );
-  return { url: payload.activeSource, sources, mirrors };
+  const subtitles = sanitizeSubtitles(payload.subtitles);
+  return {
+    url: payload.activeSource,
+    sources,
+    mirrors,
+    // Only meaningful for a direct source; an embed payload carries none.
+    ...(subtitles.length > 0 ? { subtitles } : {}),
+  };
 }
 
 export interface MovieFeeds {

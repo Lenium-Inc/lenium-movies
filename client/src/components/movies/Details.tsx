@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Bookmark,
   Check,
+  Download,
+  Loader2,
   Play,
   Star,
   X,
@@ -18,15 +20,22 @@ import {
   fetchTrailer,
   fetchTrailerByTmdbId,
   getStreamSource,
+  proxiedDownloadUrl,
   resolveStream,
   StreamNotFoundError,
   type ResolvedStream,
   type StreamMovie,
   type TrailerInfo,
 } from "@/services/api";
+import {
+  buildDownloadFilename,
+  downloadUnavailableReason,
+  pickDownloadCandidate,
+} from "@/lib/downloadSource";
 import { EpisodeMatrix } from "@/components/movies/EpisodeMatrix";
 import { cancelInFlightPrefetch, prefetchForOpen } from "@/services/prefetch";
 import { attemptPlay } from "@/services/capGate";
+import { tmdbImage, type TmdbImageSize } from "@/lib/tmdbImages";
 import {
   getProgress,
   progressForTitle,
@@ -36,8 +45,11 @@ import type { Movie } from "./types";
 
 const TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p";
 
-function getImageUrl(path: string, size: string): string {
-  if (path.startsWith("http")) return path;
+/** Delegates to `tmdbImage` so the requested rendition actually takes effect.
+ *  The old `startsWith("http")` early return matched every backend-supplied
+ *  value, so the `original` backdrop below was served at the stored w1280. */
+function getImageUrl(path: string, size: TmdbImageSize): string {
+  if (path.startsWith("http")) return tmdbImage(path, size);
   return `${TMDB_IMAGE_BASE_URL}/${size}${path}`;
 }
 
@@ -59,6 +71,7 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
   const { user: authUser } = useAuth();
   const [resolved, setResolved] = useState<ResolvedStream | null>(null);
   const [resolving, setResolving] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [playError, setPlayError] = useState<string | null>(null);
   const [season, setSeason] = useState(1);
   const [episode, setEpisode] = useState(1);
@@ -227,6 +240,76 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
   };
 
   const showMainPlayButton = movie.mediaType !== "tv";
+
+  /**
+   * Save the resolved direct file to the user's device.
+   *
+   * Resolution is done on demand rather than reusing the Play path, because
+   * Play navigates away from this sheet and its resolved `playable` object is
+   * local to `resolveAndPlay`. A TV title resolves the specific episode the
+   * viewer is looking at so the download matches what is on screen.
+   *
+   * Sources that are not a single saveable file are reported rather than
+   * silently writing a 3 KB playlist or navigating the tab to a third-party
+   * page.
+   */
+  const handleDownload = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      const mediaType = resolveMediaType({ localMediaType: movie.mediaType });
+      let source: StreamMovie | null = resolved?.stream ?? null;
+
+      if (!source) {
+        source = (await resolveStream(movie.title, movie.year)).stream;
+      }
+      // A TV title's primary source is the S1E1 embed, so ask for the episode
+      // currently selected in the sheet.
+      if (mediaType === "tv" && /^\d+$/.test(source.id)) {
+        try {
+          const episodeSource = await getStreamSource({
+            tmdbId: source.id,
+            mediaType,
+            season,
+            episode,
+          });
+          source = {
+            ...source,
+            stream_url: episodeSource.url,
+            ...(episodeSource.sources ? { sources: episodeSource.sources } : {}),
+          };
+        } catch (error) {
+          console.warn(
+            `[Details] get-stream failed for download "${source.title}" (S${season}E${episode})`,
+            error
+          );
+        }
+      }
+
+      const candidate = pickDownloadCandidate(source);
+      if (candidate.kind !== "progressive") {
+        toast.error(downloadUnavailableReason(candidate));
+        return;
+      }
+
+      const filename = buildDownloadFilename(source, candidate);
+      // An anchor with a same-origin href lets the browser act on the
+      // `Content-Disposition: attachment` the backend returns.
+      const anchor = document.createElement("a");
+      anchor.href = proxiedDownloadUrl(candidate.url, filename);
+      anchor.rel = "noopener";
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      toast.success(`Downloading ${filename}`);
+    } catch (error) {
+      console.warn("[Details] download failed", error);
+      toast.error("Could not start the download. Please try again.");
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   const playEpisode = (targetSeason: number, targetEpisode: number) => {
     void resolveAndPlay(targetSeason, targetEpisode);
@@ -424,6 +507,21 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
                 <Bookmark className="h-4 w-4" />
               )}
               <span>{saved ? "In My List" : "Add to My List"}</span>
+            </button>
+            <button
+              onClick={() => {
+                void handleDownload();
+              }}
+              disabled={downloading}
+              aria-label="Download for offline viewing"
+              className="flex items-center gap-2 rounded-md border border-white/15 bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-600 focus-visible:ring-offset-2 focus-visible:ring-offset-black disabled:opacity-60"
+            >
+              {downloading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+              <span>{downloading ? "Preparing…" : "Download"}</span>
             </button>
             <button className="flex items-center gap-2 rounded-md border border-white/15 bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/10 transition-colors">
               <MessageSquare className="h-4 w-4" />

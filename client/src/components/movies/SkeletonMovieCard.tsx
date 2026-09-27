@@ -1,16 +1,17 @@
 /**
  * Skeleton placeholder matching the MovieCard layout.
  * Used for initial catalog load, genre switching, and search loading states.
+ *
+ * The card is the poster alone now -- the caption is overlaid on the artwork
+ * rather than sitting in a block beneath it -- so the skeleton is a bare 2:3
+ * tile at the same radius. The old two grey bars here stood in for a title
+ * block that no longer exists and made the grid jump on load.
  */
 export function SkeletonMovieCard() {
   return (
-    <article className="catalog-card group">
-      <div className="relative aspect-[2/3] overflow-hidden rounded-md bg-[#1a1a1f]">
+    <article className="movie-card">
+      <div className="relative aspect-[2/3] w-full overflow-hidden rounded-xl bg-[#1a1a1f]">
         <div className="absolute inset-0 bg-gradient-to-br from-[#1a1a1f] to-[#121214] animate-pulse" />
-      </div>
-      <div className="mt-2 space-y-1.5">
-        <div className="h-3 w-3/4 bg-[#1a1a1f] rounded animate-pulse" />
-        <div className="h-2 w-1/2 bg-[#1a1a1f] rounded animate-pulse" />
       </div>
     </article>
   );

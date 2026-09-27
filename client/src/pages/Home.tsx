@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { genreFilterOptions, INFINITE_VIEWS, useCatalog } from "@/hooks/useCatalog";
 import { Navbar } from "@/components/layout/Navbar";
 import { APPLY_SEARCH_EVENT } from "@/components/layout/NavbarSearch";
+import { tmdbImage } from "@/lib/tmdbImages";
 import {
   CatalogEmptyState,
   SearchStatusBar,
@@ -70,11 +71,10 @@ export default function Home() {
   const isBrowseView = INFINITE_VIEWS.has(view) && !isClientSearch;
 
   const heroBackdrop = heroActive?.backdrop;
-  const heroArtUrl = heroBackdrop
-    ? heroBackdrop.startsWith("http")
-      ? heroBackdrop
-      : `https://image.tmdb.org/t/p/original${heroBackdrop}`
-    : null;
+  // `tmdbImage` rewrites the size segment. The `startsWith("http")` branch this
+  // replaces matched every backend value and so handed back the stored w1280,
+  // upscaled to fill an 80vh wash across the full viewport width.
+  const heroArtUrl = heroBackdrop ? tmdbImage(heroBackdrop, "original") : null;
 
   return (
     <div className="min-h-screen bg-[#050505] text-[#FFFFFF]">

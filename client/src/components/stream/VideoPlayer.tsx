@@ -24,6 +24,7 @@ import {
 import Hls from "hls.js";
 import { formatPlayerTime } from "@/lib/format";
 import { titleUnavailable } from "@/lib/playbackCopy";
+import { subtitleTrackUrl, type StreamSubtitle } from "@/services/api";
 
 export interface StreamVariant {
   quality: string | null;
@@ -56,12 +57,52 @@ export const deriveHlsLevels = (
   return rungs.sort((a, b) => b.height - a.height);
 };
 
+/**
+ * Turn a resolver subtitle descriptor into the attributes a `<track>` needs.
+ *
+ * `src` deliberately points at the backend's `/api/subtitles` proxy rather than
+ * the raw archive.org link the resolver returns. A `<track>` is fetched with
+ * CORS, and Archive.org's download nodes send no `Access-Control-Allow-Origin`,
+ * so a direct link is rejected by the browser and no cue ever renders. Routing
+ * through the proxy is what makes the track load at all.
+ *
+ * `default` is only set for the first track: browsers auto-enable a
+ * `default` track, and several defaults means several languages overwrite each
+ * other. The menu still starts on "Off", so nothing is spoken over the audio
+ * until the viewer chooses.
+ */
+export interface SubtitleTrack {
+  key: string;
+  label: string;
+  srcLang: string;
+  src: string;
+  default: boolean;
+}
+
+export const buildSubtitleTracks = (
+  subtitles: StreamSubtitle[] = []
+): SubtitleTrack[] =>
+  subtitles
+    .filter(
+      (track): track is StreamSubtitle =>
+        Boolean(track?.url) && Boolean(track?.lang)
+    )
+    .map((track, index) => ({
+      key: `${track.lang}-${index}`,
+      label: track.label || track.lang,
+      srcLang: track.lang,
+      src: subtitleTrackUrl(track.url),
+      default: index === 0,
+    }));
+
 export interface VideoPlayerProps {
   streamUrl: string;
   title: string;
   poster: string;
   onClose: () => void;
   variants?: StreamVariant[];
+  /** WebVTT tracks resolved for the current source (see `/api/subtitles`). */
+  subtitles?: StreamSubtitle[];
   currentQuality?: string;
   onQualityChange?: (quality: string) => void;
   isLoading?: boolean;
@@ -86,6 +127,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   poster,
   onClose,
   variants = [],
+  subtitles = [],
   currentQuality: initialQuality = "Auto",
   onQualityChange,
   isLoading: externalIsLoading = false,
@@ -109,11 +151,45 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [hlsLevels, setHlsLevels] = useState<{ quality: string; height: number }[]>([]);
   const [hlsQuality, setHlsQuality] = useState<string>("Auto");
   const [posterSettled, setPosterSettled] = useState<boolean>(false);
+  // "Off" or a `srcLang` from `subtitleTracks`. Held as a language code rather
+  // than a label so two tracks sharing a display name stay distinguishable.
   const [currentSubtitles, setCurrentSubtitles] = useState<string>("Off");
+  const subtitleTracks = useMemo(
+    () => buildSubtitleTracks(subtitles),
+    [subtitles]
+  );
+  // `currentSubtitles` is a language code; the chip shows the human label.
+  const currentSubtitleLabel = useMemo(
+    () =>
+      currentSubtitles === "Off"
+        ? "Off"
+        : subtitleTracks.find(t => t.srcLang === currentSubtitles)?.label ??
+          currentSubtitles,
+    [currentSubtitles, subtitleTracks]
+  );
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [hasUserInteracted, setHasUserInteracted] = useState<boolean>(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
+
+  // Enabling a track is a property of the loaded media element, so it has to be
+  // reapplied whenever the element, the track list, or the selection changes --
+  // and again after `loadedmetadata`, because a source swap discards the modes
+  // that were set on the previous media.
+  const applySubtitleMode = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const list = video.textTracks;
+    for (let i = 0; i < list.length; i += 1) {
+      const track = list[i];
+      const shouldShow = currentSubtitles !== "Off" && track.language === currentSubtitles;
+      track.mode = shouldShow ? "showing" : "disabled";
+    }
+  }, [currentSubtitles]);
+
+  useEffect(() => {
+    applySubtitleMode();
+  }, [applySubtitleMode, subtitleTracks, streamUrl]);
   const playerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const canvasCtxRef = useRef<CanvasRenderingContext2D | null>(null);
@@ -761,7 +837,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         controlsList="nodownload noplaybackrate"
         disablePictureInPicture
         onDragStart={preventContextMenu}
-      />
+      >
+        {subtitleTracks.map(track => (
+          <track
+            key={track.key}
+            kind="subtitles"
+            src={track.src}
+            srcLang={track.srcLang}
+            label={track.label}
+            default={track.default}
+          />
+        ))}
+      </video>
 
       <div
         className={`absolute top-0 inset-x-0 p-4 bg-gradient-to-b from-black/80 via-black/40 to-transparent flex items-center justify-end transition-opacity duration-300 z-30 ${
@@ -875,7 +962,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 aria-label="Audio & Subtitles"
               >
                 <Languages className="w-4 h-4" />
-                <span>{currentSubtitles}</span>
+                <span>{currentSubtitleLabel}</span>
               </button>
               {subtitleMenuOpen && (
                 <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-56 bg-zinc-900 border border-white/10 rounded-lg shadow-xl overflow-hidden py-1 z-50">
@@ -897,28 +984,38 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       </button>
                     </div>
                   </div>
+                  {subtitleTracks.length > 0 && (
                   <div className="px-4 py-2">
                     <p className="text-xs font-semibold text-white/60 uppercase tracking-wider mb-2">
                       Subtitles
                     </p>
                     <div className="space-y-1 max-h-48 overflow-y-auto">
-                      {["Off", "English", "Spanish", "French"].map((sub) => (
-                        <button
-                          key={sub}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setCurrentSubtitles(sub);
-                            setSubtitleMenuOpen(false);
-                          }}
-                          className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors ${
-                            currentSubtitles === sub ? "text-violet-500 font-bold" : "text-white"
-                          }`}
-                        >
-                          {sub}
-                        </button>
-                      ))}
+                      {["Off", ...subtitleTracks.map(t => t.srcLang)].map(sub => {
+                        const label =
+                          sub === "Off"
+                            ? "Off"
+                            : subtitleTracks.find(t => t.srcLang === sub)?.label ?? sub;
+                        return (
+                          <button
+                            key={sub}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setCurrentSubtitles(sub);
+                              setSubtitleMenuOpen(false);
+                            }}
+                            className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors ${
+                              currentSubtitles === sub
+                                ? "text-violet-500 font-bold"
+                                : "text-white"
+                            }`}
+                          >
+                            {label}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
+                  )}
                 </div>
               )}
             </div>

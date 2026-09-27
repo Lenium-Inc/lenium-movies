@@ -36,6 +36,7 @@ import {
   getStreamSource,
   MOVIE_RESOLVE_TIMEOUT_MS,
   resolveStream,
+  sanitizeSubtitles,
   StreamNotFoundError,
   StreamTimeoutError,
   type ResolvedStream,
@@ -85,6 +86,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { isExternalEmbedUrl } from "@/lib/streamUtils";
+import { tmdbImage, type TmdbImageSize } from "@/lib/tmdbImages";
 import { useAuth } from "@/context/AuthContext";
 import { apiHistoryAdd } from "@/services/auth";
 import {
@@ -96,8 +98,11 @@ import { toast } from "sonner";
 
 const TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p";
 
-function getImageUrl(path: string, size: string): string {
-  if (path?.startsWith("http")) return path;
+/** Delegates to `tmdbImage` so the requested rendition actually takes effect.
+ *  The old `startsWith("http")` early return matched every backend-supplied
+ *  value, so the `original` calls below were silently served the stored w780. */
+function getImageUrl(path: string, size: TmdbImageSize): string {
+  if (path?.startsWith("http")) return tmdbImage(path, size);
   return path ? `${TMDB_IMAGE_BASE_URL}/${size}${path}` : "";
 }
 
@@ -552,6 +557,10 @@ export function WatchPage() {
               stream_url: source.url,
               sources: source.sources,
               mirrors: source.mirrors,
+              // /api/get-stream reports the tracks for the source it just
+              // picked. Dropping them here left the player with subtitles only
+              // when the resolve call happened to be the one that won.
+              ...(source.subtitles ? { subtitles: source.subtitles } : {}),
               season: targetSeason,
               episode: targetEpisode,
             };
@@ -926,6 +935,7 @@ export function WatchPage() {
                     stream_url: source.url,
                     sources: source.sources,
                     mirrors: source.mirrors,
+                    ...(source.subtitles ? { subtitles: source.subtitles } : {}),
                   },
                 }
               : prev
@@ -1123,6 +1133,14 @@ export function WatchPage() {
       });
   }, [resolved]);
 
+  // WebVTT tracks for the source currently in the player. Subtitle selection
+  // lives inside the player, so the list is keyed off the resolved source and
+  // is swapped whenever a new source is adopted.
+  const streamSubtitles = useMemo(
+    () => sanitizeSubtitles(resolved?.stream?.subtitles),
+    [resolved?.stream?.subtitles]
+  );
+
   // Show loading state with skeleton
   if (movieLoading) {
     return (
@@ -1245,6 +1263,7 @@ export function WatchPage() {
                         poster={streamPoster}
                         onClose={handleClose}
                         variants={qualityVariants}
+                        subtitles={streamSubtitles}
                         currentQuality={qualityVariants.find(v => v.quality)?.quality || "Auto"}
                         onQualityChange={(q) => {}}
                         isLoading={resolving}

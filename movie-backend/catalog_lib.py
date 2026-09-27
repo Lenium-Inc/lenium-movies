@@ -134,6 +134,32 @@ def open_archive_stream(url: str, range_header: str | None):
     return response.status, headers_out, chunks()
 
 
+def fetch_bounded_text(url: str, timeout: float, max_bytes: int) -> str:
+    """Fetch a small text file, enforcing the archive.org allowlist and a byte cap.
+
+    Subtitle files are tens of KB, so the cap is a hard ceiling rather than a
+    budget: without it this helper would happily pull an arbitrarily large
+    object through a route that exists to return a caption track. Rejects a body
+    that exceeds the cap instead of truncating it, because a silently clipped
+    caption file would fail part-way through playback with no visible cause.
+
+    Kept beside `open_archive_stream` so both routes share one allowlist check
+    rather than each restating it.
+    """
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https") or parsed.netloc not in STREAM_HOST_ALLOWLIST:
+        raise ValueError("URL must be an archive.org download")
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": UA, "Accept": "text/vtt, text/plain, */*"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        raw = response.read(max_bytes + 1)
+    if len(raw) > max_bytes:
+        raise ValueError("file exceeds the maximum subtitle size")
+    return raw.decode("utf-8", errors="replace")
+
+
 def clean_title(raw: str | None) -> str:
     title = re.sub(r"\s+", " ", (raw or "").strip())
     title = re.sub(r"\s*[(\[]?(?:19|20)\d{2}[)\]]?$", "", title)
@@ -234,26 +260,138 @@ LANG_CODES = {
 }
 
 
-def choose_subtitles(files: list[dict], identifier: str) -> list[dict]:
-    """Best-effort WebVTT subtitles for an item.
+# `.srt` is accepted and converted, not just `.vtt`.
+#
+# A <track> element can only consume WebVTT, and the majority of Archive.org
+# caption files are `.srt` (their ASR pipeline emits SRT). Filtering to `.vtt`
+# alone therefore threw away nearly every real subtitle track on the site --
+# the menu had nothing to offer even once the frontend was fixed. Conversion is
+# cheap and lossless for caption text, so `.srt` is now a first-class source.
+SUBTITLE_EXTENSIONS = (".vtt", ".srt")
 
-    Only `.vtt` files can drive a native <video> <track> element (SRT is not
-    supported by browsers). A language code embedded in the filename (e.g.
-    `.._eng.vtt`) becomes the label; otherwise the item defaults to English.
+# `00:00:09,000 --> 00:00:15,001` (SRT) uses a comma before milliseconds;
+# WebVTT requires a dot. Matched loosely so a malformed cue is passed through
+# untouched rather than dropped.
+_SRT_CUE_TIMING = re.compile(
+    r"(\d{1,2}:)?(\d{1,2}:\d{1,2})[,.](\d{1,3})\s*-->\s*"
+    r"(\d{1,2}:)?(\d{1,2}:\d{1,2})[,.](\d{1,3})"
+)
+
+
+def _vtt_timestamp(match: re.Match) -> str:
+    """Rewrite one SRT timing line into WebVTT form.
+
+    The pattern captures six groups per cue: optional hours, `mm:ss`, then
+    milliseconds -- twice.
+    """
+    h1, clock1, ms1, h2, clock2, ms2 = match.groups()
+    # SRT writes exactly three millisecond digits; files in the wild use one or
+    # two, so pad rather than trust.
+    return (
+        f"{h1 or '00:'}{clock1}.{ms1.ljust(3, '0')} --> "
+        f"{h2 or '00:'}{clock2}.{ms2.ljust(3, '0')}"
+    )
+
+
+def srt_to_vtt(text: str) -> str:
+    """Convert SubRip (`.srt`) text to WebVTT.
+
+    Three differences matter to a browser:
+      - the `WEBVTT` signature line must come first
+      - timings use `.` not `,` before milliseconds
+      - the numeric sequence line before each cue is not part of WebVTT
+
+    Blank lines between cues are preserved because they delimit cues.
+    """
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n").lstrip("\ufeff")
+    if normalized.lstrip().upper().startswith("WEBVTT"):
+        # Already WebVTT (some items ship a .srt extension but VTT content).
+        return normalized if normalized.startswith("WEBVTT") else "WEBVTT\n" + normalized
+
+    lines = normalized.split("\n")
+    out: list[str] = ["WEBVTT", ""]
+    for index, line in enumerate(lines):
+        match = _SRT_CUE_TIMING.search(line)
+        if match:
+            out.append(_vtt_timestamp(match))
+            continue
+        # Drop SRT's per-cue sequence numbers: a bare integer on its own line.
+        #
+        # Only when it directly precedes a timing line. Testing `isdigit()` on
+        # its own would also delete a caption whose text happens to be a number
+        # -- a year, a countdown, a price -- which is real dialogue and would
+        # vanish from the file with no error.
+        stripped = line.strip()
+        if stripped.isdigit():
+            following = next(
+                (nxt.strip() for nxt in lines[index + 1 :] if nxt.strip()),
+                "",
+            )
+            if _SRT_CUE_TIMING.search(following):
+                continue
+        out.append(line)
+    return "\n".join(out).rstrip() + "\n"
+
+
+# A standalone ISO 639-2 code inside a filename stem: not adjacent to any other
+# letter, so `Movie.spa.vtt` yields `spa` while `Movie.vtt` yields nothing.
+LANG_TOKEN = re.compile(r"(?<![a-z])([a-z]{3})(?![a-z])")
+
+
+def choose_subtitles(files: list[dict], identifier: str) -> list[dict]:
+    """Best-effort subtitles for an item, as WebVTT-track descriptors.
+
+    A language code embedded in the filename (e.g. `.._eng.vtt`) becomes the
+    label; otherwise the item defaults to English. `format` records the upstream
+    container so the serving route knows whether conversion is required --
+    `text/vtt` responses are passed through untouched.
     """
     blocked = ("thumb", "_djvu", "__ia", "sample", "trailer")
     seen: set[str] = set()
     subtitles: list[dict] = []
-    for file in files:
+
+    # `.vtt` before `.srt`: when an item ships both for one language, the
+    # native WebVTT is the better source (no conversion, no re-timing risk), so
+    # it has to be seen first or the first-seen dedup keeps the SRT instead.
+    ordered = sorted(
+        files,
+        key=lambda f: next(
+            (
+                SUBTITLE_EXTENSIONS.index(ext)
+                for ext in SUBTITLE_EXTENSIONS
+                if str(f.get("name") or "").lower().endswith(ext)
+            ),
+            len(SUBTITLE_EXTENSIONS),
+        ),
+    )
+
+    for file in ordered:
         name = str(file.get("name") or "")
         lowered = name.lower()
-        if not lowered.endswith(".vtt"):
+        if not lowered.endswith(SUBTITLE_EXTENSIONS):
             continue
         if any(token in lowered for token in blocked):
             continue
-        stem = lowered[:-4]
-        code_match = re.search(r"(?:^|[\W_])*([a-z]{3})(?:[\W_]|$)", stem)
-        key = code_match.group(1) if code_match and code_match.group(1) in LANG_CODES else "eng"
+        ext = next(e for e in SUBTITLE_EXTENSIONS if lowered.endswith(e))
+        stem = lowered[: -len(ext)]
+        # The language code must be a standalone 3-letter token.
+        #
+        # A leading `(?:^|[^a-z])*` looks equivalent but is not: the `*` allows
+        # zero separators, so the leftmost match inside a plain stem like
+        # "movie" was "vie" from the middle of the word. That never appears in
+        # LANG_CODES, so every such file silently fell back to English and a
+        # Spanish track was labelled "English". Requiring non-letters on both
+        # sides is what makes `Movie.spa.vtt` resolve to `spa`.
+        code_match = LANG_TOKEN.search(stem)
+        # The token must be a code we can name. `Movie.asr.srt` yields "asr"
+        # (automatic speech recognition), which is not a language, and is
+        # extremely common on Archive.org -- indexing it blindly raises
+        # KeyError below and takes out the whole resolve.
+        key = (
+            code_match.group(1)
+            if code_match and code_match.group(1) in LANG_CODES
+            else "eng"
+        )
         if key in seen:
             continue
         seen.add(key)
@@ -262,6 +400,7 @@ def choose_subtitles(files: list[dict], identifier: str) -> list[dict]:
                 "label": LANG_CODES[key],
                 "lang": key,
                 "url": stream_download_url(identifier, name),
+                "format": ext.lstrip("."),
             }
         )
     return subtitles

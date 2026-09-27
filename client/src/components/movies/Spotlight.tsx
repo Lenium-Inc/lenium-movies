@@ -18,8 +18,7 @@ import { fetchTrailerByTmdbId, type TrailerInfo } from "@/services/api";
 import type { Movie } from "./types";
 import { formatRuntime } from "@/lib/format";
 import { glowBackground, glowPalette } from "@/lib/glow";
-
-const TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p";
+import { tmdbImage } from "@/lib/tmdbImages";
 
 interface SpotlightProps {
   items: readonly Movie[];
@@ -34,8 +33,13 @@ const EASE = [0.32, 0.72, 0, 1] as const;
 
 function getBackdropUrl(backdrop: string | null | undefined): string | null {
   if (!backdrop) return null;
-  if (backdrop.startsWith("http")) return backdrop;
-  return `${TMDB_IMAGE_BASE_URL}/original${backdrop}`;
+  // `tmdbImage` re-points the size segment rather than trusting the url it was
+  // handed. The backend bakes w1280 into the stored string, and the previous
+  // `startsWith("http")` bail-out therefore matched every real value and
+  // returned it unchanged -- the hero was showing the stored 1280px rendition
+  // no matter what this function intended to ask for.
+  const url = tmdbImage(backdrop, "original");
+  return url || null;
 }
 
 function embedUrl(trailer: TrailerInfo, muted: boolean): string {
