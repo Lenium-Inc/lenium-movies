@@ -335,7 +335,7 @@ def srt_to_vtt(text: str) -> str:
 
 # A standalone ISO 639-2 code inside a filename stem: not adjacent to any other
 # letter, so `Movie.spa.vtt` yields `spa` while `Movie.vtt` yields nothing.
-LANG_TOKEN = re.compile(r"(?<![a-z])([a-z]{3})(?![a-z])")
+LANG_CODE_RE = re.compile(r"(?<![a-z])([a-z]{3})(?![a-z])")
 
 
 def choose_subtitles(files: list[dict], identifier: str) -> list[dict]:
@@ -382,7 +382,7 @@ def choose_subtitles(files: list[dict], identifier: str) -> list[dict]:
         # LANG_CODES, so every such file silently fell back to English and a
         # Spanish track was labelled "English". Requiring non-letters on both
         # sides is what makes `Movie.spa.vtt` resolve to `spa`.
-        code_match = LANG_TOKEN.search(stem)
+        code_match = LANG_CODE_RE.search(stem)
         # The token must be a code we can name. `Movie.asr.srt` yields "asr"
         # (automatic speech recognition), which is not a language, and is
         # extremely common on Archive.org -- indexing it blindly raises

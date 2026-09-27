@@ -92,6 +92,13 @@ ALLOW = ("data-cf-beacon",)
 
 MIN_LEN = 16
 
+# The scanner's own detection patterns are quoted regexes that necessarily spell
+# out the credential names rule 3 hunts for, so rule 3 flags this file for
+# containing its own patterns. SELF exempts it from rule 3 only -- the PEM and
+# prefix rules still run on this file, so a real key pasted in here is still
+# caught. A blanket file skip would not be worth the loss of coverage.
+SELF = Path(__file__).resolve()
+
 
 def looks_secret(value: str) -> bool:
     if any(a in value for a in ALLOW):
@@ -125,6 +132,7 @@ def main() -> int:
         path = Path(rel)
         if not path.is_file():
             continue
+        scan_rule3 = path.resolve() != SELF
         try:
             text = path.read_text(encoding="utf-8", errors="ignore")
         except OSError:
@@ -139,7 +147,7 @@ def main() -> int:
             elif (m := PREFIX.search(line)) is not None:
                 hit = (f"credential prefix {m.group(0)[:10]}…", "")
             else:
-                if CRED_NAME.search(line):
+                if scan_rule3 and CRED_NAME.search(line):
                     for m in LITERAL.finditer(line):
                         value = m.group(1)
                         if looks_secret(value):
