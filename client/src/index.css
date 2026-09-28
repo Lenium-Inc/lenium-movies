@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,500;1,600&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap");
 @import "tailwindcss";
 @import "tw-animate-css";
 
@@ -68,6 +68,181 @@ button {
 .font-display {
   font-family: "Playfair Display", Georgia, serif;
 }
+
+/* ==========================================================================
+   The booth — projection-booth tokens for the auth surfaces.
+
+   The rest of the app is the auditorium: cool, violet-lit, near-black. The
+   sign-in screens are back of house, lit by the one warm light source in a
+   cinema. Keeping the ground deliberately COLD is what makes the accent read
+   as emitted light rather than as pigment — the same warmth as a cream-and-
+   terracotta palette, inverted onto black.
+   ========================================================================== */
+:root {
+  --booth-void: #08080a; /* the dark booth */
+  --booth-carbon: #131317; /* panel behind the gate */
+  --lamp: #ffe7c2; /* xenon lamp: warm amber-white, the only accent */
+  --lamp-core: #ffae5c; /* hot core: hover, and the leading edge of the beam */
+  --booth-dust: #8b8677; /* warm grey, for everything secondary */
+  --signal: #6fd4a8; /* "signal locked" green — confirmed states only */
+}
+
+.font-tech {
+  font-family: "Space Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+/* The gate: a hairline frame with L-shaped registration marks at each corner,
+   the way a frame is aligned on a ground glass. Drawn with background
+   gradients so it needs no extra elements in the DOM. */
+.ln-gate::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  --mark: 13px;
+  --tick: rgba(255, 231, 194, 0.42);
+  background:
+    linear-gradient(var(--tick), var(--tick)) 0 0 / var(--mark) 1px no-repeat,
+    linear-gradient(var(--tick), var(--tick)) 0 0 / 1px var(--mark) no-repeat,
+    linear-gradient(var(--tick), var(--tick)) 100% 0 / var(--mark) 1px no-repeat,
+    linear-gradient(var(--tick), var(--tick)) 100% 0 / 1px var(--mark) no-repeat,
+    linear-gradient(var(--tick), var(--tick)) 0 100% / var(--mark) 1px
+      no-repeat,
+    linear-gradient(var(--tick), var(--tick)) 0 100% / 1px var(--mark)
+      no-repeat,
+    linear-gradient(var(--tick), var(--tick)) 100% 100% / var(--mark) 1px
+      no-repeat,
+    linear-gradient(var(--tick), var(--tick)) 100% 100% / 1px var(--mark)
+      no-repeat;
+  animation: ln-register 820ms var(--ease-out) both;
+}
+
+/* The frame aligns itself on load — the one orchestrated entrance. */
+@keyframes ln-register {
+  from {
+    opacity: 0;
+    transform: scale(1.014);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Fields set in sequence, once, on mount. */
+@keyframes ln-set {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.ln-set {
+  animation: ln-set 520ms var(--ease-out) both;
+}
+
+/* The exposure: a band of shadow travelling across a lit button, the way a
+   single frame crosses the gate while the picture is running. */
+@keyframes ln-frame-pass {
+  from {
+    transform: translateX(-130%);
+  }
+  to {
+    transform: translateX(130%);
+  }
+}
+.ln-expose[data-state="running"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    100deg,
+    transparent 28%,
+    rgba(8, 8, 10, 0.22) 44%,
+    rgba(8, 8, 10, 0.42) 50%,
+    rgba(8, 8, 10, 0.22) 56%,
+    transparent 72%
+  );
+  animation: ln-frame-pass 1.15s cubic-bezier(0.45, 0, 0.35, 1) infinite;
+}
+
+/* The rail under the button fills for the length of the request. */
+@keyframes ln-rail {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+.ln-rail {
+  transform-origin: left center;
+  animation: ln-rail 1.4s var(--ease-out) infinite;
+}
+
+/* The 404's stalled light path. Static on purpose: a blinking segment would
+   read as an error indicator and flickers for no reason. */
+.ln-stall {
+  box-shadow: 0 0 12px rgba(255, 174, 92, 0.35);
+}
+
+/* A field is a bordered wrapper with the control inside it, so focus is caught
+   with :focus-within rather than :focus. The lamp catches the edge of the
+   frame; the error state owns the border colour so the two never fight. */
+.ln-field {
+  position: relative;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.45);
+  transition:
+    border-color 200ms,
+    background-color 200ms;
+}
+.ln-field:hover {
+  border-color: rgba(255, 255, 255, 0.25);
+}
+.ln-field:focus-within {
+  border-color: rgba(255, 231, 194, 0.55);
+  background: rgba(255, 231, 194, 0.04);
+}
+/* Keyboard focus needs a ring the eye can find, and it must sit outside the
+   border the wrapper already draws. */
+.ln-field:focus-within:has(:focus-visible) {
+  outline: 2px solid var(--lamp);
+  outline-offset: 2px;
+}
+.ln-field[data-invalid="true"] {
+  border-color: rgba(251, 113, 133, 0.6);
+  background: rgba(244, 63, 94, 0.07);
+}
+/* iOS Safari zooms in on any focused input under 16px and will not zoom back
+   out, which leaves the gate off screen. Hold the type size on small screens;
+   desktop keeps 15px. */
+@media (max-width: 767px) {
+  .ln-field input {
+    font-size: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ln-gate::before,
+  .ln-set,
+  .ln-rail,
+  .ln-expose[data-state="running"]::after {
+    animation: none;
+  }
+  .ln-gate::before {
+    opacity: 1;
+  }
+  .ln-rail {
+    transform: scaleX(0.7);
+  }
+}
+
 .no-scrollbar {
   scrollbar-width: none;
 }

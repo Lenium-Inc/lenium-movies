@@ -123,6 +123,23 @@ export const STREAM_QUALITY_ORDER: StreamQuality[] = [
 ];
 
 /**
+ * Nearest quality rung for a real video height. This is an explicit ladder
+ * rather than a comparison against `STREAM_QUALITY_ORDER`: the order array
+ * holds labels like "4K" and "1080p", and `Number.parseInt("4K", 10)` is 4, so
+ * every height from 4 upward would have matched "4K".
+ */
+export function qualityFromHeight(height: number): StreamQuality {
+  // An absent or zero height tells us nothing, so hold the neutral rung
+  // rather than claiming a resolution the stream may well exceed.
+  if (!Number.isFinite(height) || height <= 0) return "480p";
+  if (height >= 2000) return "4K";
+  if (height >= 900) return "1080p";
+  if (height >= 600) return "720p";
+  if (height >= 400) return "480p";
+  return "320p";
+}
+
+/**
  * Return the movie's requested quality variant, preferring the largest tier no
  * higher than the player's preload budget. Falls back to `stream_url` (the
  * backend's default, generally the fastest-start tier).
@@ -392,10 +409,7 @@ function normalizeResolvedMovie(value: unknown): StreamMovie | null {
                 typeof record.quality === "string" ? record.quality : "";
               const quality =
                 STREAM_QUALITY_ORDER.find((q) => label.includes(q)) ??
-                STREAM_QUALITY_ORDER.find(
-                  (q) => height >= Number.parseInt(q, 10)
-                ) ??
-                "480p";
+                qualityFromHeight(height);
               return {
                 url: record.url,
                 quality,
