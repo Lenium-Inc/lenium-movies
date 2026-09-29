@@ -3,8 +3,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getStreamSource,
   STREAM_RESOLVE_TIMEOUT_MS,
+  StreamExhaustedError,
   StreamTimeoutError,
 } from "./api";
+
+const jsonResponse = (status: number, body: unknown) => ({
+  ok: status >= 200 && status < 300,
+  status,
+  json: async () => body,
+});
+
+/** Await a rejection and return it typed, so assertions can read its fields. */
+async function rejection(promise: Promise<unknown>): Promise<StreamExhaustedError> {
+  const settled = await promise.then(
+    () => null,
+    (error: unknown) => error
+  );
+  if (settled === null) throw new Error("expected the request to reject, but it resolved");
+  return settled as StreamExhaustedError;
+}
 
 /**
  * The Watch page decides whether to show the error screen by error type, not
@@ -108,5 +125,96 @@ describe("getStreamSource timeout handling", () => {
     expect(url).toContain("tmdb_id=1399");
     expect(url).toContain("season=2");
     expect(url).toContain("episode=5");
+  });
+});
+
+/**
+ * A 503 from `/api/get-stream` is the backend reporting that it walked the
+ * entire provider chain and found nothing. It has to be distinguishable from a
+ * transport error, because the Watch page's response to the two is opposite:
+ * a transport error is worth retrying, an exhausted chain is a final answer and
+ * re-asking only re-walks providers that already failed.
+ */
+describe("getStreamSource provider exhaustion", () => {
+  beforeEach(() => {
+    vi.stubEnv("VITE_MOVIE_API_BASE_URL", "https://backend.test");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("throws StreamExhaustedError, not a generic error, on a 503", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(503, { success: false, available: false }))
+    );
+
+    const pending = getStreamSource({ tmdbId: "603", mediaType: "movie" });
+    await expect(pending).rejects.toBeInstanceOf(StreamExhaustedError);
+    // A cold start must never be satisfied by this path.
+    await expect(pending).rejects.not.toBeInstanceOf(StreamTimeoutError);
+  });
+
+  it("carries the per-provider diagnostics so the terminal state explains itself", async () => {
+    const attempts = [
+      { id: "archive_direct", kind: "direct", outcome: "empty" },
+      { id: "vidsrc", kind: "embed", outcome: "unreachable" },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(503, { success: false, provider_attempts: attempts }))
+    );
+
+    const error = await rejection(getStreamSource({ tmdbId: "603", mediaType: "movie" }));
+    expect(error).toBeInstanceOf(StreamExhaustedError);
+    expect(error.providerAttempts).toEqual(attempts);
+  });
+
+  it("still reports exhaustion when the 503 body is unreadable", async () => {
+    // A proxy in front of the backend can replace the body with its own error
+    // page. The status alone is the decision, so the parse failure must not
+    // downgrade it into a retryable transport error.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: false,
+        status: 503,
+        json: async () => {
+          throw new SyntaxError("Unexpected token <");
+        },
+      }))
+    );
+
+    const error = await rejection(getStreamSource({ tmdbId: "603", mediaType: "movie" }));
+    expect(error).toBeInstanceOf(StreamExhaustedError);
+    expect(error.providerAttempts).toEqual([]);
+  });
+
+  it("rejects a 200 that says available:false rather than parsing it as a source", async () => {
+    // `isGetStreamPayload` only requires `success` and a string `activeSource`,
+    // so a defensive backend could return an empty url with success:true. That
+    // must not reach the player as a source that can never play.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse(200, { success: true, available: false, activeSource: "", mirrors: [] })
+      )
+    );
+
+    await expect(getStreamSource({ tmdbId: "603", mediaType: "movie" })).rejects.toBeInstanceOf(
+      StreamExhaustedError
+    );
+  });
+
+  it("leaves other 5xx statuses retryable", async () => {
+    // Only 503 carries the "I tried everything" meaning. A 502 means something
+    // upstream broke, which is exactly the case the retry budget exists for.
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(502, { success: false })));
+
+    await expect(
+      getStreamSource({ tmdbId: "603", mediaType: "movie" })
+    ).rejects.not.toBeInstanceOf(StreamExhaustedError);
   });
 });

@@ -11,11 +11,17 @@
  *    playback -- so the choice offered here is "accept" or "essential only",
  *    and essential-only is a real, working option.
  *
- * 2. **Third-party embeds.** When no direct source resolves, playback loads an
- *    <iframe> from an external provider, and *that* provider can set its own
- *    cookies. This is the part the viewer actually has a say over, which is why
- *    "essential only" keeps them out: the app then refuses to load an embed
- *    frame and says so, rather than silently setting someone else's cookies.
+ * 2. **Third-party embeds.** When no directly playable source resolves, playback
+ *    loads an <iframe> from an external provider, and *that* provider can set its
+ *    own cookies. This is the part worth naming, because it is the only place
+ *    another party is involved.
+ *
+ * The banner used to gate those embeds: picking "essential only" made the player
+ * refuse to load a frame. Provider failover is now the backend's decision, so a
+ * gate here would mean a viewer whose title only has an embed available simply
+ * cannot watch it -- which the notice would be describing accurately and nobody
+ * would want. The choice is therefore recorded as a notice about what happens,
+ * not as a switch that changes behaviour, and the copy says so.
  *
  * Consent is stored locally under `freestream-consent-v1`. There is no backend
  * to record it against, so this is a stated limitation rather than a silent
@@ -40,8 +46,6 @@ export function CookieBanner() {
   }, []);
 
   const choose = (choice: "accepted" | "essential") => {
-    // Persisting the choice is also what lifts the gate on third-party embed
-    // frames, so the two must not be tracked separately.
     setEmbedConsent(choice);
     setVisible(false);
   };
@@ -64,10 +68,10 @@ export function CookieBanner() {
           advertising or cross-site tracking cookies.
         </p>
         <p className="mt-2 text-xs leading-relaxed text-white/60 sm:text-sm">
-          If no direct stream is available, playback loads a video frame from an
-          external provider, which may set its own cookies. Choosing{" "}
-          <span className="text-white/80">Essential only</span> keeps those
-          frames out and disables embed playback.
+          When a title has no directly playable stream, playback loads a video
+          frame from an external provider, which may set its own cookies. We
+          choose the provider for you; you can see which one is in use from the
+          tabs above the player.
         </p>
 
         <div className="mt-4 flex flex-wrap items-center gap-2">

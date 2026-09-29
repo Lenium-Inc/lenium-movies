@@ -99,6 +99,12 @@ export interface StreamMovie {
   episode?: number;
   /** Alternate embed sources returned by `/api/get-stream`. */
   mirrors?: StreamMirror[];
+  /**
+   * The backend's provider chain settled on a third-party iframe rather than a
+   * directly playable file. Optional because catalog listings carry no stream at
+   * all, so "not an embed" and "no stream yet" are genuinely different.
+   */
+  is_embed?: boolean;
   /** Ordered playable source candidates (primary first) for auto-cycling. */
   sources?: string[];
   /** Backdrop image URL from TMDB (original size). */
@@ -320,6 +326,27 @@ export class StreamNotFoundError extends Error {
   }
 }
 
+/**
+ * Thrown when the backend walked every configured provider and none of them
+ * could serve the title (HTTP 503 from `/api/get-stream`).
+ *
+ * This is deliberately distinct from a transport error. A 503 is the resolver
+ * reporting a *decision* -- the whole chain was tried -- so retrying it can only
+ * re-walk providers that already failed. Treating it as a generic error made
+ * the client burn its whole retry budget re-asking a question that was already
+ * answered, delaying the terminal state by several long round-trips.
+ */
+export class StreamExhaustedError extends Error {
+  /** Per-provider outcome from the chain, for diagnostics. */
+  readonly providerAttempts: unknown[];
+
+  constructor(attempts: unknown[] = []) {
+    super("Every stream provider failed for this title");
+    this.name = "StreamExhaustedError";
+    this.providerAttempts = attempts;
+  }
+}
+
 /** Normalize the year the backend reports (string when it came from TMDB). */
 function toStreamYear(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -376,6 +403,12 @@ function normalizeResolvedMovie(value: unknown): StreamMovie | null {
         ? value.episodes_per_season
         : Number(value.episodes_per_season) || 1,
     overview: typeof value.overview === "string" ? value.overview : "",
+    // The backend's provider chain reports which tier settled the title, so the
+    // page can render an embed without re-deriving it from the host. Carried
+    // through here for the same reason as `subtitles` and `streams` below: this
+    // normalizer rebuilds the movie field by field, so any field it forgets to
+    // copy silently disappears.
+    is_embed: value.is_embed === true,
     vote_average:
       typeof value.vote_average === "number" ? value.vote_average : undefined,
     popularity:
@@ -563,6 +596,13 @@ export interface StreamSource {
    * these; an embed payload carries none.
    */
   subtitles?: StreamSubtitle[];
+  /**
+   * The backend's chain settled on a third-party iframe player. The client
+   * renders it directly rather than requiring a "Try another source" click.
+   */
+  isEmbed?: boolean;
+  /** Id of the provider that served this source. */
+  provider?: string;
 }
 
 export interface GetStreamRequest {
@@ -583,10 +623,13 @@ export interface GetStreamRequest {
 
 function isGetStreamPayload(value: unknown): value is {
   success: boolean;
+  available?: boolean;
   activeSource: string;
   sources?: string[];
   mirrors: StreamMirror[];
   subtitles?: StreamSubtitle[];
+  is_embed?: boolean;
+  provider?: string;
 } {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
@@ -647,11 +690,30 @@ export async function getStreamSource(
     STREAM_RESOLVE_TIMEOUT_MS
   );
   if (!response.ok) {
+    // 503 is the backend's "I tried everything" answer, not a broken request.
+    // Read the per-provider diagnostics off the body so the terminal state can
+    // explain itself without a second round-trip.
+    if (response.status === 503) {
+      let attempts: unknown[] = [];
+      try {
+        const body: unknown = await response.json();
+        if (typeof body === "object" && body !== null) {
+          const raw = (body as Record<string, unknown>).provider_attempts;
+          if (Array.isArray(raw)) attempts = raw;
+        }
+      } catch {
+        // A 503 with no parseable body is still a terminal answer.
+      }
+      throw new StreamExhaustedError(attempts);
+    }
     throw new Error(`Movie backend responded with status ${response.status}`);
   }
   const payload: unknown = await response.json();
   if (!isGetStreamPayload(payload)) {
     throw new Error("Movie backend returned an unexpected get-stream shape");
+  }
+  if (payload.available === false) {
+    throw new StreamExhaustedError();
   }
   const mirrors = Array.isArray(payload.mirrors) ? payload.mirrors : [];
   const rawSources =
@@ -666,6 +728,15 @@ export async function getStreamSource(
     url: payload.activeSource,
     sources,
     mirrors,
+    /**
+     * True when the backend's provider chain settled on a third-party iframe
+     * rather than a directly playable file. The backend walks the chain
+     * server-side, so the client no longer has to infer this from the host --
+     * it just renders whatever the resolver picked, embed or not.
+     */
+    isEmbed: payload.is_embed === true,
+    /** Id of the provider that served this source, for diagnostics. */
+    provider: typeof payload.provider === "string" ? payload.provider : undefined,
     // Only meaningful for a direct source; an embed payload carries none.
     ...(subtitles.length > 0 ? { subtitles } : {}),
   };

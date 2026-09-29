@@ -5,15 +5,12 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
-  Play,
   Star,
   X,
   MessageSquare,
   Clock,
   Tv,
   Film,
-  Loader2,
-  RefreshCw,
   WifiOff,
   Zap,
   Wifi,
@@ -27,7 +24,6 @@ import {
   MapPin,
   Globe,
   Calendar,
-  Server,
 } from "lucide-react";
 import { getRating, setRating, subscribeRatings } from "@/services/ratings";
 import {
@@ -38,6 +34,7 @@ import {
   resolveStream,
   sanitizeSubtitles,
   StreamNotFoundError,
+  StreamExhaustedError,
   StreamTimeoutError,
   type ResolvedStream,
   type StreamMovie,
@@ -45,17 +42,9 @@ import {
 } from "@/services/api";
 import { VideoPlayer, type StreamVariant } from "@/components/stream/VideoPlayer";
 import { EmbedPlayer } from "@/components/stream/EmbedPlayer";
+import { StreamLoader } from "@/components/stream/StreamLoader";
 import { formatRuntime } from "@/lib/format";
-import {
-  findingBestStream,
-  optimizingStream,
-  reconnecting,
-  embedConsentNeeded,
-  noDirectSource,
-  titleUnavailable,
-  tryAgain,
-  tryAnotherSource,
-} from "@/lib/playbackCopy";
+import { titleUnavailable } from "@/lib/playbackCopy";
 import { WatchTVControls, type SeasonInfo } from "@/components/stream/WatchTVControls";
 import { cancelInFlightPrefetch, prefetchForOpen } from "@/services/prefetch";
 import { attemptPlay } from "@/services/capGate";
@@ -86,11 +75,11 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { isExternalEmbedUrl } from "@/lib/streamUtils";
+import { resolveEmbedSources } from "@/lib/embedSources";
 import { tmdbImage, type TmdbImageSize } from "@/lib/tmdbImages";
 import { useAuth } from "@/context/AuthContext";
 import { apiHistoryAdd } from "@/services/auth";
 import {
-  hasEmbedConsent,
   pushRemoveToRemote,
   pushToggleToRemote,
 } from "@/services/lists";
@@ -557,6 +546,11 @@ export function WatchPage() {
               stream_url: source.url,
               sources: source.sources,
               mirrors: source.mirrors,
+              // The backend's chain may have settled on an embed provider.
+              // Carrying that decision through means the page renders the
+              // source it was actually given instead of re-deriving "is this
+              // playable natively?" from the host.
+              ...(source.isEmbed ? { is_embed: true } : {}),
               // /api/get-stream reports the tracks for the source it just
               // picked. Dropping them here left the player with subtitles only
               // when the resolve call happened to be the one that won.
@@ -625,21 +619,6 @@ export function WatchPage() {
     },
     [movie, resolved, resolving, navigate, resolveWithRetry]
   );
-
-  const play = useCallback(async () => {
-    if (resolving || !movie) return;
-    if (!attemptPlay()) return;
-    // Pressing Play is deliberate, so it restores the automatic retry budget
-    // and clears a previous terminal "unavailable" verdict.
-    autoRetryRef.current = 0;
-    autoRetryStartedRef.current = Date.now();
-    setStreamUnavailable(false);
-    if (resolved) {
-      await resolveAndPlay(isSeries ? season : 1, isSeries ? episode : 1);
-      return;
-    }
-    await resolveAndPlay(1, 1);
-  }, [resolving, resolved, season, episode, resolveAndPlay, movie]);
 
   const playEpisode = useCallback(
     (targetSeason: number, targetEpisode: number) => {
@@ -827,34 +806,33 @@ export function WatchPage() {
   const [sourceIndex, setSourceIndex] = useState(0);
   const [reconnecting, setReconnecting] = useState(false);
   const [streamUnavailable, setStreamUnavailable] = useState(false);
-  // True while the resolver call is in flight. A free-tier backend that scaled
-  // to zero needs 15-20s to boot, and that wait is not a failure -- showing the
-  // error screen during it is what made cold starts look broken.
-  const [wakingUp, setWakingUp] = useState(false);
-  // Embed providers are the last resort: opt-in only, so the direct-source
-  // path stays the default and no third-party frame loads until asked.
-  const [useEmbedFallback, setUseEmbedFallback] = useState(false);
-  // Set when the viewer asks for a backup source without having accepted
-  // third-party embeds, so the error card can explain why nothing loaded.
-  const [embedConsentNotice, setEmbedConsentNotice] = useState(false);
+  /**
+   * True once the resolver has settled on a third-party embed provider.
+   *
+   * The backend walks its whole provider chain before answering, so reaching
+   * this state means the direct catalog had nothing and an embed did. It is a
+   * rendering decision, not a user choice: the page loads the source it was
+   * given. Previously this was an opt-in behind a "Try another source" button,
+   * which meant every title outside the direct catalog dead-ended on an error
+   * card with a button, even though a working embed URL had been in hand the
+   * whole time.
+   */
+  const [usingEmbedProvider, setUsingEmbedProvider] = useState(false);
   const fallbackAttemptsRef = useRef(0);
   const playerKeyRef = useRef(0);
 
   const currentStreamUrl = playableCandidates[sourceIndex] ?? "";
 
   /**
-   * The backend resolved this title and handed back an embed URL, but no direct
-   * ad-free source exists for it -- a new release, or a title the direct
-   * catalog does not carry yet.
+   * The resolved source is a third-party embed and there is no directly playable
+   * URL for it -- either the resolver settled on an embed provider, or it handed
+   * back an embed URL and nothing native.
    *
-   * This used to be indistinguishable from "not resolved yet": `playableCandidates`
-   * is empty for both, so the auto-fallback loop would spend up to three backend
-   * re-scrapes (each `refresh=1`, each a full Archive.org scrape) showing
-   * "Optimizing high-definition stream…" for roughly 100 seconds hunting a
-   * direct source that cannot exist, and only then report the title as
-   * unavailable -- with the embed URL it had been given all along sitting
-   * unused. The one-click "Try another source" on the error card reaches the
-   * embed player immediately instead.
+   * Both cases now render the embed player rather than an error card. The old
+   * code made this an error state on purpose, reasoning that re-scraping for a
+   * direct source could not succeed, but it still had to show the viewer a
+   * button: the backend had no failover, so switching providers was something
+   * the viewer had to do. It is now a rendering decision the resolver makes.
    */
   const embedOnlyStream = useMemo(() => {
     const streamUrl = resolved?.stream?.stream_url;
@@ -869,9 +847,36 @@ export function WatchPage() {
     return /^\d+$/.test(String(id)) ? String(id) : null;
   }, [resolved?.stream?.id, movie?.providerId]);
 
-  // A new title/episode invalidates an earlier opt-in.
+  /**
+   * The provider chain to hand the embed player.
+   *
+   * The backend returns its own ordered failover list; when the client has
+   * nothing better to go on, the local registry supplies the same URLs in the
+   * same order, so the player can still cycle if the first frame dies.
+   */
+  const embedChain = useMemo(() => {
+    const fromServer = (resolved?.stream?.mirrors ?? [])
+      .filter((mirror) => mirror?.url && isExternalEmbedUrl(mirror.url))
+      .map((mirror, index) => ({
+        id: `server-${index}`,
+        label: mirror.name || `Server ${index + 1}`,
+        title: mirror.name || `Server ${index + 1}`,
+        host: safeHost(mirror.url),
+        url: mirror.url,
+      }));
+    if (fromServer.length) return fromServer;
+    return resolveEmbedSources({
+      tmdbId: embedTargetId,
+      mediaType: isSeries ? "tv" : "movie",
+      season,
+      episode,
+    });
+  }, [resolved?.stream?.mirrors, embedTargetId, isSeries, season, episode]);
+
+  // A new title/episode drops any earlier embed decision, so the loader shows
+  // while the resolver walks the chain again.
   useEffect(() => {
-    setUseEmbedFallback(false);
+    setUsingEmbedProvider(false);
   }, [movie?.id, season, episode]);
 
   // When the player is advancing through alternate sources on its own the
@@ -879,41 +884,45 @@ export function WatchPage() {
   // canvas while the next candidate hands it to the player.
   const autoCycling = sourceIndex > 0 && !reconnecting;
 
-  // Poll the backend stream endpoint until a playable direct source comes
-  // back. `refresh` bypasses the backend cache so every attempt is a fresh
-  // scrape instead of the same cached "no direct source" result.
+  /**
+   * Re-ask the resolver for a playable source.
+   *
+   * This no longer drives provider failover -- the backend walks its whole chain
+   * before answering, so a single call already tried every provider. What it
+   * still covers is the resolver itself being unable to answer: a cold start or
+   * a transient 5xx.
+   *
+   * A 503 is deliberately not retried. It means the backend already walked the
+   * entire chain and every provider came back empty or unreachable, so asking
+   * again can only re-walk providers that just failed. That is a decision, not
+   * an outage, and the terminal state is the honest response to it.
+   *
+   * `refresh` bypasses the backend's direct-source cache so a retry can pick up
+   * a title the first attempt missed, rather than replaying the same cached
+   * "no direct source" answer. The backend benches a direct miss for five
+   * minutes, so a refresh storm cannot multiply the Archive.org scrape.
+   */
   const runStreamFallback = useCallback(
-    async (manual: boolean) => {
+    async () => {
       const stream = resolved?.stream;
       if (!stream || reconnecting) return;
       const mediaType: "movie" | "tv" = isSeries ? "tv" : "movie";
-      if (mediaType && !/^\d+$/.test(stream.id)) {
-        setStreamUnavailable(true);
-        return;
-      }
       if (!mediaType) return;
-
-      // Already told it is embed-only, so re-scraping cannot produce a direct
-      // source. Report it now rather than after three more upstream round trips.
-      if (embedOnlyStream && !manual) {
+      if (!/^\d+$/.test(stream.id)) {
         setStreamUnavailable(true);
         return;
       }
-
-      if (manual) {
-        fallbackAttemptsRef.current = 0;
-      } else if (fallbackAttemptsRef.current >= MAX_RETRY_ATTEMPTS) {
+      if (fallbackAttemptsRef.current >= MAX_RETRY_ATTEMPTS) {
         setStreamUnavailable(true);
         return;
       }
       fallbackAttemptsRef.current += 1;
 
       setReconnecting(true);
-      setWakingUp(true);
       setStreamUnavailable(false);
       try {
         // Let a booting backend finish booting before spending an attempt.
-        if (!manual && fallbackAttemptsRef.current > 1) {
+        if (fallbackAttemptsRef.current > 1) {
           await new Promise(resolve =>
             setTimeout(resolve, COLD_START_BACKOFF_MS)
           );
@@ -925,7 +934,29 @@ export function WatchPage() {
           episode: mediaType === "tv" ? episode : undefined,
           refresh: true,
         });
-        if (source.url && !isExternalEmbedUrl(source.url)) {
+
+        if (source.isEmbed || isExternalEmbedUrl(source.url)) {
+          // The chain settled on a third-party provider. Render it; this is a
+          // playback state, not a failure.
+          setUsingEmbedProvider(true);
+          setResolved((prev) =>
+            prev
+              ? {
+                  exact: prev.exact,
+                  stream: {
+                    ...prev.stream,
+                    stream_url: source.url,
+                    sources: source.sources,
+                    mirrors: source.mirrors,
+                    is_embed: true,
+                    ...(source.subtitles ? { subtitles: source.subtitles } : {}),
+                  },
+                }
+              : prev
+          );
+          setSourceIndex(0);
+          fallbackAttemptsRef.current = 0;
+        } else if (source.url) {
           setResolved((prev) =>
             prev
               ? {
@@ -942,47 +973,57 @@ export function WatchPage() {
           );
           setSourceIndex(0);
           fallbackAttemptsRef.current = 0;
-        } else if (
-          fallbackAttemptsRef.current >= MAX_RETRY_ATTEMPTS ||
-          manual
-        ) {
-          setStreamUnavailable(true);
         }
       } catch (err) {
+        // The whole chain came back exhausted. That is the resolver's final
+        // answer, so it goes straight to the terminal state without spending
+        // the remaining attempts on a question that is already answered.
+        if (err instanceof StreamExhaustedError) {
+          console.warn("[stream] every provider was exhausted", err.providerAttempts);
+          setStreamUnavailable(true);
+          return;
+        }
         // A timeout means the resolver is still waking up, so it costs an
         // attempt but must not surface as "unavailable" on its own -- the loop
         // retries and only the final attempt decides.
-        const timedOut = err instanceof StreamTimeoutError;
-        if (timedOut) {
+        if (err instanceof StreamTimeoutError) {
           console.warn(
             `[stream] resolver cold start, attempt ${fallbackAttemptsRef.current}/${MAX_RETRY_ATTEMPTS}`
           );
         }
-        if (fallbackAttemptsRef.current >= MAX_RETRY_ATTEMPTS || manual) {
+        if (fallbackAttemptsRef.current >= MAX_RETRY_ATTEMPTS) {
           setStreamUnavailable(true);
         }
       } finally {
         setReconnecting(false);
-        setWakingUp(false);
       }
     },
-    [resolved, reconnecting, season, episode]
+    [resolved, reconnecting, isSeries, season, episode]
   );
 
-  // Automatically start the stream-fallback loop whenever a resolved title has
-  // no directly playable source yet (only media with a TMDB-backed id can be
-  // re-queried; catalog entries without one just surface the native state).
+  // Ask the resolver again whenever a resolved title has no directly playable
+  // source (only media with a TMDB-backed id can be re-queried; catalog entries
+  // without one just surface the native state).
+  //
+  // The delay exists so a warm resolve that lands a moment later is not raced.
+  // It is not a stall window: the loader is what the viewer sees throughout, so
+  // this is invisible rather than a dead beat.
+  //
+  // An embed that is already playing is excluded: it is a resolved source, and
+  // without this guard the timer would fire a redundant second resolver call
+  // underneath a perfectly good frame.
   useEffect(() => {
     if (
       !resolved ||
       playableCandidates.length > 0 ||
       reconnecting ||
-      streamUnavailable
+      streamUnavailable ||
+      usingEmbedProvider
     ) {
       return;
     }
     const timer = setTimeout(() => {
-      void runStreamFallback(false);
+      void runStreamFallback();
     }, 1200);
     return () => clearTimeout(timer);
   }, [
@@ -990,20 +1031,25 @@ export function WatchPage() {
     playableCandidates,
     reconnecting,
     streamUnavailable,
-    embedOnlyStream,
+    usingEmbedProvider,
     runStreamFallback,
   ]);
 
-  // An embed-only resolve is a terminal answer, not a pending one: there is no
-  // direct source left to wait for. The auto-arm effect above now correctly
-  // declines to start a hunt that cannot succeed, which means something has to
-  // move the page off "Finding the best stream..." -- otherwise stopping the
-  // futile loop would just trade one endless spinner for another.
+  /**
+   * An embed-only resolve renders the embed player, not an error.
+   *
+   * This used to be a terminal "unavailable" state, on the reasoning that
+   * hunting for a direct source would be futile. True, but the wrong
+   * conclusion: the embed URL was already in hand, and the page had no way to
+   * use it without a button, so every title outside the direct catalog reached
+   * a dead end. The backend now picks a provider on its own, so an embed is
+   * simply the source that plays.
+   */
   useEffect(() => {
-    if (embedOnlyStream && !useEmbedFallback && !streamUnavailable) {
-      setStreamUnavailable(true);
+    if (embedOnlyStream && !usingEmbedProvider) {
+      setUsingEmbedProvider(true);
     }
-  }, [embedOnlyStream, useEmbedFallback, streamUnavailable]);
+  }, [embedOnlyStream, usingEmbedProvider]);
 
   // Reset source/failure state whenever a fresh resolve lands.
   useEffect(() => {
@@ -1025,7 +1071,7 @@ export function WatchPage() {
       );
     } else if (!reconnecting && !streamUnavailable) {
       fallbackAttemptsRef.current = 0;
-      void runStreamFallback(false);
+      void runStreamFallback();
     }
   }, [
     sourceIndex,
@@ -1084,7 +1130,7 @@ export function WatchPage() {
       setEpisode(nextEpisode);
       setSourceIndex(0);
       setStreamUnavailable(false);
-      setUseEmbedFallback(false);
+      setUsingEmbedProvider(false);
       setPlayError(null);
       const qs = new URLSearchParams({
         season: String(nextSeason),
@@ -1095,21 +1141,6 @@ export function WatchPage() {
     },
     [navigate, tmdbId]
   );
-
-  // Manual source switch. Unlike the automatic failover this is user-initiated,
-  // so it is announced; the player then rotates mirrors on its own from there.
-  const handleTryAnotherSource = useCallback(() => {
-    // The CookieBanner offers "essential only", which is supposed to mean no
-    // third-party frames. Honoured here: the embed providers are the one place
-    // another party can set cookies, so declining has to stop the load rather
-    // than just being acknowledged.
-    if (!hasEmbedConsent()) {
-      setEmbedConsentNotice(true);
-      return;
-    }
-    toast.loading("Switching to backup source…", { id: "source-switch" });
-    setUseEmbedFallback(true);
-  }, []);
 
   // Determine quality variants for direct streams
   const qualityVariants: StreamVariant[] = useMemo(() => {
@@ -1141,65 +1172,27 @@ export function WatchPage() {
     [resolved?.stream?.subtitles]
   );
 
-  // Show loading state with skeleton
+  // Metadata is still arriving, so there is no poster to show yet. The same
+  // wordless full-screen loader is used here and for stream resolution: both
+  // are the same wait from the viewer's side, and a skeleton with a label
+  // ("Loading movie details...") that then swaps to a differently-labelled
+  // spinner reads as two unrelated waits.
   if (movieLoading) {
     return (
-      <div className="min-h-screen bg-[#050505] text-white">
-        <div className="fixed top-0 left-0 right-0 z-40 h-16 bg-black/90 backdrop-blur-md border-b border-white/10 flex items-center justify-between px-4 sm:px-6">
-          <div className="w-10 h-10 rounded-full bg-white/5 animate-pulse" />
-          <div className="flex-1 flex items-center justify-center">
-            <div className="h-5 w-48 bg-white/10 rounded animate-pulse" />
-          </div>
-          <div className="w-10" />
-        </div>
-
-        <main className="pt-16 pb-12 px-4 sm:px-6 lg:px-8">
-          <div className="mx-auto max-w-6xl">
-            <div className="relative w-full h-[70vh] sm:h-[75vh] max-h-[800px] rounded-2xl overflow-hidden bg-black animate-pulse">
-              <div className="absolute inset-0 bg-gradient-to-r from-white/5 via-white/10 to-white/5 bg-[length:200%_100%] animate-shimmer" />
-              <div className="absolute inset-0 flex items-center justify-center">
-                <div className="relative z-20 flex flex-col items-center gap-4">
-                  <div className="w-12 h-12 border-4 border-white/20 border-t-white rounded-full animate-spin" />
-                  <p className="text-white/80 font-medium text-sm tracking-wider">
-                    Loading movie details...
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-6 text-center animate-pulse">
-              <div className="h-8 w-64 bg-white/10 rounded mx-auto" />
-            </div>
-
-            <div className="mt-4 flex items-center justify-center gap-3 animate-pulse">
-              <div className="w-48 md:w-64 h-10 bg-white/10 rounded" />
-            </div>
-
-            <div className="mt-8 space-y-4 text-center max-w-3xl mx-auto animate-pulse">
-              <div className="flex flex-wrap items-center justify-center gap-2">
-                <div className="h-4 w-20 bg-white/10 rounded" />
-                <div className="h-4 w-4 bg-white/10 rounded" />
-                <div className="h-4 w-32 bg-white/10 rounded" />
-              </div>
-              <div className="h-4 w-full bg-white/10 rounded" />
-              <div className="h-4 w-3/4 bg-white/10 rounded" />
-              <div className="h-4 w-1/2 bg-white/10 rounded" />
-            </div>
-
-            <div className="mt-8 flex flex-wrap items-center justify-center gap-3 animate-pulse">
-              <div className="flex-1 sm:flex-none h-12 bg-white/10 rounded-md" />
-            </div>
-          </div>
-        </main>
+      <div className="relative min-h-screen bg-[#050505]">
+        <StreamLoader />
       </div>
     );
   }
 
+  // No metadata and no title: nothing to wait for and nothing to show. Kept
+  // distinct from the loader so a genuinely missing title is not reported as a
+  // slow one.
   if (!movie) {
     return (
       <div className="min-h-screen bg-[#050505] text-white flex items-center justify-center">
         <div className="text-center">
-          <p className="text-white/60">Movie not found</p>
+          <p className="text-white/70">{titleUnavailable}</p>
           <button
             onClick={() => navigate("/")}
             className="mt-4 text-white underline"
@@ -1216,6 +1209,21 @@ export function WatchPage() {
     : movie.poster
       ? getImageUrl(movie.poster, "w780")
       : "";
+
+  /**
+   * Host of a provider URL, for labelling the server tabs.
+   *
+   * Falls back to the provider's own host when the URL is unparseable rather
+   * than rendering an empty tab, so a malformed entry from the backend is
+   * still selectable and still fails over on its own terms.
+   */
+  function safeHost(url: string): string {
+    try {
+      return new URL(url).hostname;
+    } catch {
+      return "";
+    }
+  }
 
   return (
     <div className="min-h-screen bg-[#050505] text-white">
@@ -1255,7 +1263,25 @@ export function WatchPage() {
                       </button>
                     </div>
 
-                    {resolved && currentStreamUrl && !reconnecting ? (
+                    {/*
+                      Player surface, in strict precedence order:
+
+                      1. a directly playable source -> <VideoPlayer>
+                      2. the chain settled on an embed provider -> <EmbedPlayer>
+                      3. every provider exhausted -> "Title unavailable"
+                      4. anything else -> the wordless loader
+
+                      Steps 1 and 2 are not error recovery. The backend picks a
+                      provider before answering, so whichever of the two the
+                      resolver chose is simply the source that plays. Step 4 is
+                      the wait, and it deliberately carries no technical copy: a
+                      viewer waiting on provider failover has no use for a
+                      description of which stage it is on, and the stage labels
+                      it replaced ("Optimizing high-definition stream…",
+                      "Resolving playback sources…") described retries that had
+                      nothing to do with the stated activity.
+                    */}
+                    {currentStreamUrl && !streamUnavailable ? (
                       <VideoPlayer
                         key={playerKeyRef.current}
                         streamUrl={currentStreamUrl}
@@ -1279,176 +1305,43 @@ export function WatchPage() {
                         onSourceError={handleSourceError}
                         hideCloseButton
                       />
-                    ) : resolved && currentStreamUrl && reconnecting ? (
-                      <div className="absolute inset-0 flex items-center justify-center">
-                        <div className="relative w-full h-full max-w-6xl max-h-[85vh] flex items-center justify-center">
-                          <img
-                            src={streamPoster}
-                            alt={movie.title}
-                            className="absolute inset-0 w-full h-full object-cover opacity-40 blur-2xl scale-110"
-                          />
-                          <div className="relative z-20 flex flex-col items-center gap-4 rounded-xl border border-white/10 bg-black/60 px-8 py-6 text-center backdrop-blur-md">
-                            <div className="h-10 w-10 animate-spin rounded-full border-[3px] border-white/20 border-t-white" />
-                            <p className="text-white/90 font-medium text-sm tracking-wider">
-                              {wakingUp ? optimizingStream : reconnecting}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    ) : resolved && wakingUp ? (
-                      <div className="absolute inset-0 flex items-center justify-center">
-                        <div className="relative w-full h-full max-w-6xl max-h-[85vh] flex items-center justify-center">
-                          <img
-                            src={streamPoster}
-                            alt={movie.title}
-                            className="absolute inset-0 w-full h-full object-cover opacity-40 blur-2xl scale-110"
-                          />
-                          <div className="relative z-20 flex flex-col items-center gap-4 rounded-xl border border-white/10 bg-black/60 px-8 py-6 text-center backdrop-blur-md">
-                            <div className="h-10 w-10 animate-spin rounded-full border-[3px] border-white/20 border-t-white" />
-                            <p className="text-white/90 font-medium text-sm tracking-wider">
-                              {optimizingStream}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    ) : resolved && useEmbedFallback ? (
+                    ) : usingEmbedProvider ? (
                       <EmbedPlayer
                         key={playerKeyRef.current}
-                        tmdbId={embedTargetId}
-                        mediaType={movie.mediaType}
-                        season={movie.mediaType === "tv" ? season : undefined}
-                        episode={movie.mediaType === "tv" ? episode : undefined}
+                        sources={embedChain}
                         title={displayTitle}
                         poster={streamPoster}
                         onClose={handleClose}
                       />
-                    ) : resolved && streamUnavailable ? (
+                    ) : streamUnavailable ? (
                       <div className="absolute inset-0 flex items-center justify-center">
                         <div className="relative w-full h-full max-w-6xl max-h-[85vh] flex items-center justify-center">
                           <img
                             src={streamPoster}
-                            alt={movie.title}
+                            alt=""
+                            aria-hidden
                             className="absolute inset-0 w-full h-full object-cover opacity-40 blur-2xl scale-110"
                           />
-                          <div className="relative z-20 rounded-xl border border-white/10 bg-black/60 px-8 py-6 text-center backdrop-blur-md max-w-lg">
+                          <div className="relative z-20 rounded-xl px-8 py-6 text-center">
                             <p className="text-lg font-semibold text-white">
-                              {embedOnlyStream ? noDirectSource : titleUnavailable}
-                            </p>
-                            {embedConsentNotice ? (
-                              <p className="mt-3 text-xs leading-relaxed text-white/50">
-                                {embedConsentNeeded}
-                              </p>
-                            ) : null}
-                            <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() => void runStreamFallback(true)}
-                                className="inline-flex items-center gap-2 rounded-xl bg-white/10 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-white/20"
-                              >
-                                <RefreshCw className="h-4 w-4" />
-                                {tryAgain}
-                              </button>
-                              {embedTargetId ? (
-                                <button
-                                  type="button"
-                                  onClick={handleTryAnotherSource}
-                                  className="inline-flex items-center gap-2 rounded-xl bg-white/10 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-white/20"
-                                >
-                                  <Server className="h-4 w-4" />
-                                  {tryAnotherSource}
-                                </button>
-                              ) : null}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    ) : resolved ? (
-                      <div className="absolute inset-0 flex items-center justify-center">
-                        <div className="relative w-full h-full max-w-6xl max-h-[85vh] flex items-center justify-center">
-                          <img
-                            src={streamPoster}
-                            alt={movie.title}
-                            className="absolute inset-0 w-full h-full object-cover opacity-40 blur-2xl scale-110"
-                          />
-                          <div className="relative z-20 flex flex-col items-center gap-4 rounded-xl border border-white/10 bg-black/60 px-8 py-6 text-center backdrop-blur-md">
-                            <div className="h-10 w-10 animate-spin rounded-full border-[3px] border-white/20 border-t-white" />
-                            <p className="text-white/90 font-medium text-sm tracking-wider">
-                              {findingBestStream}
+                              {titleUnavailable}
                             </p>
                           </div>
                         </div>
                       </div>
                     ) : (
-                      <div className="absolute inset-0 flex items-center justify-center">
-                        <div className="relative w-full h-full max-w-6xl max-h-[85vh] flex items-center justify-center">
-                          <img
-                            src={streamPoster}
-                            alt={movie.title}
-                            className="absolute inset-0 w-full h-full object-cover opacity-40 blur-2xl scale-110"
-                          />
-                          <div className="relative z-20 flex flex-col items-center gap-4">
-                            <div className="w-12 h-12 border-4 border-white/20 border-t-white rounded-full animate-spin" />
-                            <p className="text-white/80 font-medium text-sm tracking-wider">
-                              Preparing stream...
-                            </p>
-                            {resolving && (
-                              <p className="text-xs text-white/50 flex items-center gap-1">
-                                <Loader2 className="w-3 h-3 animate-spin" />
-                                Resolving playback sources...
-                              </p>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => play()}
-                              disabled={resolving || !movie}
-                              className="inline-flex items-center gap-2 rounded-xl bg-violet-500 px-6 py-3 text-sm font-medium text-white transition hover:bg-violet-400 disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                              <Play className="h-5 w-5" />
-                              Play
-                            </button>
-                          </div>
-                        </div>
-                      </div>
+                      <StreamLoader poster={streamPoster} title={displayTitle} />
                     )}
                   </>
                 )}
+                {/*
+                  Before the first resolve lands there is no `resolved` to
+                  render the player surface for. The same loader covers it, so
+                  opening a title is one continuous wait rather than a labelled
+                  skeleton that swaps to a differently-labelled spinner.
+                */}
                 {!resolved && (
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <div className="relative w-full h-full max-w-6xl max-h-[85vh] flex items-center justify-center">
-                      <img
-                        src={
-                          movie.backdrop
-                            ? getImageUrl(movie.backdrop, "original")
-                            : movie.poster
-                            ? getImageUrl(movie.poster, "w780")
-                            : ""
-                        }
-                        alt={movie.title}
-                        className="absolute inset-0 w-full h-full object-cover opacity-40 blur-sm"
-                      />
-                      <div className="relative z-20 flex flex-col items-center gap-4">
-                        <div className="w-12 h-12 border-4 border-white/20 border-t-white rounded-full animate-spin" />
-                        <p className="text-white/80 font-medium text-sm tracking-wider">
-                          Preparing stream...
-                        </p>
-                        {resolving && (
-                          <p className="text-xs text-white/50 flex items-center gap-1">
-                            <Loader2 className="w-3 h-3 animate-spin" />
-                            Resolving playback sources...
-                          </p>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => play()}
-                          disabled={resolving || !movie}
-                          className="inline-flex items-center gap-2 rounded-xl bg-violet-500 px-6 py-3 text-sm font-medium text-white transition hover:bg-violet-400 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          <Play className="h-5 w-5" />
-                          Play
-                        </button>
-                      </div>
-                    </div>
-                  </div>
+                  <StreamLoader poster={streamPoster} title={movie.title} />
                 )}
               </div>
 

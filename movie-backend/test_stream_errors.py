@@ -43,8 +43,13 @@ _PATCHED = (
     ("catalog_lib", "discover_catalog"),
     ("catalog_lib", "build_entry_by_identifier"),
     ("_find_catalog_entry",),
+    # The provider-chain tests below replace this to control the direct tier, so
+    # it has to be restored with the rest or every later test in this file runs
+    # against a stub that returns nothing.
+    ("_direct_source_for",),
     ("_direct_source_cache",),
     ("_direct_source_locks",),
+    ("stream_providers", "probe_embed"),
 )
 
 
@@ -187,8 +192,111 @@ def test_rejects_oversized_id():
     _assert_json_error(client.get("/api/episodes?tmdb_id=" + "9" * 40), 400)
 
 
-# --- /api/movies/resolve input validation -----------------------------------
+# --- provider exhaustion is a decision, not an error ------------------------
 
+
+def _exhaust_the_chain(application, direct=None):
+    """Force every provider to come back empty.
+
+    The direct catalog is stubbed to miss and every embed is stubbed
+    unreachable, which is the only state in which the route is allowed to say
+    "unavailable". Anything less and the response would be a real answer.
+    """
+    application._direct_source_for = lambda *a, **k: direct
+    application.stream_providers.HEALTH.reset()
+    application.stream_providers.clear_probe_cache()
+    application.stream_providers.probe_embed = lambda *a, **k: False
+
+
+def _restore_chain(application):
+    _restore(_SAVED)
+    application.stream_providers.HEALTH.reset()
+    application.stream_providers.clear_probe_cache()
+
+def test_get_stream_answers_503_only_after_every_provider_failed():
+    # The contract the client now depends on: a 503 means the whole chain was
+    # walked, so it is a final answer. A 404 here would be read as "no such
+    # title" and 500 as "the backend broke", and both would be wrong.
+    app, client = _client()
+    _exhaust_the_chain(app)
+    try:
+        res = client.get("/api/get-stream?tmdb_id=603")
+    finally:
+        _restore_chain(app)
+
+    body = _assert_json_error(res, 503)
+    assert body.get("available") is False, f"exhaustion did not report available:false: {body!r}"
+    assert body.get("providers") == [], f"exhaustion advertised providers: {body!r}"
+
+
+def test_get_stream_exhaustion_reports_what_each_provider_did():
+    # Without per-provider diagnostics the client's terminal state is an
+    # unactionable "nothing worked", which is indistinguishable from a bug.
+    app, client = _client()
+    _exhaust_the_chain(app)
+    try:
+        body = _assert_json_error(client.get("/api/get-stream?tmdb_id=603"), 503)
+    finally:
+        _restore_chain(app)
+
+    attempts = body.get("provider_attempts")
+    assert isinstance(attempts, list) and attempts, f"no per-provider diagnostics: {body!r}"
+    assert all({"id", "kind", "outcome"} <= set(a) for a in attempts), (
+        f"incomplete attempt records: {attempts!r}"
+    )
+    embeds = [a for a in attempts if a["kind"] == "embed"]
+    assert len(embeds) == len(app.stream_providers.EMBED_PROVIDERS), (
+        f"the route gave up before walking the chain: {attempts!r}"
+    )
+
+
+def test_get_stream_never_answers_503_while_a_provider_is_working():
+    # The inverse, because a 503 is terminal for the client: if a single
+    # reachable provider is enough to answer, the retry budget is not spent and
+    # the viewer sees a frame instead of an error card.
+    app, client = _client()
+    _exhaust_the_chain(app)
+    app.stream_providers.probe_embed = lambda *a, **k: True
+    try:
+        res = client.get("/api/get-stream?tmdb_id=603")
+    finally:
+        _restore_chain(app)
+
+    assert res.status_code == 200, f"a live provider still produced {res.status_code}"
+    body = res.get_json()
+    assert body["available"] is True
+    assert body["is_embed"] is True
+    assert body["provider"], "the serving provider was not named"
+    assert body["activeSource"], "no source url on a successful resolve"
+    assert body["sources"], "no failover chain on a successful resolve"
+
+
+def test_get_stream_prefers_a_direct_source_over_every_embed():
+    # Direct is a real file the native player can boot, with no third-party
+    # frame in the path. It must win whenever the catalog has the title.
+    app, client = _client()
+    probed = []
+    app.stream_providers.HEALTH.reset()
+    app.stream_providers.clear_probe_cache()
+    app.stream_providers.probe_embed = lambda url, **k: probed.append(url) or True
+    app._direct_source_for = lambda *a, **k: {
+        "stream_url": "https://archive.org/download/x/master.mp4",
+        "streams": [{"url": "https://archive.org/download/x/720.mp4", "quality": "720p"}],
+    }
+    try:
+        res = client.get("/api/get-stream?tmdb_id=603")
+    finally:
+        _restore_chain(app)
+
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["is_embed"] is False
+    assert body["provider"] == "archive_direct"
+    assert body["activeSource"].endswith("master.mp4")
+    assert probed == [], f"embeds were probed despite a direct hit: {probed!r}"
+
+
+# --- /api/movies/resolve input validation -----------------------------------
 
 def test_resolve_rejects_non_object_json_body():
     # `silent=True` suppresses only *parse* failures. A valid body that is not

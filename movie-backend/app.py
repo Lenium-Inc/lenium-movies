@@ -34,6 +34,7 @@ load_env_file()
 import authdb
 import catalog_lib
 import catalog_service
+import stream_providers
 import tmdb_service as tmdb
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -646,25 +647,41 @@ def resolve_movie():
         season_details = _tmdb_get(f"/tv/{tmdb_id}/season/{season}", {}) or {}
         episodes = season_details.get("episodes", [])
         episodes_count = len(episodes) if episodes else 10
-        
+
         # Use year from show's first air date if not provided
         if not year and details.get("release_date"):
             year = details["release_date"][:4]
-        
-        stream_url = f"https://vidsrc.me/embed/tv?tmdb={tmdb_id}&season={season}&episode={episode}"
-        direct = None
+
+        title_for_direct = ""
+        year = year
     else:
         seasons_count = 1
         episodes_count = 1
         if not year and details.get("release_date"):
             year = details["release_date"][:4]
         title_for_direct = details.get("title") or title
-        direct = _direct_source_for(title_for_direct, year)
-        stream_url = (
-            direct.get("stream_url")
-            if direct
-            else f"https://vidsrc.me/embed/movie?tmdb={tmdb_id}"
-        )
+
+    # One provider chain, walked once, for both media types.
+    #
+    # This used to hardcode a single `vidsrc.me` embed and report the title as
+    # playable regardless of whether that host was up. The client had no way to
+    # know otherwise, so "provider down" surfaced as a dead player with a
+    # "Try another source" button. `resolve_direct` now tries the direct catalog
+    # first and then every configured embed in priority order, and only comes
+    # back empty when all of them are exhausted.
+    resolution = stream_providers.resolve_direct(
+        _direct_source_for,
+        tmdb_id=tmdb_id,
+        media_type=media_type,
+        title=title_for_direct,
+        year=year,
+        season=season,
+        episode=episode,
+        refresh=False,
+    )
+    direct = resolution.winner.payload if resolution.winner and resolution.winner.kind == "direct" else None
+    stream_url = resolution.url
+    provider_candidates = resolution.candidate_urls()
 
     # Extract runtime as number
     runtime = details.get("runtime")
@@ -691,9 +708,14 @@ def resolve_movie():
         "id": str(tmdb_id),
         "title": details.get("title") or title,
         "stream_url": stream_url,
-        "is_available": True,
-        "available": True,
-        "is_embed": not bool(direct),
+        # `available` is now a real answer from the provider chain rather than a
+        # constant. The metadata is still valid, so an unplayable title is
+        # reported in-band (a 200 with `available: false`) and the client shows
+        # its own state; a 404 here is reserved for "this title does not exist".
+        "is_available": resolution.ok,
+        "available": resolution.ok,
+        "is_embed": resolution.is_embed,
+        "providers": provider_candidates,
         "year": str(year) if year else "",
         "media_type": media_type,
         "season": season if media_type == "tv" else 1,
@@ -728,7 +750,7 @@ def resolve_movie():
     if media_type == "tv" and details.get("episodes"):
         movie_data["episodes"] = details["episodes"]
 
-    return jsonify({"movie": movie_data, "exact": True, "available": True})
+    return jsonify({"movie": movie_data, "exact": True, "available": resolution.ok})
 
 
 @app.route("/api/get-stream", methods=["GET", "OPTIONS"])
@@ -753,20 +775,63 @@ def get_stream_direct():
     media_type = _normalize_media_type(media_type)
     is_tv = media_type == "tv"
 
-    # Prefer a direct, ad-free Archive.org MP4 for movies when one exists. The
-    # viewer gets a real stream immediately; quality variants become mirrors.
-    # With `refresh=1` the cache is bypassed so a retrying client can keep
-    # asking until a playable source is found.
-    direct = None
+    # Direct-catalog lookup needs a title, and the id alone does not carry one.
+    # A TMDB failure here is not fatal: the embed chain below does not need a
+    # title, so a title-less request still resolves rather than 404-ing on a
+    # metadata outage the player could have worked around.
+    title = ""
+    year = None
     if not is_tv:
         details = _tmdb_get(f"/movie/{tmdb_id}", {}) or {}
         title = details.get("title") or ""
-        year = None
         if details.get("release_date"):
             year = details["release_date"][:4]
-        if title:
-            direct = _direct_source_for(title, year, refresh=refresh)
 
+    try:
+        episode_number = max(1, int(episode))
+    except (TypeError, ValueError):
+        episode_number = 1
+    try:
+        season_number = max(1, int(season))
+    except (TypeError, ValueError):
+        season_number = 1
+
+    # Server-side failover. Every configured provider is tried in priority
+    # order -- direct catalog first, then each embed -- and only when all of
+    # them are unreachable or empty does this answer "unavailable". The client
+    # no longer has to ask for a second source.
+    resolution = stream_providers.resolve_direct(
+        _direct_source_for,
+        tmdb_id=tmdb_id,
+        media_type=media_type,
+        title=title,
+        year=year,
+        season=season_number,
+        episode=episode_number,
+        refresh=refresh,
+    )
+
+    if not resolution.ok:
+        # 503 rather than 404: the title exists and was looked up correctly, but
+        # no provider can currently serve it. `attempts` carries the per-provider
+        # outcome so this is diagnosable from the client's own terminal state
+        # rather than being an opaque "nothing worked".
+        return _json_error(
+            "No streaming provider could serve this title.",
+            503,
+            available=False,
+            providers=[],
+            provider_attempts=resolution.attempts,
+        )
+
+    winner = resolution.winner
+    direct = winner.payload if winner.kind == "direct" else None
+    candidates = resolution.candidate_urls()
+
+    # Quality variants of the winning direct source are the player's mirrors;
+    # the remaining providers are the failover chain, ordered after them.
+    mirrors: list[dict] = []
+    sources: list[str] = []
     if direct:
         streams = direct.get("streams") or []
         default = direct.get("stream_url", "")
@@ -775,42 +840,34 @@ def get_stream_direct():
             for index, source in enumerate(streams)
             if source.get("url") and source["url"] != default
         ]
-        sources: list[str] = []
-        for url in [default] + [s.get("url", "") for s in streams]:
+        for url in [default] + [s.get("url", "") for s in streams] + candidates:
             if url and url not in sources:
                 sources.append(url)
-        payload = {
-            "success": True,
-            "activeSource": default,
-            "sources": sources,
-            "mirrors": mirrors,
-            "is_embed": False,
-        }
-        # The player reads tracks from whichever payload it was handed, and
-        # `/api/get-stream` is what a re-resolve actually returns. Omitting
-        # subtitles here is what made the track list vanish on refresh even
-        # though `/api/movies/resolve` reported it.
-        if direct.get("subtitles"):
-            payload["subtitles"] = direct["subtitles"]
-        return jsonify(payload)
-
-    if is_tv:
-        stream_url = f"https://vidsrc.me/embed/tv?tmdb={tmdb_id}&season={season}&episode={episode}"
-        fallback = f"https://vidsrc.cc/v2/embed/tv/{tmdb_id}/{season}/{episode}"
     else:
-        stream_url = f"https://vidsrc.me/embed/movie?tmdb={tmdb_id}"
-        fallback = f"https://vidsrc.cc/v2/embed/movie/{tmdb_id}"
-
-    return jsonify({
-        "success": True,
-        "activeSource": stream_url,
-        "sources": [stream_url] + [fallback] if fallback != stream_url else [stream_url],
-        "is_embed": True,
-        "mirrors": [
-            {"name": "Server 1", "url": stream_url},
-            {"name": "Server 2", "url": fallback},
+        # Embed failover: the chain is the source list, and each entry is also
+        # offered as a named mirror so the player can rotate without a resolve.
+        sources = list(candidates)
+        mirrors = [
+            {"name": candidate.label, "url": candidate.url}
+            for candidate in resolution.candidates
         ]
-    })
+
+    payload = {
+        "success": True,
+        "available": True,
+        "activeSource": resolution.url,
+        "sources": sources,
+        "mirrors": mirrors,
+        "is_embed": resolution.is_embed,
+        "provider": winner.id,
+    }
+    # The player reads tracks from whichever payload it was handed, and
+    # `/api/get-stream` is what a re-resolve actually returns. Omitting
+    # subtitles here is what made the track list vanish on refresh even
+    # though `/api/movies/resolve` reported it.
+    if direct and direct.get("subtitles"):
+        payload["subtitles"] = direct["subtitles"]
+    return jsonify(payload)
 
 
 @app.route("/api/movies/stream", methods=["GET", "OPTIONS"])

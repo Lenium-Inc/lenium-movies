@@ -1,12 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ChevronRight, Loader2, RotateCw } from "lucide-react";
+import { AlertTriangle, Loader2, RotateCw } from "lucide-react";
 import { resolveEmbedSources, type ResolvedEmbedSource } from "@/lib/embedSources";
 import { cn } from "@/lib/utils";
-import {
-  optimizingStream,
-  titleUnavailable,
-  tryAgain,
-} from "@/lib/playbackCopy";
+import { titleUnavailable, tryAgain } from "@/lib/playbackCopy";
 
 /**
  * Cross-origin iframes never fire `onError` for a dead or blocked provider, so
@@ -31,6 +27,17 @@ const REFUSAL_SETTLE_MS = 1_200;
 let preferredSourceId: string | null = null;
 
 export interface EmbedPlayerProps {
+  /**
+   * Pre-resolved provider chain, in failover order.
+   *
+   * The backend now walks the provider chain itself and returns the order it
+   * settled on, so this is the normal input. It is authoritative for *which*
+   * provider serves the title, which the local registry cannot know: the
+   * backend skips benched and unreachable providers, and mirroring that here
+   * would immediately re-probe the ones it just ruled out.
+   */
+  sources?: ResolvedEmbedSource[];
+  /** Used only when the backend supplied no chain, to build one locally. */
   tmdbId?: number | string | null;
   imdbId?: string | null;
   mediaType?: "movie" | "tv";
@@ -43,6 +50,7 @@ export interface EmbedPlayerProps {
 }
 
 export function EmbedPlayer({
+  sources: providedSources,
   tmdbId,
   imdbId,
   mediaType = "movie",
@@ -54,8 +62,11 @@ export function EmbedPlayer({
   onClose,
 }: EmbedPlayerProps) {
   const sources = useMemo<ResolvedEmbedSource[]>(
-    () => resolveEmbedSources({ tmdbId, imdbId, mediaType, season, episode }),
-    [tmdbId, imdbId, mediaType, season, episode],
+    () =>
+      providedSources?.length
+        ? providedSources
+        : resolveEmbedSources({ tmdbId, imdbId, mediaType, season, episode }),
+    [providedSources, tmdbId, imdbId, mediaType, season, episode],
   );
 
   const [index, setIndex] = useState(0);
@@ -114,17 +125,6 @@ export function EmbedPlayer({
     },
     [sources, total],
   );
-
-  const goToNextSource = useCallback(() => {
-    const next = nextViableIndex(index);
-    if (next === -1) {
-      // Everything is ruled out; fall back to a plain rotation so the viewer is
-      // not stuck on a dead frame.
-      goTo(index + 1);
-      return;
-    }
-    goTo(next);
-  }, [index, nextViableIndex, goTo]);
 
   const advance = useCallback(() => {
     const next = nextViableIndex(index);
@@ -244,11 +244,13 @@ export function EmbedPlayer({
       />
 
       {loadState === "loading" ? (
-        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
-          <div className="flex items-center gap-3 rounded-full bg-black/70 px-5 py-2.5 text-sm text-white/90 backdrop-blur">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            <span>{optimizingStream}</span>
-          </div>
+        <div
+          role="status"
+          aria-label="Loading stream"
+          className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center"
+        >
+          <Loader2 className="h-10 w-10 animate-spin text-white/90" />
+          <span className="sr-only">Loading stream…</span>
         </div>
       ) : null}
 
@@ -269,8 +271,18 @@ export function EmbedPlayer({
         </div>
       ) : null}
 
-      {/* Manual source switcher. Top-left so it clears the provider's own
-          transport controls along the bottom edge. */}
+      {/*
+        Server switcher.
+
+        Every provider in this chain is already a failover candidate the backend
+        vetted, so the tabs are not a way to ask for a *different* source -- the
+        resolver already did that. What they surface is which provider the
+        resolver landed on and whether a frame is failing, which is genuinely
+        useful when one provider serves a mislabelled or broken encode. The
+        "next" button is gone: with a settled chain, manual rotation is the
+        failover path the backend replaced, and leaving it invites viewers to
+        cycle away from a working provider.
+      */}
       {total > 1 ? (
         <div className="absolute left-3 top-3 z-30 flex items-center gap-1 rounded-lg bg-black/70 p-1 backdrop-blur">
           {sources.map((src, i) => {
@@ -296,15 +308,6 @@ export function EmbedPlayer({
               </button>
             );
           })}
-          <button
-            type="button"
-            onClick={goToNextSource}
-            title="Next server"
-            aria-label="Next server"
-            className="ml-0.5 rounded-md p-1 text-white/70 transition hover:bg-white/10 hover:text-white"
-          >
-            <ChevronRight className="h-3.5 w-3.5" />
-          </button>
         </div>
       ) : null}
 

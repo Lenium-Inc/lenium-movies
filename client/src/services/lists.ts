@@ -173,9 +173,13 @@ export function readEmbedConsent(): EmbedConsent {
   }
 }
 
-export function hasEmbedConsent(): boolean {
-  return readEmbedConsent() === "accepted";
-}
+// There is deliberately no `hasEmbedConsent()` boolean. It used to gate
+// third-party embeds, so a viewer who picked "essential only" got
+// "Backup playback is blocked because third-party embeds were declined" and a
+// dead stream. An embed is a normal way to play a title, not an optional
+// extra, so gating it was never the right call -- and a helper whose only job
+// was to withhold playback was a footgun. If a consent check is ever needed
+// again, it has to gate optional analytics or marketing, never the video.
 
 export function setEmbedConsent(choice: "accepted" | "essential"): void {
   try {
