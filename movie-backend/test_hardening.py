@@ -334,6 +334,176 @@ def test_trailer_route_validates_and_looks_up_by_media_type():
         application.tmdb.get_trailer_key = original
 
 
+def test_select_trailer_key_prefers_official_trailer():
+    """The selector must rank on `official`, not just on the word "Trailer".
+
+    TMDB marks third-party reuploads as official=false. Those are the ones that
+    tend to be taken down or have embedding disabled, so an unofficial Trailer
+    has to lose to an official Teaser. A real trailer from the rights holder
+    still wins outright, and the order of the input list must not matter.
+    """
+    import tmdb_service
+
+    assert (
+        tmdb_service.select_trailer_key(
+            [
+                {"site": "YouTube", "key": "clip1", "type": "Clip", "official": True},
+                {"site": "YouTube", "key": "unofficial", "type": "Trailer", "official": False},
+                {"site": "YouTube", "key": "teaser1", "type": "Teaser", "official": True},
+            ]
+        )
+        == "teaser1"
+    )
+
+    assert (
+        tmdb_service.select_trailer_key(
+            [
+                {"site": "YouTube", "key": "teaser1", "type": "Teaser", "official": True},
+                {"site": "YouTube", "key": "real1", "type": "Trailer", "official": True},
+            ]
+        )
+        == "real1"
+    )
+
+    # Input order is not a ranking signal.
+    assert (
+        tmdb_service.select_trailer_key(
+            [
+                {"site": "YouTube", "key": "real1", "type": "Trailer", "official": True},
+                {"site": "YouTube", "key": "teaser1", "type": "Teaser", "official": True},
+            ]
+        )
+        == "real1"
+    )
+
+
+def test_select_trailer_key_never_returns_missing_or_wrong_site():
+    """A title with no usable YouTube video must report None, not a broken key.
+
+    Returning a key with no video behind it is what mounts an embed that can
+    only fail, so the caller needs to be able to fall back to the backdrop.
+    """
+    import tmdb_service
+
+    assert tmdb_service.select_trailer_key([]) is None
+    assert tmdb_service.select_trailer_key(None) is None
+    # Vimeo-only entries are not embeddable by the client.
+    assert (
+        tmdb_service.select_trailer_key(
+            [{"site": "Vimeo", "key": "abc123", "type": "Trailer", "official": True}]
+        )
+        is None
+    )
+    # A YouTube entry with no key is not usable.
+    assert (
+        tmdb_service.select_trailer_key(
+            [{"site": "YouTube", "key": None, "type": "Trailer", "official": True}]
+        )
+        is None
+    )
+
+
+def test_select_trailer_key_keeps_a_trailer_when_that_is_all_there_is():
+    """Long-tail titles have no official upload at all; do not blank them.
+
+    Audited against TMDB: NCIS, The Office, Doraemon and others carry only a
+    non-official Trailer. Returning None there would remove a trailer that
+    currently plays, so an unofficial Trailer has to remain the last resort --
+    but only after every official candidate has been rejected.
+    """
+    import tmdb_service
+
+    assert (
+        tmdb_service.select_trailer_key(
+            [{"site": "YouTube", "key": "onlyone", "type": "Trailer", "official": False}]
+        )
+        == "onlyone"
+    )
+
+    # An official Behind the Scenes still beats a non-official Trailer: the
+    # rights holder published it, and non-official uploads are what break.
+    assert (
+        tmdb_service.select_trailer_key(
+            [
+                {"site": "YouTube", "key": "bs1", "type": "Behind the Scenes", "official": True},
+                {"site": "YouTube", "key": "unofficial", "type": "Trailer", "official": False},
+            ]
+        )
+        == "bs1"
+    )
+
+
+def test_get_trailer_key_delegates_to_the_shared_selector():
+    """`get_trailer_key` had its own copy of the ranking, which drifted.
+
+    Both copies ranked on `type == "Trailer"` and then fell back to the first
+    YouTube video of any type, so a title whose only upload is a Featurette
+    played a behind-the-scenes clip under the title card. This pins the
+    single-source-of-truth wiring so a third copy cannot appear silently.
+    """
+    import tmdb_service
+
+    captured = {}
+
+    def fake_get(endpoint, params=None):
+        captured["endpoint"] = endpoint
+        return {
+            "results": [
+                {"site": "YouTube", "key": "bts1", "type": "Behind the Scenes", "official": True},
+                {"site": "YouTube", "key": "real1", "type": "Trailer", "official": True},
+            ]
+        }
+
+    original = tmdb_service._tmdb_get
+    tmdb_service._tmdb_get = fake_get
+    try:
+        assert tmdb_service.get_trailer_key(299534, "movie") == "real1"
+        assert captured["endpoint"] == "/movie/299534/videos"
+    finally:
+        tmdb_service._tmdb_get = original
+
+
+def test_details_route_uses_shared_trailer_selection():
+    """`/api/media/<id>` had a third inline copy of the buggy ranking."""
+    _store, client = _fresh_client()
+    import app as application
+
+    def fake_tmdb_get(endpoint, params=None):
+        if endpoint.startswith("/movie/"):
+            return {
+                "id": 42,
+                "title": "Test Movie",
+                "release_date": "2024-01-02",
+                "videos": {
+                    "results": [
+                        {
+                            "site": "YouTube",
+                            "key": "behind1",
+                            "type": "Behind the Scenes",
+                            "official": True,
+                        },
+                        {
+                            "site": "YouTube",
+                            "key": "trailer1",
+                            "type": "Trailer",
+                            "official": True,
+                        },
+                    ]
+                },
+                "genres": [],
+            }
+        return None
+
+    original = application._tmdb_get
+    application._tmdb_get = fake_tmdb_get
+    try:
+        res = client.get("/api/media/42")
+        assert res.status_code == 200, res.get_json()
+        assert res.get_json().get("trailer_key") == "trailer1"
+    finally:
+        application._tmdb_get = original
+
+
 def main() -> int:
     tests = [value for name, value in sorted(globals().items()) if name.startswith("test_")]
     failures = 0

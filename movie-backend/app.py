@@ -1287,17 +1287,7 @@ def get_media_by_id(id: str):
     release_year = extract_year(release_date)
 
     # Extract YouTube trailer key
-    trailer_key = None
-    videos = details.get("videos", {}).get("results", [])
-    for v in videos:
-        if v.get("type") == "Trailer" and v.get("site") == "YouTube":
-            trailer_key = v.get("key")
-            break
-    if not trailer_key:
-        for v in videos:
-            if v.get("site") == "YouTube":
-                trailer_key = v.get("key")
-                break
+    trailer_key = tmdb.select_trailer_key(details.get("videos", {}).get("results", []))
 
     # Genres
     genres = [genre["name"] for genre in details.get("genres", [])]

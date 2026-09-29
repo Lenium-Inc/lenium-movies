@@ -91,17 +91,7 @@ def fetch_media_details(media_id: int, media_type: str = "movie") -> Optional[Di
     release_year = release_date.split("-")[0] if release_date else ""
 
     # Extract YouTube trailer key
-    trailer_key = None
-    videos = data.get("videos", {}).get("results", [])
-    for v in videos:
-        if v.get("type") == "Trailer" and v.get("site") == "YouTube":
-            trailer_key = v.get("key")
-            break
-    if not trailer_key:
-        for v in videos:
-            if v.get("site") == "YouTube":
-                trailer_key = v.get("key")
-                break
+    trailer_key = select_trailer_key(data.get("videos", {}).get("results", []))
 
     # Genres
     genres = [genre["name"] for genre in data.get("genres", [])]
@@ -352,19 +342,58 @@ def search_multi(query: str, page: int = 1) -> List[Dict]:
     return catalog
 
 
+# TMDB types ordered by how well they stand in for a trailer. "Trailer" is the
+# real thing; "Teaser" is an acceptable stand-in. The rest (Clip, Featurette,
+# Behind the Scenes, Opening Credits) are supplementary material that plays
+# wrong under a title card and is far more likely to be embed-blocked, so they
+# are only reached when nothing better exists.
+_TRAILER_TYPE_RANK = {
+    "Trailer": 0,
+    "Teaser": 1,
+    "Clip": 2,
+    "Featurette": 3,
+    "Behind the Scenes": 4,
+    "Opening Credits": 5,
+}
+_UNRANKED_TRAILER_TYPE = 6
+
+
+def _trailer_rank(video: Dict[str, Any]) -> tuple:
+    """Sort key for a YouTube video: official uploads first, then type.
+
+    Official is weighted above type on purpose. A non-official Trailer is usually
+    a third-party reupload that is more likely to be removed or have embedding
+    disabled, while an official Featurette at least comes from the rights
+    holder. The previous code ignored `official` entirely and fell back to
+    "first YouTube video of any type", which is what made some titles embed a
+    Behind the Scenes clip while others played a real trailer.
+    """
+    is_official = 0 if video.get("official") else 1
+    type_rank = _TRAILER_TYPE_RANK.get(video.get("type"), _UNRANKED_TRAILER_TYPE)
+    return (is_official, type_rank)
+
+
+def select_trailer_key(videos: Optional[List[Dict[str, Any]]]) -> Optional[str]:
+    """Pick the best YouTube video key from a TMDB `videos.results` list.
+
+    Returns None when there is no usable YouTube video, so the caller keeps the
+    backdrop instead of mounting an embed that is likely to fail.
+    """
+    if not videos:
+        return None
+    candidates = [v for v in videos if v.get("site") == "YouTube" and v.get("key")]
+    if not candidates:
+        return None
+    best = min(candidates, key=_trailer_rank)
+    return best.get("key")
+
+
 def get_trailer_key(media_id: int, media_type: str) -> Optional[str]:
     """Fetch YouTube trailer key for a media item."""
     data = _tmdb_get(f"/{media_type}/{media_id}/videos", {})
     if not data:
         return None
-    videos = data.get("results", [])
-    for v in videos:
-        if v.get("type") == "Trailer" and v.get("site") == "YouTube":
-            return v.get("key")
-    for v in videos:
-        if v.get("site") == "YouTube":
-            return v.get("key")
-    return None
+    return select_trailer_key(data.get("results", []))
 
 
 GENRE_MAP = {
