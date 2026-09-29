@@ -40,7 +40,8 @@ export const TrailerEmbed = React.forwardRef<
         title="Preview trailer"
         allow="autoplay; encrypted-media"
         sandbox="allow-scripts allow-same-origin allow-forms"
-        referrerPolicy="no-referrer"
+        // See Spotlight: "no-referrer" is what makes YouTube return 153.
+        referrerPolicy="strict-origin-when-cross-origin"
         tabIndex={-1}
         aria-hidden
         className="h-full w-full"

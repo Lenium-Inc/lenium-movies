@@ -448,7 +448,8 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
               className="pointer-events-none absolute inset-0 h-full w-full object-cover"
               allow="autoplay; encrypted-media"
               sandbox="allow-scripts allow-same-origin allow-forms"
-              referrerPolicy="no-referrer"
+              // See Spotlight: "no-referrer" is what makes YouTube return 153.
+              referrerPolicy="strict-origin-when-cross-origin"
               title={`${movie.title} trailer`}
             />
           ) : null}

@@ -255,7 +255,12 @@ export function Spotlight({
                     title={`${current.title} trailer`}
                     allow="autoplay; encrypted-media"
                     sandbox="allow-scripts allow-same-origin allow-forms"
-                    referrerPolicy="no-referrer"
+                    // NOT "no-referrer". YouTube answers an embed with no
+                    // referrer with error 153 ("embedding disabled for this
+                    // video") for exactly the videos that would otherwise play,
+                    // so a strict origin still satisfies it while withholding the
+                    // full page URL, which is all the player needs.
+                    referrerPolicy="strict-origin-when-cross-origin"
                     tabIndex={-1}
                     aria-hidden
                     className="absolute left-1/2 top-1/2 min-h-full min-w-full -translate-x-1/2 -translate-y-1/2"

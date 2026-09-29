@@ -239,7 +239,10 @@ export function EmbedPlayer({
         // lift its own sandbox, and adding top-navigation hands it the top
         // window. Providers that refuse are skipped instead.
         sandbox="allow-scripts allow-same-origin allow-forms"
-        referrerPolicy="no-referrer"
+        // Not "no-referrer": providers that gate embeds on the referring page
+        // answer a referrer-less request with their "cannot be played here"
+        // error, and a strict origin is enough to satisfy them.
+        referrerPolicy="strict-origin-when-cross-origin"
         onLoad={handleLoad}
       />
 
