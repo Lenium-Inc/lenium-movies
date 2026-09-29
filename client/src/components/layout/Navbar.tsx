@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { Bookmark, Menu, Play, X } from "lucide-react";
+import { Bookmark, Menu, X } from "lucide-react";
 import { Link, useLocation } from "wouter";
+import { BrandLockup } from "@/components/brand/Brand";
 import type { View } from "@/components/layout/navigation";
 import { ProfileMenu } from "@/components/layout/ProfileMenu";
 import { NavbarSearch } from "@/components/layout/NavbarSearch";
@@ -92,11 +93,10 @@ export function Navbar({ view, onNavigate }: NavbarProps) {
         <Link
           href="/"
           onClick={() => window.scrollTo({ top: 0 })}
-          className="flex shrink-0 items-center gap-1.5 text-white"
+          className="shrink-0 rounded-md text-white"
           aria-label="Stream Vy home"
         >
-          <Play className="h-5 w-5" />
-          <span className="text-lg font-black tracking-tight">Stream Vy</span>
+          <BrandLockup size="md" />
         </Link>
 
         {/* Core navigation (desktop) */}

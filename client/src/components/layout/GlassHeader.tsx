@@ -1,6 +1,7 @@
-import { CirclePlay, Menu, Search, UserRound, X } from "lucide-react";
+import { Menu, Search, UserRound, X } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { Link } from "wouter";
+import { BrandLockup } from "@/components/brand/Brand";
 
 interface GlassHeaderProps {
   search?: string;
@@ -54,14 +55,16 @@ export function GlassHeader({
           <Menu className="h-4 w-4" />
         </button>
 
+        {/* Brand. A wordmark, not a pill: the other pills in this bar are
+            controls, and wrapping the one thing that is not a control in the
+            same chrome made it read as a button. The padding is here instead,
+            to keep the tap target honest. */}
         <Link
           href="/"
-          className="flex shrink-0 items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.06] py-2 pl-3 pr-3.5 transition hover:border-white/25 hover:bg-white/10"
+          aria-label="Stream Vy home"
+          className="shrink-0 rounded-md py-2 pr-1 pl-1.5 text-white"
         >
-          <CirclePlay className="h-4 w-4 text-white" />
-          <span className="text-sm font-black tracking-tight text-white">
-            Stream Vy
-          </span>
+          <BrandLockup size="sm" />
         </Link>
 
         <div className="ml-auto flex items-center gap-2.5">

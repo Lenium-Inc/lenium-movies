@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Eye, EyeOff } from "lucide-react";
 import { Link, useLocation } from "wouter";
+import { BrandLockup } from "@/components/brand/Brand";
+import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/AuthContext";
 import { fetchTrending, type StreamMovie } from "@/services/api";
 import { DEFAULT_POST_AUTH_PATH, nextPathFromSearch } from "@/lib/safeRedirect";
@@ -67,6 +69,15 @@ function timecode(elapsedMs: number): string {
  * is cool and violet-lit; this is the one warm room, which is why the accent
  * here is a lamp rather than the app's violet.
  *
+ * HIERARCHY — the form is the subject, the brand supports it.
+ *
+ * The page is one narrow column (26rem) on a wide dark field, read top to
+ * bottom in four beats: the lockup, the technical slate, the heading, the gate.
+ * Nothing sits beside the form, so nothing competes with it; the dark space
+ * around the column is the composition, not a leftover. The lockup is the
+ * largest brand object anywhere in the product, but it is set in a 20px
+ * weight under a 33px heading, so the eye still lands on the form first.
+ *
  * The form sits inside a gate frame — a hairline with registration marks, the
  * way a frame is aligned before a shot. Submitting runs an exposure: a band of
  * shadow crosses the lit button while a timecode runs and a rail fills, instead
@@ -97,7 +108,17 @@ export default function AuthPage({ mode }: AuthPageProps) {
   const [code, setCode] = useState("00:00:00:00");
 
   const isSignup = mode === "signup";
-  const startedAt = useRef<number>(Date.now());
+  // One value feeds both the rendered hint and the password's `aria-describedby`,
+  // so the two can never disagree about whether a hint exists.
+  const PASSWORD_HINT = isSignup ? "8 characters or more" : undefined;
+  // Set at the moment the request leaves, so the timecode counts the request
+  // rather than the time the tab has been open.
+  const startedAt = useRef<number>(0);
+  // Only the box click-forwarding needs these; focus is otherwise reached by
+  // tab order and by the submit handler's jump to the first invalid field.
+  const nameRef = useRef<HTMLInputElement>(null);
+  const emailRef = useRef<HTMLInputElement>(null);
+  const passwordRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -122,10 +143,12 @@ export default function AuthPage({ mode }: AuthPageProps) {
     };
   }, []);
 
-  // The timecode counts how long the reel has been running. It is the one
-  // ambient element, and it is real information rather than ornament: it tells
-  // you the page is alive and, on a slow connection, that time is passing.
+  // The timecode is parked at 00:00:00:00 until there is something to count,
+  // and runs only for the length of the request. It used to tick ten times a
+  // second from mount, which re-rendered every controlled input on the page
+  // forever while it did nothing but look busy.
   useEffect(() => {
+    if (!submitting || done) return;
     if (
       typeof window !== "undefined" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches
@@ -136,7 +159,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
       setCode(timecode(Date.now() - startedAt.current));
     }, 100);
     return () => window.clearInterval(id);
-  }, []);
+  }, [submitting, done]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -145,9 +168,9 @@ export default function AuthPage({ mode }: AuthPageProps) {
     // Validate every field at once on submit — this is the net for anything the
     // per-field checks on blur have not caught yet.
     const nextErrors: FieldErrors = {};
-    for (const field of (isSignup
+    for (const field of isSignup
       ? (["name", "email", "password"] as const)
-      : (["email", "password"] as const))) {
+      : (["email", "password"] as const)) {
       const message = validateField(field, { name, email, password });
       if (message) nextErrors[field] = message;
     }
@@ -162,6 +185,8 @@ export default function AuthPage({ mode }: AuthPageProps) {
     }
 
     setSubmitting(true);
+    startedAt.current = Date.now();
+    setCode("00:00:00:00");
     try {
       if (isSignup) {
         await signup({ name: name.trim(), email, password });
@@ -174,6 +199,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
     } catch (err) {
       setError(normalizeAuthError(err));
       setSubmitting(false);
+      setCode("00:00:00:00");
     }
   };
 
@@ -195,12 +221,16 @@ export default function AuthPage({ mode }: AuthPageProps) {
 
   // One definition for the field wrapper, so the padding, the type size and the
   // `ln-field` focus/invalid behaviour are stated once instead of three times.
+  //
+  // The placeholder is /50, not /35. Measured against the field's own painted
+  // background (void 8,8,10 -> carbon/80 -> black/45, i.e. rgb(9,9,11)) with
+  // real source-over compositing: /35 = 3.13:1 and /45 = 4.49:1, and AA for
+  // body text is 4.5:1 — so /45 is a miss, not a pass. /50 = 5.33:1 clears it
+  // while staying the faintest thing in the field, which is what a placeholder
+  // is supposed to be, and staying well under the 19.9:1 of the value you
+  // actually type.
   const fieldWrap = (delay?: string) =>
-    cn(
-      "ln-field ln-set px-3.5 py-2.5 text-[15px] text-white",
-      "placeholder:text-white/35",
-      delay
-    );
+    cn("px-3.5 py-2.5 text-[15px] text-white placeholder:text-white/50", delay);
 
   const submitLabel = submitting
     ? isSignup
@@ -211,7 +241,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
       : "Sign in";
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[var(--booth-void)] text-white">
+    <div className="relative min-h-dvh overflow-hidden bg-[var(--booth-void)] text-white">
       {/* The film on the wall behind the booth, held well back so it reads as
           atmosphere and never competes with the form. */}
       {backdrop ? (
@@ -232,19 +262,42 @@ export default function AuthPage({ mode }: AuthPageProps) {
         }}
       />
 
-      <div className="relative z-10 flex min-h-screen flex-col items-center justify-center px-5 py-14">
-        <div className="w-full max-w-[25.5rem]">
-          {/* Reel position: the technical voice, and the only small type here. */}
-          <div className="mb-5 flex items-center justify-between font-tech text-[10px] tracking-[0.2em] text-[var(--booth-dust)] uppercase">
+      {/*
+        `dvh`, not `vh`: on a phone, `100vh` is measured with the browser
+        chrome collapsed, so a `min-h-screen` wrapper is taller than the screen
+        and a page that would otherwise fit still scrolls by the height of the
+        URL bar. `dvh` tracks the real viewport as the chrome moves.
+
+        `my-auto` on the column rather than centring it outright: auto margins
+        centre the column when there is room for it and collapse to the padding
+        edge when there is not, which is the behaviour a three-field form needs
+        on a landscape phone. It is robustness rather than a repair — the
+        previous fixed-centre wrapper grew to fit its content and did not clip —
+        but it is the arrangement that stays correct as this page gets taller.
+      */}
+      <div className="relative z-10 mx-auto flex min-h-dvh w-full max-w-[30rem] flex-col justify-center px-5 py-12 sm:px-8 sm:py-16">
+        <div className="my-auto w-full">
+          {/* Beat 1 — the brand, the way every product signs its own account
+              pages. Non-interactive: the way back out is already the one link
+              at the foot of the page, and two ways home is one too many. */}
+          <div className="mb-9 sm:mb-11">
+            <BrandLockup size="lg" className="text-white" label="Stream Vy" />
+          </div>
+
+          {/* Reel position: the technical voice, and the only small type here.
+              It sits under the lockup as a caption on it, which is the one job
+              it can do without arguing with the form for attention. */}
+          <div className="mb-3 flex items-center justify-between font-tech text-[10px] tracking-[0.2em] text-[var(--booth-dust)] uppercase">
             <span>{isSignup ? "Enrol" : "Return"}</span>
             <span aria-hidden>{code}</span>
           </div>
 
-          <header className="mb-7">
+          <header className="mb-8">
             <h1 className="font-display text-[2.05rem] leading-[1.12] tracking-[-0.015em] text-white">
               {isSignup ? (
                 <>
-                  Create your <em className="italic text-[var(--lamp)]">account</em>
+                  Create your{" "}
+                  <em className="italic text-[var(--lamp)]">account</em>
                 </>
               ) : (
                 <>
@@ -252,14 +305,22 @@ export default function AuthPage({ mode }: AuthPageProps) {
                 </>
               )}
             </h1>
-            <p className="mt-2.5 text-[13.5px] leading-relaxed text-[var(--booth-dust)]">
+            <p className="mt-3 max-w-[26rem] text-[13.5px] leading-relaxed text-[var(--booth-dust)]">
               {isSignup
                 ? "One account for your list, your history and your downloads."
                 : "Sign in to pick up where you left off."}
             </p>
           </header>
 
-          <div className="ln-gate relative rounded-2xl border border-white/[0.07] bg-[var(--booth-carbon)]/80 p-6 shadow-[0_28px_80px_-28px_rgba(0,0,0,0.9)] backdrop-blur-xl sm:p-7">
+          {/*
+            The gate panel. Depth comes from three stacked layers — the lamp
+            behind, the blurred backdrop film, then a translucent carbon sheet —
+            so the heavy drop shadow it used to carry is replaced by a hairline
+            lit along the top edge, which is the cue that actually reads on a
+            surface this dark. The blur keeps the backdrop artwork out of the
+            type.
+          */}
+          <div className="ln-gate relative rounded-2xl border border-white/[0.08] bg-[var(--booth-carbon)]/80 p-6 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05),0_28px_70px_-38px_rgba(0,0,0,0.95)] backdrop-blur-xl sm:p-8">
             <form onSubmit={handleSubmit} noValidate>
               {/*
                 Honeypot: a real label tied to a real input, moved off-screen
@@ -284,15 +345,17 @@ export default function AuthPage({ mode }: AuthPageProps) {
                 />
               </div>
 
-              <div className="space-y-4">
+              <div className="space-y-5">
                 {isSignup && (
                   <Field
                     id="auth-name"
                     label="Display name"
                     error={fieldErrors.name}
+                    inputRef={nameRef}
                     className={fieldWrap()}
                   >
                     <input
+                      ref={nameRef}
                       id="auth-name"
                       name="name"
                       type="text"
@@ -307,9 +370,10 @@ export default function AuthPage({ mode }: AuthPageProps) {
                       autoFocus
                       maxLength={40}
                       aria-invalid={Boolean(fieldErrors.name)}
-                      aria-describedby={
-                        fieldErrors.name ? "auth-name-err" : undefined
-                      }
+                      aria-describedby={describedBy(
+                        "auth-name",
+                        fieldErrors.name
+                      )}
                       className="w-full bg-transparent outline-none"
                     />
                   </Field>
@@ -319,9 +383,13 @@ export default function AuthPage({ mode }: AuthPageProps) {
                   id="auth-email"
                   label="Email"
                   error={fieldErrors.email}
-                  className={fieldWrap(isSignup ? "animation-delay-[60ms]" : undefined)}
+                  inputRef={emailRef}
+                  className={fieldWrap(
+                    isSignup ? "animation-delay-[60ms]" : undefined
+                  )}
                 >
                   <input
+                    ref={emailRef}
                     id="auth-email"
                     name="email"
                     type="email"
@@ -336,9 +404,10 @@ export default function AuthPage({ mode }: AuthPageProps) {
                     autoFocus={!isSignup}
                     maxLength={254}
                     aria-invalid={Boolean(fieldErrors.email)}
-                    aria-describedby={
-                      fieldErrors.email ? "auth-email-err" : undefined
-                    }
+                    aria-describedby={describedBy(
+                      "auth-email",
+                      fieldErrors.email
+                    )}
                     className="w-full bg-transparent outline-none"
                   />
                 </Field>
@@ -346,8 +415,9 @@ export default function AuthPage({ mode }: AuthPageProps) {
                 <Field
                   id="auth-password"
                   label="Password"
-                  hint={isSignup ? "8 characters or more" : undefined}
+                  hint={PASSWORD_HINT}
                   error={fieldErrors.password}
+                  inputRef={passwordRef}
                   className={fieldWrap(
                     isSignup
                       ? "animation-delay-[120ms]"
@@ -355,6 +425,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
                   )}
                 >
                   <input
+                    ref={passwordRef}
                     id="auth-password"
                     name="password"
                     type={showPassword ? "text" : "password"}
@@ -364,13 +435,19 @@ export default function AuthPage({ mode }: AuthPageProps) {
                       if (fieldErrors.password) checkField("password");
                     }}
                     onBlur={() => checkField("password")}
-                    placeholder={isSignup ? "8 characters or more" : "Your password"}
-                    autoComplete={isSignup ? "new-password" : "current-password"}
+                    placeholder={
+                      isSignup ? "8 characters or more" : "Your password"
+                    }
+                    autoComplete={
+                      isSignup ? "new-password" : "current-password"
+                    }
                     maxLength={128}
                     aria-invalid={Boolean(fieldErrors.password)}
-                    aria-describedby={
-                      fieldErrors.password ? "auth-password-err" : undefined
-                    }
+                    aria-describedby={describedBy(
+                      "auth-password",
+                      fieldErrors.password,
+                      PASSWORD_HINT
+                    )}
                     className="w-full bg-transparent pr-10 outline-none"
                   />
                   {/* People mistype passwords; making them verify by eye is the
@@ -378,8 +455,11 @@ export default function AuthPage({ mode }: AuthPageProps) {
                   <button
                     type="button"
                     onClick={() => setShowPassword(v => !v)}
-                    aria-label={showPassword ? "Hide password" : "Show password"}
-                    className="absolute top-1/2 right-2.5 -translate-y-1/2 rounded-md p-1.5 text-white/35 transition-colors hover:text-[var(--lamp)] focus-visible:outline-2 focus-visible:outline-[var(--lamp)] focus-visible:outline-offset-1"
+                    aria-label={
+                      showPassword ? "Hide password" : "Show password"
+                    }
+                    aria-pressed={showPassword}
+                    className="ln-focus-lamp-tight absolute top-1/2 right-2.5 -translate-y-1/2 rounded-md p-1.5 text-white/40 transition-colors hover:text-[var(--lamp)]"
                   >
                     {showPassword ? (
                       <EyeOff className="size-4" aria-hidden />
@@ -393,35 +473,59 @@ export default function AuthPage({ mode }: AuthPageProps) {
               {error && (
                 <p
                   role="alert"
-                  className="mt-4 rounded-lg border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-[13px] leading-snug text-rose-200"
+                  className="mt-5 rounded-lg border border-rose-400/30 bg-rose-500/10 px-3 py-2.5 text-[13px] leading-snug text-rose-200"
                 >
                   {error}
                 </p>
               )}
 
-              <button
+              {/*
+                The one solid, filled thing on the page. It was previously a
+                hairline outline, which is what an outline is for: to shout
+                without filling. As the primary action on a form that is
+                already the subject, a filled lamp is quieter AND louder — one
+                unambiguous target, and nothing to compete with. `Button` brings
+                the focus ring, the disabled contract and the icon sizing with
+                it; the three states are all solid so the control only ever
+                changes colour, never shape.
+
+                NOTE: the type is set on the inner span, not on the button.
+                `index.css` declares `button, input { font: inherit }`
+                unlayered, and unlayered declarations outrank every Tailwind
+                utility, so `text-[14px] font-bold` on the element itself is
+                silently discarded and the button inherits 16px/400 from the
+                body. That is why `Button` has rendered at the wrong size
+                everywhere in this app. The span is not matched by that rule, so
+                the type lands. The real fix is to wrap that rule in
+                `@layer base`; that is an app-wide retypeset and is out of scope
+                for this page.
+              */}
+              <Button
                 type="submit"
+                size="lg"
                 disabled={submitting}
+                aria-busy={submitting}
                 data-state={submitting ? "running" : "idle"}
                 className={cn(
-                  "ln-expose relative mt-5 w-full overflow-hidden rounded-lg px-4 py-3",
-                  "text-[14px] font-semibold transition-colors duration-200",
-                  "disabled:cursor-progress",
+                  "ln-focus-lamp ln-expose relative mt-6 w-full overflow-hidden rounded-lg",
+                  "disabled:cursor-progress disabled:opacity-100",
                   done
-                    ? "bg-[var(--signal)] text-[#04120c]"
+                    ? "bg-[var(--signal)] text-[var(--signal-ink)] hover:bg-[var(--signal)]"
                     : submitting
-                      ? "bg-[var(--lamp)] text-[#1a1206]"
-                      : "border border-[var(--lamp)]/45 bg-transparent text-[var(--lamp)] hover:border-[var(--lamp)] hover:bg-[var(--lamp)]/10"
+                      ? "bg-[var(--lamp-core)] text-[var(--lamp-ink)] hover:bg-[var(--lamp-core)]"
+                      : "bg-[var(--lamp)] text-[var(--lamp-ink)] hover:bg-[var(--lamp-core)]"
                 )}
               >
-                <span className="relative z-10">{done ? "You're in" : submitLabel}</span>
-              </button>
+                <span className="relative z-10 text-[14px] font-bold tracking-[0.01em]">
+                  {done ? "You're in" : submitLabel}
+                </span>
+              </Button>
 
               {/* The rail fills for as long as the request takes. */}
               <div
                 aria-hidden
                 className={cn(
-                  "mt-2.5 h-px w-full overflow-hidden bg-white/8",
+                  "mt-3 h-px w-full overflow-hidden bg-white/8",
                   (submitting || done) && "visible"
                 )}
               >
@@ -434,20 +538,25 @@ export default function AuthPage({ mode }: AuthPageProps) {
               </div>
             </form>
 
-            <p className="mt-6 text-center text-[13.5px] text-[var(--booth-dust)]">
-              {isSignup ? "Already have an account?" : "New to Stream Vy?"}{" "}
-              <Link
-                href={swapHref}
-                className="font-semibold text-[var(--lamp)] underline-offset-4 transition hover:underline"
-              >
-                {isSignup ? "Sign in" : "Create an account"}
-              </Link>
-            </p>
+            {/* The way across is separated from the form by a hairline rather
+                than by more air: it is a peer of the form, not a footnote to
+                it, and the rule is cheaper than another 24px of space. */}
+            <div className="mt-7 border-t border-white/[0.07] pt-6">
+              <p className="text-center text-[13.5px] text-[var(--booth-dust)]">
+                {isSignup ? "Already have an account?" : "New to Stream Vy?"}{" "}
+                <Link
+                  href={swapHref}
+                  className="ln-focus-lamp rounded-sm font-semibold text-[var(--lamp)] underline-offset-4 transition hover:underline"
+                >
+                  {isSignup ? "Sign in" : "Create an account"}
+                </Link>
+              </p>
+            </div>
           </div>
 
           <Link
             href="/"
-            className="mt-7 inline-flex items-center gap-1.5 font-tech text-[10.5px] tracking-[0.16em] text-white/50 uppercase transition-colors hover:text-white/85"
+            className="ln-focus-lamp mt-8 inline-flex items-center gap-1.5 rounded-sm font-tech text-[10.5px] tracking-[0.16em] text-white/50 uppercase transition-colors hover:text-white/85"
           >
             <ArrowLeft className="size-3" aria-hidden />
             Browse instead
@@ -458,6 +567,29 @@ export default function AuthPage({ mode }: AuthPageProps) {
   );
 }
 
+type FieldId = "auth-name" | "auth-email" | "auth-password";
+
+/**
+ * The ids a control points at, in the order a screen reader should read them:
+ * the standing hint first, then the error. Kept in one function so the
+ * `aria-describedby` on each input and the `id` on each rendered message can
+ * never drift apart.
+ *
+ * The hint is passed in rather than inferred from the field id, because whether
+ * a hint exists is a property of the mode, not of the field: signup shows the
+ * password hint and login does not. Inferring it from the id made every login
+ * render point at an `auth-password-hint` that was never in the DOM — a
+ * dangling IDREF, which screen readers resolve to nothing and validators flag.
+ */
+function describedBy(
+  id: FieldId,
+  error?: string,
+  hint?: string
+): string | undefined {
+  const ids = [hint ? `${id}-hint` : null, error ? `${id}-err` : null];
+  return ids.filter(Boolean).join(" ") || undefined;
+}
+
 /** A label, the control it names, and that control's error — one job each. */
 function Field({
   id,
@@ -465,41 +597,55 @@ function Field({
   hint,
   error,
   className,
+  inputRef,
   children,
 }: {
-  id: "auth-name" | "auth-email" | "auth-password";
+  id: FieldId;
   label: string;
   hint?: string;
   error?: string;
   className?: string;
+  inputRef: React.RefObject<HTMLInputElement | null>;
   children: React.ReactNode;
 }) {
   return (
     <div>
-      <div className="mb-1.5 flex items-baseline justify-between gap-3">
-        <label htmlFor={id} className="text-[12.5px] font-medium text-white/72">
+      <div className="mb-2 flex items-baseline justify-between gap-3">
+        <label htmlFor={id} className="text-[12.5px] font-medium text-white/75">
           {label}
         </label>
         {hint && (
-          <span className="font-tech text-[10px] tracking-wider text-white/50 uppercase">
+          <span
+            id={`${id}-hint`}
+            className="font-tech text-[10px] tracking-wider text-[var(--booth-dust)] uppercase"
+          >
             {hint}
           </span>
         )}
       </div>
-      {/* The box is the label, not just the text above it, so the whole 45px
-          target focuses the input instead of only the 23px of bare input. */}
-      <label
-        htmlFor={id}
-        className={cn("block cursor-text", className)}
+      {/*
+        The box is a div that forwards the click, not a second <label>. A
+        control with two labels is two associations to keep in sync, and the
+        wrapper one contributed an empty name; this keeps the same full-height
+        target with exactly one label in the tree. The forward is a
+        convenience only — the label above and the input itself are what a
+        keyboard reaches, so nothing here is operable by click alone.
+      */}
+      <div
+        className={cn("ln-field ln-set cursor-text", className)}
         data-invalid={Boolean(error) || undefined}
+        onClick={() => inputRef.current?.focus()}
       >
         {children}
-      </label>
+      </div>
       {/* Each message sits with the field it belongs to, and is reached from
           that field via aria-describedby, so it needs no live region of its
           own. The words say what to do, not what went wrong internally. */}
       {error && (
-        <p id={`${id}-err`} className="mt-1.5 text-[12.5px] leading-snug text-rose-300">
+        <p
+          id={`${id}-err`}
+          className="mt-2 text-[12.5px] leading-snug text-rose-300"
+        >
           {error}
         </p>
       )}

@@ -85,6 +85,12 @@ button {
   --lamp-core: #ffae5c; /* hot core: hover, and the leading edge of the beam */
   --booth-dust: #8b8677; /* warm grey, for everything secondary */
   --signal: #6fd4a8; /* "signal locked" green — confirmed states only */
+  /* Type set ON the lit surfaces. Near-black, not neutral grey: these are the
+     same decision written down once instead of a hex repeated at every filled
+     button. Measured 15.4:1 on the lamp, 10.1:1 on the lamp core, 10.6:1 on
+     the signal. */
+  --lamp-ink: #1a1206;
+  --signal-ink: #04120c;
 }
 
 .font-tech {
@@ -241,6 +247,40 @@ button {
   .ln-rail {
     transform: scaleX(0.7);
   }
+}
+
+/* ==========================================================================
+   One focus ring for the whole booth.
+   ==========================================================================
+
+   This has to be declared here, unlayered, for the same reason `.ln-field`
+   carries its own ring: the file also owns a global
+   `:focus-visible { outline: 2px solid #fff; outline-offset: 3px }`, and
+   unlayered declarations outrank every Tailwind utility. A
+   `focus-visible:outline-[var(--lamp)]` written on an element is therefore
+   silently discarded — the class is there, the lamp is not. Declaring the ring
+   as a rule in this file puts it in the same unlayered context, where the
+   class selector outranks the bare `:focus-visible` pseudo-class.
+
+   A filled control also has to shed the Button primitive's white ring, or it
+   ends up with two concentric indicators: the 3px `box-shadow` ring and the
+   2px outline, drawn on top of each other. `--tw-ring-shadow: 0 0 #0000` is
+   Tailwind v4's own "no ring" value, set here rather than fought with a
+   utility that would lose the same cascade.
+*/
+.ln-focus-lamp:focus-visible {
+  outline: 2px solid var(--lamp);
+  outline-offset: 2px;
+  --tw-ring-shadow: 0 0 #0000;
+}
+
+/* For a control that already sits inside something else drawing a ring — the
+   password reveal, inside `.ln-field`. Tight, so the two read as "this field,
+   and this control in it" rather than as a doubled border. */
+.ln-focus-lamp-tight:focus-visible {
+  outline: 2px solid var(--lamp);
+  outline-offset: 1px;
+  border-radius: inherit;
 }
 
 .no-scrollbar {

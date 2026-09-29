@@ -1,10 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
-  <defs>
-    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#d7d7d3;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#8b8b90;stop-opacity:1" />
-    </linearGradient>
-  </defs>
-  <rect width="32" height="32" rx="8" fill="url(#grad)"/>
-  <path d="M8 16L14 22L24 10" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" fill="none" role="img" aria-label="Stream Vy">
+  <title>Stream Vy</title>
+  <!--
+    The compact form of the brand mark: the gate closed, the triangle knocked
+    out of it. Two flat fills, no gradient, no stroke — at 16px the stroked
+    frame of the full mark collapses into a smudge, and a single inked
+    silhouette with a triangular hole is what still reads in a tab strip.
+
+    Plate #0B0B0E is the app's `theme-color` (client/index.html); the triangle
+    is the off-white used as `--fs-text` in the `charcoal` theme. A dark plate
+    with a light hole keeps the mark legible on both light and dark tab
+    chrome, which a transparent knockout would not.
+  -->
+  <rect width="32" height="32" rx="8" fill="#0B0B0E" />
+  <path d="M13.5 9.8 24 16l-10.5 6.2Z" fill="#F4F4F1" />
 </svg>
