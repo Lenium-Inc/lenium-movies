@@ -1,15 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
-import { Plus, Clock, Trash2, X, Play } from "lucide-react";
+import { Plus, Clock, Trash2, X, PenLine } from "lucide-react";
 import { Link, useLocation } from "wouter";
+import { BrandLockup } from "@/components/brand/Brand";
 import { useAuth } from "@/context/AuthContext";
 import { useActiveProfile } from "@/context/ActiveProfileContext";
 import { ProfileMenu } from "@/components/layout/ProfileMenu";
+import { AddProfileForm } from "@/components/profile/AddProfileForm";
+import { EditProfileModal } from "@/components/profile/EditProfileModal";
+import { ProfileAvatar } from "@/components/profile/ProfileAvatar";
 import {
   apiHistory,
   apiHistoryClear,
   apiHistoryRemove,
   type RemoteHistoryItem,
 } from "@/services/auth";
+import type { ProfileData } from "@/services/profiles";
 
 function formatTimestamp(epochMs: number): string {
   const date = new Date(epochMs);
@@ -34,13 +39,12 @@ function formatProgress(item: RemoteHistoryItem): string {
  */
 export default function ProfilePage() {
   const { user, isLoading: authLoading } = useAuth();
-  const { profiles, activeProfile, selectProfile, addProfile, deleteProfile } =
+  const { profiles, activeProfile, selectProfile, deleteProfile } =
     useActiveProfile();
   const [location, navigate] = useLocation();
 
   const [showAddProfile, setShowAddProfile] = useState(false);
-  const [newProfileName, setNewProfileName] = useState("");
-  const [newProfileIsKids, setNewProfileIsKids] = useState(false);
+  const [editingProfile, setEditingProfile] = useState<ProfileData | null>(null);
 
   const [history, setHistory] = useState<RemoteHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -75,14 +79,6 @@ export default function ProfilePage() {
       .getElementById("manage-profiles")
       ?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [location]);
-
-  const handleAddProfile = () => {
-    if (!newProfileName.trim()) return;
-    addProfile(newProfileName, newProfileIsKids);
-    setShowAddProfile(false);
-    setNewProfileName("");
-    setNewProfileIsKids(false);
-  };
 
   const handleRemoveHistory = async (movieKey: string) => {
     try {
@@ -128,9 +124,8 @@ export default function ProfilePage() {
 
       <header className="sticky top-0 z-40 border-b border-white/10 bg-[#050505]/70 backdrop-blur-[16px]">
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4 sm:px-6 lg:px-8">
-          <Link href="/" className="flex items-center gap-1.5 text-white" aria-label="Stream Vy home">
-            <Play className="h-4 w-4" />
-            <span className="text-base font-black tracking-tight">Stream Vy</span>
+          <Link href="/" className="shrink-0 rounded-md text-white" aria-label="Stream Vy home">
+            <BrandLockup size="sm" />
           </Link>
           {/* Same single avatar + dropdown as the app navbar, so profile
               controls are not duplicated on this page. */}
@@ -142,17 +137,15 @@ export default function ProfilePage() {
         {/* Account */}
         <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-6 backdrop-blur-xl sm:p-8">
           <div className="flex items-center gap-4">
-            {user.avatar_url ? (
-              <img
-                src={user.avatar_url}
-                alt=""
-                className="h-14 w-14 rounded-2xl object-cover ring-1 ring-white/15"
-              />
-            ) : (
-              <span className="grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-white to-white/60 text-xl font-black text-black">
-                {user.name.charAt(0).toUpperCase()}
-              </span>
-            )}
+            {/* Account avatar. Always renders through the same component as
+                profile avatars so the initials fallback appears on a failed
+                image load, not only when `avatar_url` is absent. */}
+            <ProfileAvatar
+              className="h-14 w-14 ring-1 ring-white/15"
+              square
+              alt=""
+              profile={{ name: user.name, avatar: user.avatar_url ?? null }}
+            />
             <div>
               <h1 className="text-xl font-bold tracking-tight sm:text-2xl">
                 {user.name}
@@ -175,54 +168,18 @@ export default function ProfilePage() {
           </p>
 
           {showAddProfile ? (
-            <div className="mt-6 max-w-md">
-              <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-6 backdrop-blur-xl">
-                <h3 className="text-lg font-bold text-white">Create Profile</h3>
-                <input
-                  id="profile-name"
-                  type="text"
-                  value={newProfileName}
-                  onChange={(e) => setNewProfileName(e.target.value)}
-                  placeholder="Profile name"
-                  autoFocus
-                  maxLength={20}
-                  className="mt-4 w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white placeholder-white/30 outline-none transition focus:border-violet-500/60 focus:ring-1 focus:ring-violet-500/30"
-                />
-                <label
-                  htmlFor="profile-kids"
-                  className="mt-4 flex cursor-pointer items-center gap-3 text-sm text-white/70"
-                >
-                  <input
-                    id="profile-kids"
-                    type="checkbox"
-                    checked={newProfileIsKids}
-                    onChange={(e) => setNewProfileIsKids(e.target.checked)}
-                    className="h-4 w-4 rounded border-white/30 bg-black/20 accent-indigo-500"
-                  />
-                  Kids profile (restricted titles)
-                </label>
-                <div className="mt-6 flex gap-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowAddProfile(false);
-                      setNewProfileName("");
-                      setNewProfileIsKids(false);
-                    }}
-                    className="flex-1 rounded-xl border border-white/15 px-4 py-3 text-sm font-semibold text-white/60 transition hover:border-white/40 hover:text-white"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleAddProfile}
-                    disabled={!newProfileName.trim()}
-                    className="flex-1 rounded-xl bg-white py-3 text-sm font-bold text-black transition hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    Create
-                  </button>
-                </div>
-              </div>
+            <div className="mt-6 max-w-2xl">
+              <button
+                type="button"
+                onClick={() => setShowAddProfile(false)}
+                className="mb-4 inline-flex items-center gap-2 text-sm text-white/50 transition hover:text-white"
+              >
+                <X className="h-4 w-4" />
+                Cancel
+              </button>
+              {/* Shared with the /profiles gate so profile creation -- including
+                  the avatar picker -- has exactly one implementation. */}
+              <AddProfileForm onDone={() => setShowAddProfile(false)} />
             </div>
           ) : (
             <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
@@ -244,10 +201,11 @@ export default function ProfilePage() {
                       aria-label={isActive ? `${profile.name} — active profile` : `Switch to ${profile.name}`}
                     >
                       <div className="relative aspect-square w-full">
-                        <img
-                          src={profile.avatar}
-                          alt={profile.name}
-                          className="h-full w-full object-cover"
+                        <ProfileAvatar
+                          className="h-full w-full rounded-xl"
+                          square
+                          alt=""
+                          profile={profile}
                         />
                         {profile.isKids && (
                           <span className="absolute left-1.5 top-1.5 rounded bg-amber-500/80 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-black">
@@ -256,14 +214,22 @@ export default function ProfilePage() {
                         )}
                       </div>
                     </button>
-                    {/* Sibling of the tile button, not a child: a button nested
-                        inside a button is invalid HTML, and browsers reparent
-                        it, which broke the tile's own click target. */}
+                    {/* Siblings of the tile button, not children of it: a button
+                        nested inside a button is invalid HTML, and browsers
+                        reparent it, which breaks the tile's own click target. */}
+                    <button
+                      type="button"
+                      onClick={() => setEditingProfile(profile)}
+                      aria-label={`Edit ${profile.name}`}
+                      className="absolute left-1.5 top-1.5 z-10 grid h-7 w-7 place-items-center rounded-full bg-black/70 text-white/70 opacity-0 transition group-hover:opacity-100 focus-visible:opacity-100 hover:bg-white/30 hover:text-white"
+                    >
+                      <PenLine className="h-3.5 w-3.5" />
+                    </button>
                     <button
                       type="button"
                       onClick={() => deleteProfile(profile.id)}
                       aria-label={`Delete ${profile.name}`}
-                      className="absolute right-1.5 top-1.5 z-10 grid h-7 w-7 place-items-center rounded-full bg-black/70 text-white/70 opacity-0 transition group-hover:opacity-100 hover:bg-red-500 hover:text-white"
+                      className="absolute right-1.5 top-1.5 z-10 grid h-7 w-7 place-items-center rounded-full bg-black/70 text-white/70 opacity-0 transition group-hover:opacity-100 focus-visible:opacity-100 hover:bg-red-500 hover:text-white"
                     >
                       <X className="h-3.5 w-3.5" />
                     </button>
@@ -372,6 +338,13 @@ export default function ProfilePage() {
           </div>
         </section>
       </main>
+
+      {editingProfile ? (
+        <EditProfileModal
+          profile={editingProfile}
+          onClose={() => setEditingProfile(null)}
+        />
+      ) : null}
     </div>
   );
 }

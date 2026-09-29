@@ -8,20 +8,34 @@ import {
   type ReactNode,
 } from "react";
 import { useAuth } from "@/context/AuthContext";
+import type { AvatarPreset } from "@/lib/avatars";
 import {
   createAvatar,
   getActiveProfile,
   getProfiles,
   saveProfiles as persistProfiles,
   setActiveProfile as persistActive,
+  updateStoredProfile,
   type ProfileData,
+  type ProfilePatch,
 } from "@/services/profiles";
 
 export interface ActiveProfileContextType {
   profiles: ProfileData[];
   activeProfile: ProfileData | null;
   selectProfile: (profile: ProfileData) => void;
-  addProfile: (name: string, isKids?: boolean) => ProfileData;
+  /**
+   * `preset` is the chosen avatar when the picker was used. Omitting it keeps
+   * the old behaviour of generating a face from the name, so every existing
+   * caller stays valid.
+   */
+  addProfile: (
+    name: string,
+    isKids?: boolean,
+    preset?: AvatarPreset | null,
+  ) => ProfileData;
+  /** Patch name/avatar/kids in place. Returns the updated profile. */
+  updateProfile: (profileId: string, patch: ProfilePatch) => ProfileData | null;
   deleteProfile: (profileId: string) => void;
   refreshProfiles: () => void;
 }
@@ -57,7 +71,7 @@ export function ActiveProfileProvider({ children }: { children: ReactNode }) {
   );
 
   const addProfile = useCallback(
-    (name: string, isKids = false) => {
+    (name: string, isKids = false, preset: AvatarPreset | null = null) => {
       const userIdNotNull = userId;
       if (!userIdNotNull) {
         throw new Error("Cannot add a profile while signed out");
@@ -65,7 +79,11 @@ export function ActiveProfileProvider({ children }: { children: ReactNode }) {
       const profile: ProfileData = {
         id: crypto.randomUUID(),
         name: name.trim(),
-        avatar: createAvatar(name),
+        avatar: createAvatar(name, isKids, preset),
+        // Only a preset the viewer actually chose is recorded as chosen; a
+        // generated avatar must stay distinguishable from a picked one or the
+        // picker would highlight a face the viewer never picked.
+        avatarId: preset?.id ?? null,
         isKids,
         isLocked: false,
       };
@@ -75,6 +93,21 @@ export function ActiveProfileProvider({ children }: { children: ReactNode }) {
       return profile;
     },
     [userId, profiles]
+  );
+
+  const updateProfile = useCallback(
+    (profileId: string, patch: ProfilePatch) => {
+      const userIdNotNull = userId;
+      if (!userIdNotNull) return null;
+      const updated = updateStoredProfile(userIdNotNull, profileId, patch);
+      if (!updated) return null;
+      // Re-read rather than splicing locally: `updateStoredProfile` normalises,
+      // and a patch that clears `avatar` gets its generated url back here.
+      setProfiles(getProfiles(userIdNotNull));
+      setActiveProfile(getActiveProfile(userIdNotNull));
+      return updated;
+    },
+    [userId]
   );
 
   const deleteProfile = useCallback(
@@ -104,10 +137,11 @@ export function ActiveProfileProvider({ children }: { children: ReactNode }) {
       activeProfile,
       selectProfile,
       addProfile,
+      updateProfile,
       deleteProfile,
       refreshProfiles,
     }),
-    [profiles, activeProfile, selectProfile, addProfile, deleteProfile, refreshProfiles]
+    [profiles, activeProfile, selectProfile, addProfile, updateProfile, deleteProfile, refreshProfiles]
   );
 
   return (

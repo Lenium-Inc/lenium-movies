@@ -3,6 +3,7 @@ import { LogOut, Plus, Settings, Users } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/context/AuthContext";
 import { useActiveProfile } from "@/context/ActiveProfileContext";
+import { ProfileAvatar } from "@/components/profile/ProfileAvatar";
 
 /**
  * Top-right profile entry point: renders the active profile avatar and opens a
@@ -52,7 +53,6 @@ export function ProfileMenu() {
   }
 
   const displayName = activeProfile?.name ?? user.name;
-  const avatar = activeProfile?.avatar;
 
   const handleSwitch = (profileId: string) => {
     const profile = profiles.find((p) => p.id === profileId);
@@ -71,33 +71,33 @@ export function ProfileMenu() {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        aria-label={open ? "Close profile menu" : "Profile menu"}
+        aria-label={open ? "Close profile menu" : `Profile menu: ${displayName}`}
         className="grid h-9 w-9 place-items-center overflow-hidden rounded-full border border-white/15 bg-white/[0.08] text-white transition hover:bg-white/20"
       >
-        {avatar ? (
-          <img src={avatar} alt="" className="h-full w-full object-cover" />
-        ) : (
-          <span className="grid h-full w-full place-items-center bg-white text-base font-black text-black">
-            {displayName.charAt(0).toUpperCase()}
-          </span>
-        )}
+        {/* One tile, not an image plus a sibling initial: the initials have to
+            be a Radix fallback so they appear only when the image fails,
+            rather than being an either/or branch that can disagree with it. */}
+        <ProfileAvatar
+          className="h-9 w-9"
+          alt=""
+          profile={
+            activeProfile ?? { name: displayName, avatar: user.avatar_url ?? null }
+          }
+        />
       </button>
 
       {open && (
         <div className="absolute right-0 top-full z-50 mt-3 w-56 rounded-xl border border-zinc-800 bg-zinc-900/90 p-2 shadow-2xl backdrop-blur-xl">
           {/* Active identity */}
           <div className="flex items-center gap-3 rounded-lg px-2 py-2">
-            {avatar ? (
-              <img
-                src={avatar}
-                alt=""
-                className="h-10 w-10 rounded-lg object-cover"
-              />
-            ) : (
-              <span className="grid h-10 w-10 place-items-center rounded-lg bg-white text-base font-black text-black">
-                {displayName.charAt(0).toUpperCase()}
-              </span>
-            )}
+            <ProfileAvatar
+              className="h-10 w-10"
+              square
+              alt=""
+              profile={
+                activeProfile ?? { name: displayName, avatar: user.avatar_url ?? null }
+              }
+            />
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold text-white">
                 {displayName}
@@ -127,11 +127,10 @@ export function ProfileMenu() {
                           : "border-zinc-800 bg-zinc-900 hover:border-zinc-600 hover:bg-zinc-800/60"
                       } disabled:cursor-not-allowed disabled:opacity-40`}
                     >
-                      <img
-                        src={profile.avatar}
-                        alt=""
-                        className="h-9 w-9 rounded-md object-cover"
-                      />
+                      {/* Was a bare <img> with no fallback, so a profile with a
+                          missing or unreachable avatar rendered a broken-image
+                          glyph on a bare tile. */}
+                      <ProfileAvatar className="h-9 w-9" square alt="" profile={profile} />
                       <span className="w-full truncate text-center text-[10px] leading-3 text-zinc-300">
                         {profile.name}
                       </span>
