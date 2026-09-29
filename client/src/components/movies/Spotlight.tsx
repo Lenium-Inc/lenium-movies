@@ -15,6 +15,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
 import { fetchTrailerByTmdbId, type TrailerInfo } from "@/services/api";
+import { useEmbedFailure } from "@/hooks/useEmbedFailure";
 import type { Movie } from "./types";
 import { formatRuntime } from "@/lib/format";
 import { glowBackground, glowPalette } from "@/lib/glow";
@@ -45,8 +46,12 @@ function getBackdropUrl(backdrop: string | null | undefined): string | null {
 function embedUrl(trailer: TrailerInfo, muted: boolean): string {
   const base =
     trailer.provider === "dailymotion"
-      ? `https://www.dailymotion.com/embed/video/${trailer.id}?autoplay=1&loop=1&controls=0&muted=${muted ? 1 : 0}`
-      : `https://www.youtube-nocookie.com/embed/${trailer.id}?autoplay=1&controls=0&loop=1&playlist=${trailer.id}&playsinline=1&iv_load_policy=3&modestbranding=1&rel=0${muted ? "&mute=1" : ""}`;
+      ? `https://www.dailymotion.com/embed/video/${trailer.id}?autoplay=1&loop=1&controls=0&muted=${muted ? 1 : 0}&enablejsapi=1`
+      // `enablejsapi=1` is what makes an unplayable video *reportable*. The
+      // player posts an `onError` message when a video is removed, private, or
+      // has embedding disabled; without it the failure is silent and the hero
+      // ends up rendering YouTube's error card behind the title and ratings.
+      : `https://www.youtube-nocookie.com/embed/${trailer.id}?autoplay=1&controls=0&loop=1&playlist=${trailer.id}&playsinline=1&iv_load_policy=3&modestbranding=1&rel=0&enablejsapi=1${muted ? "&mute=1" : ""}`;
   return base;
 }
 
@@ -143,6 +148,13 @@ export function Spotlight({
 
   const backdropUrl = getBackdropUrl(current?.backdrop);
 
+  // Watch the background embed and tear it down if it turns out to be
+  // unplayable. Keyed on the trailer itself so the verdict resets per title.
+  const { failed: trailerFailed, frameRef: trailerFrameRef } = useEmbedFailure(
+    trailer ? `${trailer.provider}:${trailer.id}` : null,
+  );
+  const showTrailer = Boolean(trailer) && !trailerFailed;
+
   // Fetch the active title's trailer once (cached per title).
   useEffect(() => {
     if (!current?.providerId) {
@@ -215,22 +227,14 @@ export function Spotlight({
               exit={{ opacity: 0, scale: 1.02 }}
               transition={{ duration: 0.7, ease: EASE }}
             >
-              {trailer ? (
-                <div className="absolute inset-0 overflow-hidden">
-                  <iframe
-                    key={`${trailer.id}-${muted ? "m" : "u"}`}
-                    src={embedUrl(trailer, muted)}
-                    title={`${current.title} trailer`}
-                    allow="autoplay"
-                    sandbox="allow-scripts allow-same-origin allow-forms"
-                    referrerPolicy="no-referrer"
-                    tabIndex={-1}
-                    aria-hidden
-                    className="absolute left-1/2 top-1/2 min-h-full min-w-full -translate-x-1/2 -translate-y-1/2"
-                    style={{ aspectRatio: "16 / 9", width: "max(100%, 177.78vh)" }}
-                  />
-                </div>
-              ) : backdropUrl ? (
+              {/*
+                The backdrop is painted unconditionally rather than as the
+                `else` branch of a trailer check. It costs one already-preloaded
+                image and it means an embed that fails, is slow, or is still
+                booting always has artwork underneath it -- so falling back is
+                a single removed layer with no gap and no second request.
+              */}
+              {backdropUrl ? (
                 <img
                   src={backdropUrl}
                   alt=""
@@ -241,6 +245,24 @@ export function Spotlight({
               ) : (
                 <div className="h-full w-full bg-[linear-gradient(160deg,#1B1B20_0%,#0A0A0A_55%,#050505_100%)]" />
               )}
+
+              {showTrailer && trailer ? (
+                <div className="pointer-events-none absolute inset-0 overflow-hidden">
+                  <iframe
+                    key={`${trailer.id}-${muted ? "m" : "u"}`}
+                    ref={trailerFrameRef}
+                    src={embedUrl(trailer, muted)}
+                    title={`${current.title} trailer`}
+                    allow="autoplay; encrypted-media"
+                    sandbox="allow-scripts allow-same-origin allow-forms"
+                    referrerPolicy="no-referrer"
+                    tabIndex={-1}
+                    aria-hidden
+                    className="absolute left-1/2 top-1/2 min-h-full min-w-full -translate-x-1/2 -translate-y-1/2"
+                    style={{ aspectRatio: "16 / 9", width: "max(100%, 177.78vh)" }}
+                  />
+                </div>
+              ) : null}
             </motion.div>
           ) : (
             <div className="absolute inset-0 bg-[linear-gradient(160deg,#1B1B20_0%,#0A0A0A_55%,#050505_100%)]" />
@@ -370,8 +392,10 @@ export function Spotlight({
         </div>
       </div>
 
-      {/* Trailer mute toggle (bottom-right control cluster) */}
-      {current && trailer && (
+      {/* Trailer mute toggle (bottom-right control cluster). Hidden once the
+          embed has failed, so the control can't offer audio for a video that
+          isn't playing. */}
+      {current && showTrailer && (
         <button
           type="button"
           onClick={() => setMuted((m) => !m)}

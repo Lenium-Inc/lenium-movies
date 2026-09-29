@@ -33,6 +33,7 @@ import {
   pickDownloadCandidate,
 } from "@/lib/downloadSource";
 import { EpisodeMatrix } from "@/components/movies/EpisodeMatrix";
+import { useEmbedFailure } from "@/hooks/useEmbedFailure";
 import { cancelInFlightPrefetch, prefetchForOpen } from "@/services/prefetch";
 import { attemptPlay } from "@/services/capGate";
 import { tmdbImage, type TmdbImageSize } from "@/lib/tmdbImages";
@@ -136,6 +137,12 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
       active = false;
     };
   }, [movie.providerId]);
+
+  // Tear the background embed down if it is unplayable, so this dialog falls
+  // back to the backdrop instead of showing the player's error card.
+  const { failed: trailerFailed, frameRef: trailerFrameRef } = useEmbedFailure(
+    trailer ? `${trailer.provider}:${trailer.id}` : null,
+  );
 
   /**
    * Build the playable stream for the selected title/episode and open the player.
@@ -410,36 +417,41 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
         className="max-h-[94vh] w-full max-w-2xl overflow-y-auto rounded-t-xl border border-white/10 bg-[#151519] shadow-2xl sm:rounded-xl"
       >
         <div className="relative aspect-video w-full bg-[#0a0a0c]">
-          {trailer && trailer.provider === "youtube" ? (
-            <iframe
-              key="youtube-trailer"
-              src={`https://www.youtube-nocookie.com/embed/${trailer.id}?autoplay=1&mute=1&controls=0&loop=1&playlist=${trailer.id}&playsinline=1&modestbranding=1&rel=0`}
-              className="absolute inset-0 h-full w-full object-cover pointer-events-none"
-              allow="autoplay; encrypted-media"
-              sandbox="allow-scripts allow-same-origin allow-forms"
-              referrerPolicy="no-referrer"
-              title={`${movie.title} trailer`}
-            />
-          ) : trailer ? (
-            <iframe
-              key="trailer-embed"
-              src={`https://www.dailymotion.com/embed/video/${trailer.id}?autoplay=1&muted=1&loop=1&controls=0`}
-              className="absolute inset-0 h-full w-full object-cover pointer-events-none"
-              allow="autoplay; encrypted-media"
-              sandbox="allow-scripts allow-same-origin allow-forms"
-              referrerPolicy="no-referrer"
-              title={`${movie.title} trailer`}
-            />
-          ) : movie.backdrop ? (
+          {/*
+            Backdrop first, trailer over it. Previously these were exclusive
+            branches, so an embed that failed to play left YouTube's error card
+            filling this box with nothing behind it. Keeping the artwork
+            mounted means dropping a failed iframe is all it takes to recover.
+          */}
+          {movie.backdrop ? (
             <img
               key="backdrop"
               src={getImageUrl(movie.backdrop, "original")}
               alt=""
+              loading="eager"
               className="absolute inset-0 h-full w-full object-cover"
             />
           ) : (
             <div className="absolute inset-0 bg-gradient-to-br from-[#1B1B20] to-[#0a0a0c]" />
           )}
+          {trailer && !trailerFailed ? (
+            <iframe
+              key="trailer-embed"
+              ref={trailerFrameRef}
+              src={
+                trailer.provider === "youtube"
+                  ? // `enablejsapi=1` makes an unplayable video reportable; see
+                    // `useEmbedFailure`.
+                    `https://www.youtube-nocookie.com/embed/${trailer.id}?autoplay=1&mute=1&controls=0&loop=1&playlist=${trailer.id}&playsinline=1&modestbranding=1&rel=0&enablejsapi=1`
+                  : `https://www.dailymotion.com/embed/video/${trailer.id}?autoplay=1&muted=1&loop=1&controls=0&enablejsapi=1`
+              }
+              className="pointer-events-none absolute inset-0 h-full w-full object-cover"
+              allow="autoplay; encrypted-media"
+              sandbox="allow-scripts allow-same-origin allow-forms"
+              referrerPolicy="no-referrer"
+              title={`${movie.title} trailer`}
+            />
+          ) : null}
           <button
             onClick={onClose}
             aria-label="Close details"
