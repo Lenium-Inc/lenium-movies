@@ -35,7 +35,6 @@ import {
 import { EpisodeMatrix } from "@/components/movies/EpisodeMatrix";
 import { useEmbedFailure } from "@/hooks/useEmbedFailure";
 import { cancelInFlightPrefetch, prefetchForOpen } from "@/services/prefetch";
-import { attemptPlay } from "@/services/capGate";
 import { tmdbImage, type TmdbImageSize } from "@/lib/tmdbImages";
 import {
   getProgress,
@@ -152,7 +151,6 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
     targetEpisode: number
   ) => {
     if (resolving) return;
-    if (!attemptPlay()) return;
     setResolving(true);
     setPlayError(null);
     try {
@@ -229,7 +227,6 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
 
   const play = async () => {
     if (resolving) return;
-    if (!attemptPlay()) return;
     if (resolved) {
       const isSeries = movie.mediaType === "tv";
       await resolveAndPlay(isSeries ? season : 1, isSeries ? episode : 1);

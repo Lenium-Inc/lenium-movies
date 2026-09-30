@@ -48,7 +48,6 @@ import { formatRuntime } from "@/lib/format";
 import { titleUnavailable } from "@/lib/playbackCopy";
 import { WatchTVControls, type SeasonInfo } from "@/components/stream/WatchTVControls";
 import { cancelInFlightPrefetch, prefetchForOpen } from "@/services/prefetch";
-import { attemptPlay } from "@/services/capGate";
 import { useLocalSession } from "@/context/LocalSessionContext";
 import {
   getProgress,
@@ -504,11 +503,14 @@ export function WatchPage() {
   const resolveAndPlay = useCallback(
     async (targetSeason: number, targetEpisode: number) => {
       if (resolving || !movie) return;
-      if (!attemptPlay()) return;
-      // Claim the day's allowance before spending a resolve on playback. The
-      // claim is idempotent per title, so a retry or a second tab does not
-      // burn a slot. Signed-out viewers and profiles with no server profile
-      // resolve to `true` and play unthrottled.
+      // Claim the day's allowance before spending a resolve on playback. This
+      // is the only gate on playback: it is the server's decision, it is
+      // idempotent per title so a retry or a second tab does not burn a slot,
+      // and it is what the limit notice is built from. A second, local
+      // "mindful" counter used to run in front of this one and open a
+      // self-resetting modal -- two competing daily limits, one of which the
+      // viewer could clear with a button. Signed-out viewers and profiles with
+      // no server profile resolve to `true` and play unthrottled.
       const key = `${movie.providerId}:${targetSeason}:${targetEpisode}`;
       const allowed = await claimAllowance(key);
       if (!allowed) {

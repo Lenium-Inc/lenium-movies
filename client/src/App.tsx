@@ -3,10 +3,8 @@ import NotFound from "@/pages/NotFound";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
-import { MindfulCapModal } from "./components/player/MindfulCapModal";
 import { CookieBanner } from "./components/CookieBanner";
 import Home from "./pages/Home";
-import HeroPreview from "./pages/HeroPreview";
 import Profile from "./pages/Profile";
 import { WatchPage } from "./pages/Watch";
 import MyList from "./pages/MyList";
@@ -21,7 +19,10 @@ function Router() {
   return (
     <Switch>
       <Route path="/" component={Home} />
-      <Route path="/hero" component={HeroPreview} />
+      {/* `/hero` served a scratch design page with fifteen hardcoded fake
+          titles, invented genre taxonomies and a raw `alert()` as its details
+          view, on a public route with no auth guard. Removed rather than
+          hidden: it looked like the real product and was not. */}
       <Route path="/profiles" component={ProfilesPage} />
       <Route path="/login" component={() => <AuthPage mode="login" />} />
       <Route path="/signup" component={() => <AuthPage mode="signup" />} />
@@ -48,7 +49,16 @@ export default function App() {
     <ErrorBoundary>
       <ThemeProvider defaultTheme="dark">
         <Toaster />
-        <MindfulCapModal />
+        {/*
+          One daily limit, and it is the server's.
+          The global "mindful cinematic" modal is gone: it was a localStorage
+          counter of 8 that ran in front of the real 10-per-profile allowance,
+          opened on every route including the signed-out home page, and offered
+          a "Reset limit" button -- so the product advertised a limit the viewer
+          could switch off, next to a real one they could not. The remaining
+          limit is enforced by /api/allowance/claim and explained once, on the
+          watch page.
+        */}
         <Router />
         <CookieBanner />
       </ThemeProvider>

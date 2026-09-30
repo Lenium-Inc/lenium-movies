@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "wouter";
 import { genreFilterOptions, INFINITE_VIEWS, useCatalog } from "@/hooks/useCatalog";
 import { Navbar } from "@/components/layout/Navbar";
 import { APPLY_SEARCH_EVENT } from "@/components/layout/NavbarSearch";
@@ -28,6 +29,8 @@ export default function Home() {
     view,
     search,
     genre,
+    sort,
+    mediaType,
     savedIds,
     configured,
     loading,
@@ -45,6 +48,8 @@ export default function Home() {
     setSection,
     setSearch,
     setGenre,
+    setSort,
+    setMediaType,
     toggleSave,
     loadMoreDiscover,
   } = useCatalog();
@@ -158,16 +163,61 @@ export default function Home() {
                   searchLoading={searchLoading}
                 />
               )}
+
+            {/* What this product actually is, stated once, in the product's own
+                voice. The home page previously opened straight into a grid with
+                no explanation of the two things a viewer cannot infer from the
+                shelves: that recommendations are built from their own history,
+                and that watching is metered. Both are stated plainly here, and
+                the limit is given the same number the server enforces so the
+                promise on this page and the refusal at playback agree. */}
+            {!isClientSearch && isHomeView && (
+              <section
+                aria-labelledby="what-is-stream-vy"
+                className="mb-10 max-w-3xl border-l-2 border-white/10 pl-4"
+              >
+                <h2
+                  id="what-is-stream-vy"
+                  className="text-sm font-bold uppercase tracking-[0.18em] text-[#8b8b90]"
+                >
+                  What Stream Vy is
+                </h2>
+                <p className="mt-2 text-[13.5px] leading-relaxed text-zinc-400">
+                  A shared shelf for the films you actually want to watch, with
+                  separate profiles so everyone gets their own recommendations
+                  instead of inheriting the last person&apos;s history. Pick
+                  something you love and it is remembered; ignore what you
+                  don&apos;t and the shelf gets sharper.
+                </p>
+                <p className="mt-2 text-[13.5px] leading-relaxed text-zinc-500">
+                  Free viewing is metered at 10 titles a day per profile, and
+                  resets at midnight UTC. Nothing is hosted on our servers —
+                  playback comes from third-party providers, so availability
+                  varies by title.{" "}
+                  <Link href="/terms" className="underline underline-offset-4 hover:text-zinc-300">
+                    Terms
+                  </Link>
+                </p>
+              </section>
+            )}
             <section className="mt-8 flex flex-wrap items-center justify-between gap-4">
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#8b8b90]">
                   Browse the catalogue
                 </p>
-                <h1 className="mt-1 text-2xl font-bold">Discover</h1>
+                {/* An h2, not an h1: the spotlight above already owns the
+                    page's h1 with the featured title. Two h1s on one page
+                    splits the document outline and leaves assistive tech
+                    announcing the featured film twice. */}
+                <h2 className="mt-1 text-2xl font-bold">Discover</h2>
               </div>
               <DiscoverDropdown
                 genre={genre}
                 setGenre={setGenre}
+                sort={sort}
+                setSort={setSort}
+                mediaType={mediaType}
+                setMediaType={setMediaType}
                 setView={setView}
                 filteredCount={
                   isBrowseView ? discoverItems.length : filtered.length
@@ -219,6 +269,24 @@ export default function Home() {
                 ))
               )}
             </div>
+
+            {/* TMDB attribution. Their terms require a visible credit wherever
+                their metadata and imagery appear, and every poster, backdrop,
+                synopsis, rating and cast list in this catalogue comes from
+                there. It was missing entirely. */}
+            <p className="mt-10 text-[11px] leading-5 text-zinc-600">
+              This product uses the TMDB API but is not endorsed or certified
+              by TMDB.{" "}
+              <a
+                href="https://www.themoviedb.org/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline underline-offset-4 transition hover:text-zinc-400"
+              >
+                Movie metadata &amp; artwork by TMDB
+              </a>
+              .
+            </p>
           </>
         )}
       </main>

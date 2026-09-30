@@ -52,6 +52,51 @@ export const INFINITE_VIEWS: ReadonlySet<View> = new Set<View>([
 /** Tiles a page of the aggregated catalog returns (backend default). */
 export const DISCOVER_PAGE_SIZE = 24;
 
+export type CatalogSort = "trending" | "rating" | "year" | "popularity";
+export type MediaTypeFilter = "all" | "movie" | "tv";
+
+export const CATALOG_SORT_OPTIONS: readonly { value: CatalogSort; label: string }[] = [
+  { value: "trending", label: "Trending" },
+  { value: "rating", label: "Top Rated" },
+  { value: "year", label: "Release Year" },
+  { value: "popularity", label: "Most Popular" },
+];
+
+export const MEDIA_TYPE_OPTIONS: readonly { value: MediaTypeFilter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "movie", label: "Movie" },
+  { value: "tv", label: "TV Show" },
+];
+
+/**
+ * Order a set of titles by the chosen sort.
+ *
+ * "Trending" is deliberately the identity function: the upstream order is
+ * already rank-ordered by the backend, and re-sorting it here by popularity
+ * would quietly turn a trending shelf into a popularity chart while the heading
+ * still said "Trending Now".
+ */
+function applySort(items: Movie[], sort: CatalogSort): Movie[] {
+  if (sort === "trending") return items;
+  const out = [...items];
+  switch (sort) {
+    case "rating":
+      // Unrated titles sort last instead of first: TMDB leaves `vote_average`
+      // at 0 for catalogue entries with no votes yet, and 0 would otherwise
+      // top a rating list.
+      return out.sort((a, b) => (b.vote_average ?? 0) - (a.vote_average ?? 0));
+    case "year":
+      return out.sort((a, b) => (b.year ?? 0) - (a.year ?? 0));
+    case "popularity":
+      return out.sort((a, b) => (b.popularity ?? 0) - (a.popularity ?? 0));
+  }
+}
+
+function applyMediaType(items: Movie[], mediaType: MediaTypeFilter): Movie[] {
+  if (mediaType === "all") return items;
+  return items.filter(movie => movie.mediaType === mediaType);
+}
+
 interface CatalogRows {
   title: string;
   items: Movie[];
@@ -61,6 +106,10 @@ interface UseCatalog {
   view: View;
   search: string;
   genre: string;
+  /** Active sort order for both shelf views and the paged browse grid. */
+  sort: CatalogSort;
+  /** Active media-type narrowing; "all" means no narrowing. */
+  mediaType: MediaTypeFilter;
   savedIds: number[];
   configured: boolean;
   loading: boolean;
@@ -91,6 +140,8 @@ interface UseCatalog {
   setSection: (view: View) => void;
   setSearch: (value: string) => void;
   setGenre: (value: string) => void;
+  setSort: (value: CatalogSort) => void;
+  setMediaType: (value: MediaTypeFilter) => void;
   toggleSave: (movie: Movie) => void;
   loadMoreDiscover: () => void;
 }
@@ -232,6 +283,12 @@ export function useCatalog(): UseCatalog {
   const [view, setView] = useState<View>("home");
   const [search, setSearch] = useState("");
   const [genre, setGenre] = useState("All");
+  // Sort and media type used to live in DiscoverDropdown as local state that
+  // only ever reached `setGenre`, so picking "Top Rated" or "TV Show" changed
+  // the highlighted chip and nothing else. They are catalog state now, applied
+  // to `filtered` and to the paged browse grid alike.
+  const [sort, setSort] = useState<CatalogSort>("trending");
+  const [mediaType, setMediaType] = useState<MediaTypeFilter>("all");
   const [savedIds, setSavedIds] = useState<number[]>(() => savedListIds());
 
   useEffect(() => subscribeList(() => setSavedIds(savedListIds())), []);
@@ -440,8 +497,13 @@ export function useCatalog(): UseCatalog {
       }
     }
 
-    return base;
-  }, [genre, movies, searching, view]);
+    // An explicit media-type choice from the filter panel wins over the view's
+    // own TV bias, but is never additive: asking for "Movie" while on the TV
+    // shelf would otherwise intersect to nothing.
+    if (mediaType !== "all") base = applyMediaType(base, mediaType);
+
+    return applySort(base, sort);
+  }, [genre, movies, searching, view, sort, mediaType]);
 
   function dedupeMovies(movies: Movie[]): Movie[] {
   const seen = new Set<string>();
@@ -600,6 +662,8 @@ export function useCatalog(): UseCatalog {
     view,
     search,
     genre,
+    sort,
+    mediaType,
     savedIds,
     configured: true,
     loading,
@@ -610,8 +674,16 @@ export function useCatalog(): UseCatalog {
     setSection,
     setSearch,
     setGenre,
+    setSort,
+    setMediaType,
     toggleSave,
-    discoverItems,
+    // Sort and media type are applied here as well as to `filtered`, so the
+    // paged browse grid honours them. Previously the filter panel looked
+    // identical on every view but only moved anything on the shelf views.
+    discoverItems: applySort(
+      applyMediaType(discoverItems, mediaType),
+      sort
+    ),
     discoverPage,
     discoverHasMore,
     discoverLoading,

@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { ChevronRight } from "lucide-react";
 import type { Movie } from "./types";
 import { MovieCard } from "./MovieCard";
 import { MovieGrid } from "./MovieGrid";
@@ -132,12 +131,7 @@ export function MovieRow({
             {title}
           </h2>
         </div>
-        {!grid && (
-          <button className="hidden items-center gap-1 text-xs font-semibold text-[#99999e] hover:text-white sm:flex">
-            View all <ChevronRight className="h-3.5 w-3.5" />
-          </button>
-        )}
-      </div>
+        </div>
       {isInView ? renderContent() : renderSkeleton()}
     </section>
   );

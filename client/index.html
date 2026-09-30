@@ -22,17 +22,19 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
-    <script
-      defer
-      src="%VITE_ANALYTICS_ENDPOINT%/umami"
-      data-website-id="%VITE_ANALYTICS_WEBSITE_ID%"
-    ></script>
-    <!-- Cloudflare Web Analytics -->
-    <script
-      type="module"
-      src="https://static.cloudflareinsights.com/beacon.min.js"
-      data-cf-beacon='{"token": "855d0aafca0a404190b9efde05d9465e"}'
-    ></script>
-    <!-- End Cloudflare Web Analytics -->
+    <!--
+      No analytics beacons.
+
+      This used to ship two: an Umami script whose src was the literal
+      `%VITE_ANALYTICS_ENDPOINT%` (Vite only inlines the literal string
+      `import.meta.env.VITE_*`, so an unset var left the placeholder in dist
+      and every page load requested /%VITE_ANALYTICS_ENDPOINT%/umami), and a
+      Cloudflare beacon that ran unconditionally. The cookie notice meanwhile
+      told viewers "no third-party analytics in this app" -- which was false.
+
+      Removed rather than gated so the privacy notice is true by construction.
+      If analytics is wanted later, it should be added behind the consent
+      choice in CookieBanner, not unconditionally in this file.
+    -->
   </body>
 </html>

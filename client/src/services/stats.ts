@@ -15,8 +15,6 @@ import {
 } from "lucide-react";
 import { historyEnabled } from "./settings";
 
-export const DAILY_LIMIT = 8;
-
 export interface Achievement {
   id: string;
   title: string;
@@ -182,38 +180,23 @@ export function playsToday(): number {
   return load().playsByDay[todayKey()] ?? 0;
 }
 
-export interface CapResult {
-  count: number;
-  locked: boolean;
-}
-
 /**
- * Register a play attempt. Every attempt beyond the daily limit is refused —
- * the lock message shows `8/8` even as more attempts land.
+ * Count one play for the stats and achievements screens.
+ *
+ * This used to enforce a second, local daily cap of 8 and return `locked`, which
+ * the (now-removed) mindful-cap modal surfaced with its own "Reset limit" button
+ * -- a viewer-facing limit that was not the real one and could be cleared. The
+ * real daily allowance is server-enforced at /api/allowance/claim. This is now
+ * only a counter.
  */
-export function recordPlay(): CapResult {
+export function recordPlay(): number {
   const data = load();
   const key = todayKey();
-  const count = data.playsByDay[key] ?? 0;
-  if (count >= DAILY_LIMIT) {
-    save(data);
-    return { count, locked: true };
-  }
-  data.playsByDay[key] = count + 1;
+  const count = (data.playsByDay[key] ?? 0) + 1;
+  data.playsByDay[key] = count;
   data.allTimePlays += 1;
   save(data);
-  return { count: count + 1, locked: false };
-}
-
-/** Seconds until the daily counter resets at local midnight. */
-export function secondsToReset(): number {
-  const now = new Date();
-  const midnight = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate() + 1
-  );
-  return Math.max(0, Math.round((midnight.getTime() - now.getTime()) / 1000));
+  return count;
 }
 
 function newlyEarned(data: Stats): string[] {
@@ -280,13 +263,6 @@ export function recordWatch(
   const gained = newlyEarned(data);
   save(data);
   return gained;
-}
-
-/** Reset the daily play counter (clears today's cap). */
-export function resetDailyLimit(): void {
-  const data = load();
-  data.playsByDay = {};
-  save(data);
 }
 
 /** Drop a title's progress and Continue Watching entry (privacy clear-one). */
