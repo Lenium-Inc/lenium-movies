@@ -191,9 +191,9 @@ export default function Home() {
                 </p>
                 <p className="mt-2 text-[13.5px] leading-relaxed text-zinc-500">
                   Free viewing is metered at 10 titles a day per profile, and
-                  resets at midnight UTC. Nothing is hosted on our servers —
-                  playback comes from third-party providers, so availability
-                  varies by title.{" "}
+                  resets at midnight UTC. We don&apos;t host any films — every
+                  copy lives on a third-party host, so availability varies by
+                  title.{" "}
                   <Link href="/terms" className="underline underline-offset-4 hover:text-zinc-300">
                     Terms
                   </Link>
@@ -294,8 +294,8 @@ export default function Home() {
       <footer className="border-t border-white/5 px-4 py-8 sm:px-6 lg:px-8">
         <div className="mx-auto flex max-w-[1400px] flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <p className="max-w-xl text-xs leading-5 text-zinc-500">
-            An indexing interface for third-party providers. No media is hosted
-            on our servers — see the{" "}
+            Public-domain and openly licensed film, streamed from
+            third-party hosts. We don&apos;t host any of it — see the{" "}
             <a
               href="/terms"
               className="text-zinc-400 underline underline-offset-4 transition hover:text-zinc-200"
@@ -310,6 +310,12 @@ export default function Home() {
               className="transition hover:text-white"
             >
               Terms
+            </a>
+            <a
+              href="/privacy"
+              className="transition hover:text-white"
+            >
+              Privacy
             </a>
             <a
               href="/dmca"

@@ -14,6 +14,7 @@ import ProfilesPage from "./pages/ProfilesPage";
 import AuthPage from "./pages/AuthPage";
 import Terms from "./pages/Terms";
 import Dmca from "./pages/Dmca";
+import Privacy from "./pages/Privacy";
 
 function Router() {
   return (
@@ -37,6 +38,7 @@ function Router() {
       <Route path="/share/:token" component={ShareInvite} />
       <Route path="/watch/:id" component={WatchPage} />
       <Route path="/terms" component={Terms} />
+      <Route path="/privacy" component={Privacy} />
       <Route path="/dmca" component={Dmca} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />

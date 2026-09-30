@@ -1035,6 +1035,72 @@ class Store:
         )
         return bool(n)
 
+    def delete_user(self, user_id) -> bool:
+        """Delete an account and every row that belongs to it.
+
+        On pg the FKs cascade, but the same statements run on sqlite so both
+        backends end up observably identical -- and so the deletion is a
+        property of the code rather than of a schema detail. Every table that
+        names the account is listed explicitly, including the ones with no FK
+        at all (`taste_signals`, `taste_events`, `referral_uses`), because
+        leaving those behind would keep a deleted viewer's taste profile and
+        referral history in the database forever.
+
+        Deleting an account invalidates its sessions here rather than relying on
+        a join at read time: a session row is a bearer credential, and a token
+        that is merely ignored by one lookup path but still accepted by another
+        is not a revoked credential.
+        """
+# (sql, params) pairs rather than a loop over bare statements: several
+        # of these take the id twice, and counting `?` in the string would be
+        # a silent-corruption bug the moment a statement changed.
+        deletions = (
+            # Taste and allowance rows hang off profiles, so they go while the
+            # profiles still exist to be selected from.
+            (
+                "DELETE FROM taste_events WHERE profile_id IN "
+                "(SELECT id FROM watch_profiles WHERE user_id = ?)",
+                (user_id,),
+            ),
+            (
+                "DELETE FROM taste_signals WHERE profile_id IN "
+                "(SELECT id FROM watch_profiles WHERE user_id = ?)",
+                (user_id,),
+            ),
+            (
+                "DELETE FROM daily_plays WHERE profile_id IN "
+                "(SELECT id FROM watch_profiles WHERE user_id = ?)",
+                (user_id,),
+            ),
+            ("DELETE FROM watch_history WHERE user_id = ?", (user_id,)),
+            ("DELETE FROM watch_profiles WHERE user_id = ?", (user_id,)),
+            ("DELETE FROM saved_media WHERE user_id = ?", (user_id,)),
+            # A share is symmetric: the owner and the member both point at the
+            # same link, and a deleted account must not linger in either column.
+            ("DELETE FROM share_members WHERE user_id = ? OR owner_id = ?", (user_id, user_id)),
+            # A referral is symmetric too. `referral_uses` is cleared before
+            # `referral_codes`, because it identifies the code by id and that id
+            # stops existing on the next statement.
+            (
+                "DELETE FROM referral_uses WHERE referred_id = ? OR code_id IN "
+                "(SELECT id FROM referral_codes WHERE owner_id = ?)",
+                (user_id, user_id),
+            ),
+            ("DELETE FROM referral_grants WHERE owner_id = ?", (user_id,)),
+            ("DELETE FROM referral_codes WHERE owner_id = ?", (user_id,)),
+            ("DELETE FROM share_invites WHERE owner_id = ?", (user_id,)),
+            # `accepted_by` is ON DELETE SET NULL on pg. Doing it by hand is what
+            # keeps the same outcome on sqlite, where there is no such clause.
+            ("UPDATE share_invites SET accepted_by = NULL WHERE accepted_by = ?", (user_id,)),
+            # Sessions last: this is what actually revokes the credential.
+            ("DELETE FROM sessions WHERE user_id = ?", (user_id,)),
+        )
+        for sql, params in deletions:
+            self._execute(sql, params)
+
+        n = self._execute_rowcount("DELETE FROM users WHERE id = ?", (user_id,))
+        return bool(n)
+
     # -- daily allowance & referrals ---------------------------------------
 
     def plays_on(self, profile_id, day: str) -> int:

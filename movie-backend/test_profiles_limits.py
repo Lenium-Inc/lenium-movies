@@ -442,6 +442,112 @@ def test_replaying_a_watched_title_is_not_charged_again_at_the_cap():
     assert fresh.get_json()["code"] == "daily_limit"
 
 
+def _rows(sql, params=()):
+    """Raw row count against the throwaway store, for deletion assertions."""
+    return authdb.get_store()._query(sql, params, fetch_all=True)
+
+
+def test_account_deletion_requires_the_password():
+    """A bearer token alone must not be able to destroy someone's history."""
+    client = _fresh_client()
+    email = _unique("del-acct")
+    headers = _account(client, email)
+    pid = client.post("/api/profiles", headers=headers, json={"name": "A"}).get_json()["profile"]["id"]
+    client.post("/api/auth/history", headers=headers, json={"profile_id": pid, "movie_key": "m1", "title": "M"})
+
+    # No body at all.
+    assert client.delete("/api/auth/account", headers=headers).status_code == 400
+    # Right address, no password.
+    assert client.delete(
+        "/api/auth/account", headers=headers, json={"email": email}
+    ).status_code == 400
+    # Wrong password is rejected even with the correct address.
+    assert client.delete(
+        "/api/auth/account", headers=headers, json={"email": email, "password": "wrong"}
+    ).status_code == 401
+    # A mismatched address is refused with the same message as a missing one,
+    # so this cannot be used to discover which email the account uses.
+    wrong_addr = client.delete(
+        "/api/auth/account", headers=headers, json={"email": "nobody@example.com", "password": "pw123456"}
+    )
+    missing_addr = client.delete(
+        "/api/auth/account", headers=headers, json={"email": "x", "password": "pw123456"}
+    )
+    assert wrong_addr.status_code == missing_addr.status_code == 400
+    assert (
+        wrong_addr.get_json()["error"] == missing_addr.get_json()["error"]
+    ), (wrong_addr.get_json(), missing_addr.get_json())
+
+    # Still intact after every rejected attempt.
+    assert client.get("/api/auth/history", headers=headers, query_string={"profile_id": pid}).get_json()["history"]
+
+
+def test_deleting_an_account_removes_everything_attached_to_it():
+    client = _fresh_client()
+    email = _unique("del-all")
+    headers = _account(client, email)
+    store = authdb.get_store()
+    pid = client.post("/api/profiles", headers=headers, json={"name": "A"}).get_json()["profile"]["id"]
+    client.post("/api/auth/history", headers=headers, json={"profile_id": pid, "movie_key": "m1", "title": "M"})
+    client.post("/api/auth/my-list", headers=headers, json={"media_id": 42, "title": "Saved"})
+    client.post("/api/taste/record", headers=headers, json={"profile_id": pid, "kind": "like", "feature": "Action", "weight": 1})
+    client.post("/api/allowance/claim", headers=headers, json={"profile_id": pid, "movie_key": "m1"})
+    code = store.referral_code_for(store.user_by_token(headers["Authorization"][7:])["id"])
+
+    user_id = store.user_by_token(headers["Authorization"][7:])["id"]
+
+    assert client.delete(
+        "/api/auth/account", headers=headers,
+        json={"email": email, "password": "pw123456"},
+    ).status_code == 200
+
+    # The account, its profile, and every row naming it are gone -- including
+    # the tables with no FK, which is where an incomplete delete would leave a
+    # taste profile and a referral code behind.
+    assert _rows("SELECT * FROM users WHERE id = ?", (user_id,)) == []
+    assert _rows("SELECT * FROM watch_profiles WHERE user_id = ?", (user_id,)) == []
+    assert _rows("SELECT * FROM watch_history WHERE user_id = ?", (user_id,)) == []
+    assert _rows("SELECT * FROM daily_plays WHERE profile_id = ?", (pid,)) == []
+    assert _rows("SELECT * FROM taste_signals WHERE profile_id = ?", (pid,)) == []
+    assert _rows("SELECT * FROM taste_events WHERE profile_id = ?", (pid,)) == []
+    assert _rows("SELECT * FROM saved_media WHERE user_id = ?", (user_id,)) == []
+    assert _rows("SELECT * FROM referral_codes WHERE code = ?", (code,)) == []
+
+    # And the token is genuinely revoked, not merely ignored by the me lookup:
+    # a valid-looking bearer on any authenticated route is refused.
+    assert client.get("/api/auth/me", headers=headers).status_code == 401
+
+
+def test_deleting_an_account_clears_referral_links_from_the_other_side():
+    """A referral is symmetric: the survivor's code must not point at a dead account."""
+    client = _fresh_client()
+    store = authdb.get_store()
+    inviter = _account(client, _unique("ref-inv"))
+    joiner = _account(client, _unique("ref-join"))
+    inviter_id = store.user_by_token(inviter["Authorization"][7:])["id"]
+    code = store.referral_code_for(inviter_id)
+    assert client.post("/api/referrals/apply", headers=joiner, json={"code": code}).status_code == 200
+
+    joiner_id = store.user_by_token(joiner["Authorization"][7:])["id"]
+
+    assert client.delete(
+        "/api/auth/account", headers=joiner,
+        json={"email": _email_of(client, joiner_id), "password": "pw123456"},
+    ).status_code == 200
+
+    # The inviter's code survives -- it is theirs -- but the redemption record
+    # and the granted day that referenced the deleted account do not.
+    assert _rows("SELECT * FROM referral_codes WHERE code = ?", (code,)) != []
+    assert _rows("SELECT * FROM referral_uses WHERE referred_id = ?", (joiner_id,)) == []
+    assert _rows("SELECT * FROM referral_grants WHERE owner_id = ?", (joiner_id,)) == []
+    assert inviter_id  # both sides were exercised; see the assertions above
+
+
+def _email_of(client, user_id) -> str:
+    store = authdb.get_store()
+    return store.user_by_id(user_id)["email"]
+
+
 def _run():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failures = 0

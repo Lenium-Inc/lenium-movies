@@ -1483,6 +1483,52 @@ def api_logout():
     return jsonify({"success": True})
 
 
+@app.route("/api/auth/account", methods=["DELETE", "OPTIONS"])
+def api_delete_account():
+    """Delete the signed-in account and everything attached to it.
+
+    The privacy notice promises a deletion route, and there was no endpoint and
+    no client surface behind it -- so the promise was one a viewer could not
+    act on.
+
+    Password confirmation is required because this is irreversible and the
+    bearer token is long-lived: a token that leaked, or a shared device someone
+    was left logged into, would otherwise be enough to destroy someone's
+    history without their involvement. Signing in again is the check that costs
+    the least and proves the password is known rather than merely that a token
+    exists.
+    """
+    if request.method == "OPTIONS":
+        return ("", 204)
+    user = _auth_user()
+    if not user:
+        return _auth_error("Sign in to delete your account.")
+
+    payload = request.get_json(silent=True) or {}
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", str(payload.get("email") or "")):
+        return _auth_error("Confirm the email address on the account.", 400)
+    if str(payload.get("email") or "").strip().lower() != str(user["email"]).lower():
+        # Deliberately the same message as an unknown address: reporting "that
+        # is not the address on this account" would let a token holder confirm
+        # which email the account is registered to.
+        return _auth_error("Confirm the email address on the account.", 400)
+    if not str(payload.get("password") or ""):
+        return _auth_error("Enter your password to delete the account.", 400)
+    if not authdb.get_store().verify_password(
+        user, str(payload.get("password"))
+    ):
+        return _auth_error("That password did not match.", 401)
+
+    try:
+        deleted = authdb.get_store().delete_user(user["id"])
+    except Exception:
+        app.logger.exception("account deletion failed")
+        return _auth_error("Could not delete the account. Try again.", 500)
+    if not deleted:
+        return _auth_error("Could not delete the account. Try again.", 500)
+    return jsonify({"success": True})
+
+
 # ---------------------------------------------------------------------------
 # Profiles (a home is the signed-in account; max 4)
 # ---------------------------------------------------------------------------

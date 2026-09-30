@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Plus, Clock, Trash2, X, PenLine } from "lucide-react";
+import { Plus, Clock, Trash2, X, PenLine, UserX } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { BrandLockup } from "@/components/brand/Brand";
 import { useAuth } from "@/context/AuthContext";
@@ -9,9 +9,11 @@ import { AddProfileForm } from "@/components/profile/AddProfileForm";
 import { EditProfileModal } from "@/components/profile/EditProfileModal";
 import { ProfileAvatar } from "@/components/profile/ProfileAvatar";
 import {
+  apiDeleteAccount,
   apiHistory,
   apiHistoryClear,
   apiHistoryRemove,
+  AuthApiError,
   type RemoteHistoryItem,
 } from "@/services/auth";
 import type { ProfileData } from "@/services/profiles";
@@ -48,6 +50,15 @@ export default function ProfilePage() {
 
   const [history, setHistory] = useState<RemoteHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+
+  // Account deletion. The panel is closed by default and requires typing the
+  // account email plus the password, because the endpoint asks for both and
+  // because this is the one irreversible control on the page.
+  const [showDeleteAccount, setShowDeleteAccount] = useState(false);
+  const [deleteEmail, setDeleteEmail] = useState("");
+  const [deletePassword, setDeletePassword] = useState("");
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   const loadHistory = useCallback(async () => {
     if (!user) return;
@@ -98,6 +109,37 @@ export default function ProfilePage() {
     }
   };
 
+  const closeDeleteAccount = () => {
+    setShowDeleteAccount(false);
+    setDeleteEmail("");
+    setDeletePassword("");
+    setDeleteError(null);
+  };
+
+  const handleDeleteAccount = async () => {
+    if (deleteBusy) return;
+    setDeleteBusy(true);
+    setDeleteError(null);
+    try {
+      await apiDeleteAccount({ email: deleteEmail.trim(), password: deletePassword });
+      // On success every session is already revoked server-side, so there is
+      // nothing to clean up but this page's state.
+      closeDeleteAccount();
+      navigate("/");
+    } catch (error) {
+      // The endpoint's message is the useful one -- wrong password, wrong
+      // address, or a transient failure -- so it is shown rather than replaced
+      // with a generic apology.
+      setDeleteError(
+        error instanceof AuthApiError
+          ? error.message
+          : "Could not delete the account. Try again."
+      );
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
+
   if (authLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#050505]">
@@ -136,7 +178,7 @@ export default function ProfilePage() {
       <main className="relative mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:px-8">
         {/* Account */}
         <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-6 backdrop-blur-xl sm:p-8">
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center gap-4">
             {/* Account avatar. Always renders through the same component as
                 profile avatars so the initials fallback appears on a failed
                 image load, not only when `avatar_url` is absent. */}
@@ -157,7 +199,80 @@ export default function ProfilePage() {
                 </p>
               )}
             </div>
+            <div className="ml-auto">
+              <button
+                type="button"
+                onClick={() =>
+                  showDeleteAccount ? closeDeleteAccount() : setShowDeleteAccount(true)
+                }
+                aria-expanded={showDeleteAccount}
+                className="inline-flex items-center gap-2 rounded-lg border border-white/15 px-3 py-1.5 text-xs font-semibold text-white/50 transition hover:border-red-500/50 hover:text-red-400"
+              >
+                <UserX className="h-3.5 w-3.5" />
+                {showDeleteAccount ? "Cancel" : "Delete account"}
+              </button>
+            </div>
           </div>
+
+          {/* Deletion is destructive and irreversible, so it is behind its own
+              disclosure and asks for both the account email and the password.
+              The endpoint requires the same pair: the session token is a
+              long-lived bearer credential, so a token alone must not be able to
+              destroy someone's history. */}
+          {showDeleteAccount ? (
+            <div className="mt-6 rounded-xl border border-red-500/30 bg-red-500/[0.06] p-5">
+              <h2 className="text-sm font-bold text-white">
+                Delete this account permanently
+              </h2>
+              <p className="mt-2 text-sm leading-relaxed text-white/60">
+                This erases your account and everything attached to it: every
+                profile, watch history entry, My List item, taste signal used
+                for recommendations, referral code and shared list membership.
+                It cannot be undone, and we cannot restore it.
+              </p>
+              <div className="mt-4 grid gap-3 sm:max-w-md">
+                <label className="block">
+                  <span className="text-xs font-semibold text-white/70">
+                    Confirm your email
+                  </span>
+                  <input
+                    type="email"
+                    value={deleteEmail}
+                    onChange={event => setDeleteEmail(event.target.value)}
+                    placeholder={user.email}
+                    autoComplete="username"
+                    className="mt-1.5 w-full rounded-lg border border-white/15 bg-black/40 px-3 py-2 text-sm text-white placeholder:text-white/25 focus:border-red-400/60 focus:outline-none"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-semibold text-white/70">
+                    Your password
+                  </span>
+                  <input
+                    type="password"
+                    value={deletePassword}
+                    onChange={event => setDeletePassword(event.target.value)}
+                    autoComplete="current-password"
+                    className="mt-1.5 w-full rounded-lg border border-white/15 bg-black/40 px-3 py-2 text-sm text-white focus:border-red-400/60 focus:outline-none"
+                  />
+                </label>
+              </div>
+              {deleteError ? (
+                <p role="alert" className="mt-3 text-xs font-medium text-red-400">
+                  {deleteError}
+                </p>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => void handleDeleteAccount()}
+                disabled={deleteBusy || !deleteEmail.trim() || !deletePassword}
+                className="mt-4 inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-white/40"
+              >
+                <Trash2 className="h-4 w-4" />
+                {deleteBusy ? "Deleting…" : "Delete my account"}
+              </button>
+            </div>
+          ) : null}
         </section>
 
         {/* Manage profiles */}

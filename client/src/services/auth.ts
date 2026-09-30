@@ -246,6 +246,28 @@ export async function apiLogout(): Promise<void> {
   }
 }
 
+/**
+ * Delete the signed-in account permanently.
+ *
+ * `password` is sent because the endpoint requires it: the session token is a
+ * long-lived bearer credential, so a token alone must not be able to destroy
+ * someone's history. Throws `AuthApiError` with the server's message on a
+ * rejected confirmation, so the caller can show why.
+ */
+export async function apiDeleteAccount(input: {
+  email: string;
+  password: string;
+}): Promise<void> {
+  await request<{ success: boolean }>("/api/auth/account", {
+    method: "DELETE",
+    auth: true,
+    body: JSON.stringify({ email: input.email, password: input.password }),
+  });
+  // Only reached on success: the account and every session are already gone
+  // server-side, so there is no meaningful state to keep locally.
+  clearSession();
+}
+
 export async function apiHistory(profileId?: string | null): Promise<RemoteHistoryItem[]> {
   // GET has no body, so the profile travels as a query parameter; the backend
   // reads both.

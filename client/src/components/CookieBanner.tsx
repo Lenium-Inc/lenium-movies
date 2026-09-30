@@ -94,10 +94,10 @@ export function CookieBanner() {
               to read the terms would consent on their behalf. Navigating leaves
               the notice undecided, so it is still there when they come back. */}
           <Link
-            href="/terms"
+            href="/privacy"
             className="ml-auto text-xs text-white/50 underline underline-offset-4 transition hover:text-white/80"
           >
-            Privacy terms
+            Privacy notice
           </Link>
         </div>
       </div>

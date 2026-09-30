@@ -66,14 +66,10 @@ def _snapshot():
 
 
 _SAVED = None
-_ROUTES_REGISTERED = False
 
 
 def _register_boom_routes(application):
-    """Declare a route that raises, to exercise the 500 handler.
-
-    Flask refuses new routes once the first request has been handled, so this
-    has to happen at import time rather than inside a test body."""
+    """Declare routes that raise, to exercise the 500 handler."""
 
     @application.app.route("/api/_boom-for-test")
     def _boom():
@@ -82,6 +78,18 @@ def _register_boom_routes(application):
     @application.app.route("/api/_boom-logged-for-test")
     def _boom_logged():
         raise ValueError("distinctive-marker-9f3a")
+
+
+# Flask refuses to register a route once the app has handled its first request
+# (`_check_setup_finished`). These therefore have to exist before *any* suite
+# makes a request, not merely before this suite's first one: registering them
+# lazily inside `_client()` meant this file only worked when it was run alone,
+# and failed all 21 tests when it ran after test_shares.py in the same process,
+# because that suite had already served a request through the same app object.
+# Module import happens during pytest collection, ahead of every test body.
+import app as _app_module  # noqa: E402
+
+_register_boom_routes(_app_module)
 
 
 def _restore(saved):
@@ -104,10 +112,6 @@ def _client():
 
     application.authdb._store = store
     _restore(_SAVED)
-    global _ROUTES_REGISTERED
-    if not _ROUTES_REGISTERED:
-        _register_boom_routes(application)
-        _ROUTES_REGISTERED = True
     return application, application.app.test_client()
 
 
