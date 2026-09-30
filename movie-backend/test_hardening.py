@@ -504,6 +504,50 @@ def test_details_route_uses_shared_trailer_selection():
         application._tmdb_get = original
 
 
+def test_unknown_candidate_year_is_accepted_only_on_an_exact_title():
+    """An Archive.org item with no `year` must not be discarded.
+
+    Nearly every Archive.org entry omits the year field. The year guard used to
+    reject those outright, so `/api/movies/resolve` threw away the one direct
+    mp4 it had, fell through to a vidsrc embed, and the title arrived with an
+    empty `streams` list -- which the client reports as "this title cannot be
+    downloaded". An absent year is not evidence of a different film, so an exact
+    normalised title match now carries the decision on its own.
+    """
+    import catalog_lib
+
+    # Exact title, unpublished year: accept.
+    assert catalog_lib.accept_candidate("1986", None, 1.0) is True
+    # Same request with no title evidence: still reject, as before.
+    assert catalog_lib.accept_candidate("1986", None) is False
+    # A weak title match is still unverifiable, so the year is required.
+    assert catalog_lib.accept_candidate("1986", None, 0.7) is False
+    # Genuinely different known years are vetoed regardless of title strength.
+    assert catalog_lib.accept_candidate("2011", "1951", 1.0) is False
+    # Agreeing years, and no year requested, both pass.
+    assert catalog_lib.accept_candidate("1959", "1959", 1.0) is True
+    assert catalog_lib.accept_candidate(None, "1951", 1.0) is True
+
+
+def test_pick_best_docs_passes_title_score_into_the_year_guard():
+    """The carve-out is unreachable unless the caller forwards the title score.
+
+    `accept_candidate` grew a `title_score` parameter; wiring only the function
+    and not the two call sites would leave the download bug in place while every
+    unit test of the helper still passed.
+    """
+    import catalog_lib
+
+    docs = [{"identifier": "item-a", "title": "Jesus – The Film", "year": None, "downloads": 5}]
+    assert catalog_lib.pick_best_docs(docs, "Jesus – The Film", "1986")
+    # A weak title match with no year must not produce a candidate.
+    assert not catalog_lib.pick_best_docs(docs, "A Completely Different Film", "1986")
+    # The local catalogue path in app.py goes through the same guard.
+    assert catalog_lib.accept_candidate("1986", None, catalog_lib.match_title(
+        "Jesus – The Film", "Jesus – The Film"
+    )) is True
+
+
 def main() -> int:
     tests = [value for name, value in sorted(globals().items()) if name.startswith("test_")]
     failures = 0

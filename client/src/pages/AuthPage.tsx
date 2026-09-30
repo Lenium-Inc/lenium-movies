@@ -96,6 +96,16 @@ export default function AuthPage({ mode }: AuthPageProps) {
   );
   const hasNext = nextPath !== DEFAULT_POST_AUTH_PATH;
 
+  // A referral code arrives as `?ref=LMXXXXXXXX` on a shared signup link. The
+  // pattern is the same one the backend accepts, so a hand-typed nonsense
+  // value is dropped here instead of being sent and rejected.
+  const referralCode = useMemo(() => {
+    const query = location.split("?")[1] ?? "";
+    const match = /[?&]ref=([^&]+)/.exec(query);
+    const value = match?.[1] ? decodeURIComponent(match[1]).trim().toUpperCase() : "";
+    return /^LM[A-Z0-9]{8}$/.test(value) ? value : null;
+  }, [location]);
+
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -190,6 +200,14 @@ export default function AuthPage({ mode }: AuthPageProps) {
     try {
       if (isSignup) {
         await signup({ name: name.trim(), email, password });
+        // A `?ref=` code in the invite link is redeemed after the account
+        // exists, because a referral can only be recorded against a real
+        // user id. Failing here must not block the sign-up itself, so the code
+        // is dropped if it is already used, malformed or self-referral.
+        if (referralCode) {
+          const { apiReferralApply } = await import("@/services/auth");
+          await apiReferralApply(referralCode).catch(() => {});
+        }
       } else {
         await login({ email, password });
       }

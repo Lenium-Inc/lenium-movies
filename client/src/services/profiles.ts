@@ -1,3 +1,13 @@
+/**
+ * Profiles are server rows, but the UI still works in `ProfileData`.
+ *
+ * The two shapes are kept apart on purpose: the server speaks snake_case and
+ * knows about PIN hashes and sort order, while the render layer needs a
+ * resolved avatar URL and camelCase. `toProfileData` is the one place that
+ * translation happens, so a field added to the API shows up as a compile error
+ * here instead of `undefined` at five render sites.
+ */
+import type { ApiProfile } from "@/services/auth";
 import { resolveAvatarUrl, type AvatarPreset } from "@/lib/avatars";
 
 export interface ProfileData {
@@ -26,13 +36,9 @@ export interface ProfileData {
 }
 
 /** A profile mid-edit: only the fields a caller is changing. */
-export type ProfilePatch = Partial<Pick<ProfileData, "name" | "avatar" | "avatarId" | "isKids">>;
-
-const PROFILES_KEY = (userId: string) => `lenium-profiles-${userId}`;
-const ACTIVE_PROFILE_KEY = (userId: string) => `lenium-active-profile-${userId}`;
-
-/** Storage key names are part of the on-disk contract; exposed for tests. */
-export const PROFILE_STORAGE_KEYS = { profiles: PROFILES_KEY, active: ACTIVE_PROFILE_KEY };
+export type ProfilePatch = Partial<
+  Pick<ProfileData, "name" | "avatar" | "avatarId" | "isKids">
+>;
 
 /**
  * Build the avatar for a newly created profile.
@@ -49,22 +55,31 @@ export function createAvatar(name: string, isKids = false, preset?: AvatarPreset
 /**
  * Drop anything that is not a usable profile and repair what can be repaired.
  *
- * This did not exist before, and its absence is why three render sites had no
- * avatar fallback: `getProfiles` only checked that the root was an array, so a
- * stored `null` entry or a record missing `avatar` flowed straight into
- * `<img src={profile.avatar}>` as `undefined`. Entries that survive are
- * re-normalised so callers never see a partially-shaped profile.
+ * This is applied to server rows too, not just stored ones: a profile written
+ * by a build that stored a blank avatar, or one that predates the preset
+ * library, has to degrade to a generated face rather than rendering
+ * `<img src={undefined}>`.
  */
 export function normalizeProfile(input: unknown): ProfileData | null {
   if (!input || typeof input !== "object" || Array.isArray(input)) return null;
   const record = input as Record<string, unknown>;
 
-  const id = typeof record.id === "string" ? record.id.trim() : "";
+  const id =
+    typeof record.id === "string"
+      ? record.id.trim()
+      : typeof record.id === "number"
+        ? String(record.id)
+        : "";
   if (!id) return null;
 
   const name = typeof record.name === "string" ? record.name : "";
-  const isKids = record.isKids === true;
-  const avatarId = typeof record.avatarId === "string" ? record.avatarId : null;
+  const isKids = record.isKids === true || record.is_kids === true;
+  const avatarId =
+    typeof record.avatarId === "string"
+      ? record.avatarId
+      : typeof record.avatar_id === "string"
+        ? record.avatar_id
+        : null;
 
   // A stored avatar URL from any build is respected, including one that is not
   // in the current library. `resolveAvatarUrl` covers the missing/blank case
@@ -83,100 +98,20 @@ export function normalizeProfile(input: unknown): ProfileData | null {
     avatar,
     avatarId,
     isKids,
-    isLocked: record.isLocked === true,
+    isLocked: record.isLocked === true || record.is_locked === true,
   };
 }
 
-export function getProfiles(userId: string): ProfileData[] {
-  try {
-    const raw = localStorage.getItem(PROFILES_KEY(userId));
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map(normalizeProfile)
-      .filter((profile): profile is ProfileData => profile !== null);
-  } catch {
-    return [];
-  }
-}
-
-export function saveProfiles(userId: string, profiles: ProfileData[]): void {
-  localStorage.setItem(PROFILES_KEY(userId), JSON.stringify(profiles));
-}
-
-/**
- * Apply a patch to one profile in storage, leaving the rest untouched.
- *
- * Returns the updated profile, or `null` if the id is unknown. Going through
- * here rather than a read-modify-write in the context keeps the "repair on
- * read" normalisation applied to every profile, not just the one being edited.
- */
-export function updateStoredProfile(
-  userId: string,
-  profileId: string,
-  patch: ProfilePatch,
-): ProfileData | null {
-  const profiles = getProfiles(userId);
-  const index = profiles.findIndex((p) => p.id === profileId);
-  if (index === -1) return null;
-
-  const current = profiles[index];
-
-  /**
-   * `avatarId` is the source of truth when set; `avatar` is a resolved cache of
-   * it. When there is no chosen preset, `avatar` is instead *derived* from the
-   * name, so anything that changes the name or the kids flag has to invalidate
-   * it.
-   *
-   * Without this, setting `avatarId: null` alongside a new name left the old
-   * preset's URL sitting in `avatar`, and `resolveAvatarUrl` -- which falls
-   * back to a stored URL before generating one -- kept showing the preset face
-   * after a "reset to auto".
-   */
-  const shouldRegenerate =
-    patch.avatar === undefined &&
-    (patch.avatarId === null ||
-      ((patch.name !== undefined || patch.isKids !== undefined) &&
-        current.avatarId === null));
-
-  const next = normalizeProfile({
-    ...current,
-    ...patch,
-    ...(shouldRegenerate ? { avatar: null } : {}),
-  });
-  if (!next) return null;
-
-  profiles[index] = next;
-  saveProfiles(userId, profiles);
-
-  // Keep the active-profile snapshot in step, or the navbar keeps rendering the
-  // pre-edit avatar until the next sign-in.
-  const active = getActiveProfile(userId);
-  if (active && active.id === profileId) {
-    setActiveProfile(userId, next);
-  }
-
-  return next;
-}
-
-export function getActiveProfile(userId: string): ProfileData | null {
-  try {
-    const raw = localStorage.getItem(ACTIVE_PROFILE_KEY(userId));
-    if (!raw) return null;
-    return normalizeProfile(JSON.parse(raw));
-  } catch {
-    return null;
-  }
-}
-
-export function setActiveProfile(
-  userId: string,
-  profile: ProfileData | null
-): void {
-  if (profile) {
-    localStorage.setItem(ACTIVE_PROFILE_KEY(userId), JSON.stringify(profile));
-  } else {
-    localStorage.removeItem(ACTIVE_PROFILE_KEY(userId));
-  }
+/** Server row -> render shape. */
+export function toProfileData(api: ApiProfile): ProfileData {
+  return (
+    normalizeProfile(api) ?? {
+      id: String(api.id),
+      name: api.name,
+      avatar: createAvatar(api.name, api.is_kids),
+      avatarId: api.avatar_id,
+      isKids: api.is_kids,
+      isLocked: api.is_locked,
+    }
+  );
 }

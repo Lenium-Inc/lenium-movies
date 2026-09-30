@@ -11,6 +11,8 @@ import {
   type StreamMovie,
 } from "@/services/api";
 import { savedListIds, subscribeList, toggleListSave } from "@/services/lists";
+import { useProfiles } from "@/hooks/useProfiles";
+import { useTasteFeed, useTasteRecorder } from "@/hooks/useTaste";
 import {
   affinityQueryParams,
   emptyAffinity,
@@ -73,8 +75,18 @@ interface UseCatalog {
   discoverError: string | null;
   /** True when the feed was throttled by TMDB rather than genuinely broken. */
   discoverRateLimited: boolean;
-  /** Fold a title the user engaged with into their session-local taste profile. */
+  /**
+   * Fold a title the user engaged with into their taste profile.
+   *
+   * Recorded in the session cache for an instant re-rank and on the server for
+   * durability and cross-device consistency.
+   */
   recordAffinity: (movie: Movie, weight?: number) => void;
+  /**
+   * Server-ranked picks for the active profile, or `null` when there is nothing
+   * personalised to show (signed out, or no history yet).
+   */
+  forYou: Movie[] | null;
   setView: (view: View) => void;
   setSection: (view: View) => void;
   setSearch: (value: string) => void;
@@ -199,6 +211,19 @@ interface SearchCacheEntry {
 const SEARCH_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 export function useCatalog(): UseCatalog {
+  // The server is the source of truth for taste; the session cache below stays
+  // so a click re-ranks the visible grid immediately instead of after a
+  // round trip.
+  const { activeProfile } = useProfiles();
+  const activeProfileId = activeProfile ? String(activeProfile.id) : null;
+  const recordTaste = useTasteRecorder(activeProfileId);
+  // No profile means nothing to rank, so the "For You" row is never requested
+  // rather than fetched and discarded.
+  const { data: tasteFeed } = useTasteFeed(
+    activeProfileId ? activeProfileId : null,
+    { limit: 20 }
+  );
+
   const [view, setView] = useState<View>("home");
   const [search, setSearch] = useState("");
   const [genre, setGenre] = useState("All");
@@ -423,6 +448,30 @@ export function useCatalog(): UseCatalog {
   });
 }
 
+  /**
+   * Server-ranked picks, or `null` when there is nothing to show.
+   *
+   * `personalised` is checked rather than assumed: a profile with no history
+   * gets the untouched upstream list back, and rendering that under a "For You"
+   * heading would be claiming personalisation that did not happen. Deduplicated
+   * against the rest of the page so a title is not offered twice.
+   */
+  const forYou: Movie[] | null = useMemo(() => {
+    if (!tasteFeed?.personalised) return null;
+    const raw = tasteFeed.results as CatalogItem[];
+    if (!Array.isArray(raw) || raw.length === 0) return null;
+    const seen = new Set(filtered.map(m => String(m.providerId ?? m.id ?? "")));
+    const out: Movie[] = [];
+    for (const item of raw) {
+      const movie = toDiscoverMovie(item);
+      const key = String(movie.providerId ?? movie.id ?? "");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(movie);
+    }
+    return out.length > 0 ? out : null;
+  }, [tasteFeed, filtered]);
+
   const rows: CatalogRows[] = useMemo(() => {
     const byYearDesc = [...filtered].sort(
       (a, b) => (b.year ?? 0) - (a.year ?? 0)
@@ -451,13 +500,16 @@ export function useCatalog(): UseCatalog {
         const trendingItems = filtered.slice(0, cap);
         const trendingIds = new Set(trendingItems.map(m => String(m.providerId ?? m.id ?? "")));
         const recentItems = byYearDesc.filter(m => !trendingIds.has(String(m.providerId ?? m.id ?? ""))).slice(0, cap);
-        return [
-          { title: "Trending Now", items: trendingItems },
-          { title: "Recently Added", items: recentItems },
-        ];
+        const out: CatalogRows[] = [];
+        // First, and only when the server actually ranked it. An empty "For You"
+        // row reads as a broken feature, so it is omitted rather than padded.
+        if (forYou) out.push({ title: "For You", items: forYou.slice(0, cap) });
+        out.push({ title: "Trending Now", items: trendingItems });
+        out.push({ title: "Recently Added", items: recentItems });
+        return out;
       }
     }
-  }, [view, filtered, savedIds]);
+  }, [view, filtered, savedIds, forYou]);
 
   const setSection = useCallback((next: View) => {
     setView(next);
@@ -511,11 +563,22 @@ export function useCatalog(): UseCatalog {
       });
   }, [discoverPage, discoverHasMore, discoverLoadingMore, view, genre]);
 
-  const recordAffinity = useCallback((movie: Movie, weight = 1) => {
-    const next = recordInteraction(affinityRef.current, signalsFrom(movie), weight);
-    affinityRef.current = next;
-    writeAffinity(next);
-  }, []);
+  const recordAffinity = useCallback(
+    (movie: Movie, weight = 1) => {
+      // Session cache first so the grid re-ranks on the same tick...
+      const next = recordInteraction(affinityRef.current, signalsFrom(movie), weight);
+      affinityRef.current = next;
+      writeAffinity(next);
+      // ...then the durable copy. The recorder is a no-op when signed out and
+      // never rejects, so this cannot interfere with the click that triggered it.
+      recordTaste(
+        weight > 0 ? "play" : "save",
+        { genre: movie.genre, cast: movie.cast, director: movie.director },
+        { weight }
+      );
+    },
+    [recordTaste]
+  );
 
   const toggleSave = useCallback((movie: Movie) => {
     toggleListSave(movie);
@@ -545,6 +608,7 @@ export function useCatalog(): UseCatalog {
     discoverError,
     discoverRateLimited,
     recordAffinity,
+    forYou,
     loadMoreDiscover,
   };
 }

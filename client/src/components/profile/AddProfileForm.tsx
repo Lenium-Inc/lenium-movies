@@ -28,14 +28,25 @@ export function AddProfileForm({
   // the picker, so this needs to be a valid starting state rather than a
   // required choice.
   const [preset, setPreset] = useState<AvatarPreset | null>(null);
+  // Creating a profile is a server round trip now, and the account is capped
+  // at four, so the button has to be able to show that it is working and stay
+  // disabled until the row comes back -- otherwise a double click can spend two
+  // of the four slots and the form looks like it did nothing.
+  const [busy, setBusy] = useState(false);
 
-  const handleAdd = () => {
-    if (!name.trim()) return;
-    const profile = addProfile(name, kids, preset);
-    setName("");
-    setKids(false);
-    setPreset(null);
-    onDone?.(profile.id);
+  const handleAdd = async () => {
+    if (!name.trim() || busy) return;
+    setBusy(true);
+    try {
+      const profile = await addProfile(name, kids, preset);
+      if (!profile) return;
+      setName("");
+      setKids(false);
+      setPreset(null);
+      onDone?.(profile.id);
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -98,11 +109,11 @@ export function AddProfileForm({
 
       <button
         type="button"
-        disabled={!name.trim()}
+        disabled={!name.trim() || busy}
         onClick={handleAdd}
         className="mt-6 w-full rounded-xl bg-white py-3 text-sm font-bold text-black transition hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-40"
       >
-        Continue
+        {busy ? "Creating…" : "Continue"}
       </button>
     </div>
   );

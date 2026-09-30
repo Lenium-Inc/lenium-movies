@@ -1,36 +1,26 @@
 /**
- * Profile storage tests.
+ * Profile translation tests.
  *
- * The important ones are the crash tests: `getProfiles` used to check only that
- * the stored root was an array, so a record written by an older build -- one
- * with no `avatar`, or a `null` entry -- flowed straight into
- * `<img src={undefined}>` at the render sites. Every read now normalises, and
- * these assert it.
+ * Profiles are server rows now, but the render layer still speaks
+ * `ProfileData`. This file covers the boundary between the two, which is where
+ * a field can silently become `undefined` and reach an `<img src>`.
  *
- * The `updateStoredProfile` tests exist because editing a profile has to keep
- * two storage keys in agreement: the profile list *and* the active-profile
- * snapshot. If the snapshot is not updated the navbar keeps rendering the old
- * avatar until the next sign-in, which is invisible in localStorage tests and
- * obvious in the UI.
+ * The previous version of this file tested a localStorage store that no longer
+ * exists. What replaced it matters more than what it removed: there is no
+ * longer a second copy of the profiles that can drift from the server, so the
+ * crash cases worth pinning down are the ones where a *server* row is missing,
+ * blank or differently typed than the render layer expects -- a row written by
+ * an older backend, a numeric SQLite id, a PIN-only row with no avatar.
  */
-import { beforeEach, describe, expect, it } from "vitest";
-// Must be first: installs the `window` globals the modules below read at module scope.
-import { clearStorage, stubStorage } from "@/lib/webStorageStub";
+import { describe, expect, it } from "vitest";
 import { presetById } from "@/lib/avatars";
 import {
   createAvatar,
-  getActiveProfile,
-  getProfiles,
   normalizeProfile,
-  saveProfiles,
-  setActiveProfile,
-  updateStoredProfile,
+  toProfileData,
   type ProfileData,
 } from "./profiles";
-
-const USER = "user-1";
-const PROFILES_KEY = `lenium-profiles-${USER}`;
-const ACTIVE_KEY = `lenium-active-profile-${USER}`;
+import type { ApiProfile } from "@/services/auth";
 
 function profile(overrides: Partial<ProfileData> = {}): ProfileData {
   return {
@@ -40,6 +30,19 @@ function profile(overrides: Partial<ProfileData> = {}): ProfileData {
     avatarId: null,
     isKids: false,
     isLocked: false,
+    ...overrides,
+  };
+}
+
+function apiProfile(overrides: Partial<ApiProfile> = {}): ApiProfile {
+  return {
+    id: "p1",
+    name: "Alex",
+    avatar: "https://cdn.test/a.svg",
+    avatar_id: null,
+    is_kids: false,
+    is_locked: false,
+    sort_order: 0,
     ...overrides,
   };
 }
@@ -109,154 +112,82 @@ describe("normalizeProfile", () => {
     input.self = input;
     expect(() => normalizeProfile(input)).not.toThrow();
   });
-});
 
-describe("getProfiles", () => {
-  beforeEach(() => clearStorage());
-
-  it("returns an empty list when nothing is stored", () => {
-    expect(getProfiles(USER)).toEqual([]);
+  /**
+   * SQLite hands back integer primary keys and Postgres hands back UUIDs, and
+   * the same client has to handle both. A numeric id that reached a caller as a
+   * number would fail every `p.id === selectedId` string comparison and quietly
+   * make the profile switcher do nothing.
+   */
+  it("stringifies a numeric id", () => {
+    expect(normalizeProfile({ id: 7, name: "Rowan" })?.id).toBe("7");
   });
 
-  it("round-trips a saved list", () => {
-    const list = [profile(), profile({ id: "p2", name: "Robin" })];
-    saveProfiles(USER, list);
-    expect(getProfiles(USER)).toEqual(list);
-  });
-
-  it("survives syntactically invalid JSON", () => {
-    stubStorage.setItem(PROFILES_KEY, "{not json");
-    expect(getProfiles(USER)).toEqual([]);
-  });
-
-  it("survives a non-array root", () => {
-    for (const raw of ["null", "123", '"hello"', "true", "{}"]) {
-      stubStorage.setItem(PROFILES_KEY, raw);
-      expect(getProfiles(USER), `raw=${raw}`).toEqual([]);
-    }
-  });
-
-  it("drops null and non-object entries", () => {
-    stubStorage.setItem(
-      PROFILES_KEY,
-      JSON.stringify([null, 5, "x", [], profile()]),
-    );
-    const list = getProfiles(USER);
-    expect(list).toHaveLength(1);
-    expect(list[0].id).toBe("p1");
-  });
-
-  it("backfills an avatar on a record that predates the picker", () => {
-    // Exactly what an older build wrote: no avatar field at all.
-    stubStorage.setItem(
-      PROFILES_KEY,
-      JSON.stringify([{ id: "p1", name: "Legacy", isKids: false, isLocked: false }]),
-    );
-    const [restored] = getProfiles(USER);
-    expect(restored.avatar).toContain("dicebear");
-    expect(restored.avatarId).toBeNull();
-  });
-
-  it("drops an entry with no id", () => {
-    stubStorage.setItem(
-      PROFILES_KEY,
-      JSON.stringify([{ name: "No id" }, profile()]),
-    );
-    expect(getProfiles(USER).map((p) => p.id)).toEqual(["p1"]);
-  });
-
-  it("keeps profiles isolated per user", () => {
-    saveProfiles(USER, [profile()]);
-    expect(getProfiles("other-user")).toEqual([]);
-  });
-});
-
-describe("getActiveProfile", () => {
-  beforeEach(() => clearStorage());
-
-  it("returns null when nothing is stored", () => {
-    expect(getActiveProfile(USER)).toBeNull();
-  });
-
-  it("round-trips a profile", () => {
-    const p = profile();
-    setActiveProfile(USER, p);
-    expect(getActiveProfile(USER)).toEqual(p);
-  });
-
-  it("clears when set to null", () => {
-    setActiveProfile(USER, profile());
-    setActiveProfile(USER, null);
-    expect(getActiveProfile(USER)).toBeNull();
-  });
-
-  it("survives a stored value that is not a profile", () => {
-    // The old implementation returned whatever JSON.parse produced, so a stored
-    // `"hello"` came back as a string that then blew up on `.avatar`.
-    for (const raw of ["null", '"hello"', "42", "[]"]) {
-      stubStorage.setItem(ACTIVE_KEY, raw);
-      expect(getActiveProfile(USER), `raw=${raw}`).toBeNull();
-    }
-  });
-});
-
-describe("updateStoredProfile", () => {
-  beforeEach(() => clearStorage());
-
-  it("patches the named profile and leaves the rest alone", () => {
-    saveProfiles(USER, [profile(), profile({ id: "p2", name: "Robin" })]);
-    const updated = updateStoredProfile(USER, "p2", { name: "Robin B" });
-    expect(updated?.name).toBe("Robin B");
-    const list = getProfiles(USER);
-    expect(list[0].name).toBe("Alex");
-    expect(list[1].name).toBe("Robin B");
-  });
-
-  it("keeps the active-profile snapshot in step", () => {
-    // Otherwise the navbar keeps showing the pre-edit avatar until re-signin.
-    const p = profile();
-    saveProfiles(USER, [p]);
-    setActiveProfile(USER, p);
-    updateStoredProfile(USER, "p1", { name: "Alex Renamed" });
-    expect(getActiveProfile(USER)?.name).toBe("Alex Renamed");
-  });
-
-  it("does not touch the snapshot for a different active profile", () => {
-    const a = profile({ id: "p1" });
-    const b = profile({ id: "p2", name: "Robin" });
-    saveProfiles(USER, [a, b]);
-    setActiveProfile(USER, a);
-    updateStoredProfile(USER, "p2", { name: "Robin B" });
-    expect(getActiveProfile(USER)?.name).toBe("Alex");
-  });
-
-  it("applies a chosen preset to both fields", () => {
-    const preset = presetById("neutral-bottts-0")!;
-    saveProfiles(USER, [profile()]);
-    setActiveProfile(USER, profile());
-    const updated = updateStoredProfile(USER, "p1", {
-      avatarId: preset.id,
-      avatar: preset.url,
-    });
-    expect(updated?.avatarId).toBe(preset.id);
-    expect(updated?.avatar).toBe(preset.url);
-    expect(getActiveProfile(USER)?.avatar).toBe(preset.url);
-  });
-
-  it("regenerates the avatar when reset to auto with a new name", () => {
-    // The url is derived from the name, so a rename has to recompute it.
-    saveProfiles(USER, [profile({ avatarId: "female-lorelei-0" })]);
-    const updated = updateStoredProfile(USER, "p1", {
+  it("accepts the server's snake_case field names", () => {
+    const result = normalizeProfile({
+      id: "p9",
       name: "Kai",
-      avatarId: null,
+      is_kids: true,
+      is_locked: true,
+      avatar_id: "male-micah-0",
     });
-    expect(updated?.avatarId).toBeNull();
-    expect(updated?.avatar).toBe(createAvatar("Kai", false));
+    expect(result?.isKids).toBe(true);
+    expect(result?.isLocked).toBe(true);
+    expect(result?.avatarId).toBe("male-micah-0");
+  });
+});
+
+describe("toProfileData", () => {
+  it("maps every server field onto the render shape", () => {
+    const result = toProfileData(
+      apiProfile({
+        id: "p2",
+        name: "Robin",
+        is_kids: true,
+        is_locked: true,
+        avatar_id: "neutral-bottts-0",
+      })
+    );
+    expect(result).toEqual<ProfileData>({
+      id: "p2",
+      name: "Robin",
+      avatar: presetById("neutral-bottts-0")!.url,
+      avatarId: "neutral-bottts-0",
+      isKids: true,
+      isLocked: true,
+    });
   });
 
-  it("returns null for an unknown id and writes nothing", () => {
-    saveProfiles(USER, [profile()]);
-    expect(updateStoredProfile(USER, "nope", { name: "x" })).toBeNull();
-    expect(getProfiles(USER)[0].name).toBe("Alex");
+  it("never loses a row", () => {
+    // A translation layer that could return null would silently drop a profile
+    // from the switcher, which is the failure this guards against.
+    const result = toProfileData(apiProfile({ id: "p3", name: "" }));
+    expect(result.id).toBe("p3");
+    expect(result.avatar).toContain("http");
+  });
+
+  it("keeps a stored url when no preset was chosen", () => {
+    expect(toProfileData(apiProfile()).avatar).toBe("https://cdn.test/a.svg");
+  });
+
+  it("regenerates a blank avatar rather than rendering an empty src", () => {
+    const result = toProfileData(apiProfile({ avatar: "   ", name: "Kai" }));
+    expect(result.avatar).toContain("dicebear");
+  });
+
+  it("stringifies a numeric id so string comparisons work", () => {
+    // SQLite profile ids are integers; the switcher compares with `===`
+    // against a value read out of storage, which is always a string.
+    const result = toProfileData(apiProfile({ id: 4 as unknown as string }));
+    expect(result.id).toBe("4");
+  });
+
+  it("falls back to a generated avatar for an unusable row", () => {
+    // Exercises the `?? createAvatar(...)` branch rather than relying on
+    // `normalizeProfile` never failing for a row we just validated.
+    const broken = { id: "", name: "Kai" } as unknown as ApiProfile;
+    const result = toProfileData(broken);
+    expect(result.name).toBe("Kai");
+    expect(result.avatar).toContain("dicebear");
   });
 });

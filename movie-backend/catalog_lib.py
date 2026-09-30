@@ -569,14 +569,30 @@ def year_mismatch(requested_year, candidate_year) -> bool:
         return False
 
 
-def accept_candidate(requested_year, candidate_year) -> bool:
+def accept_candidate(
+    requested_year, candidate_year, title_score: float | None = None
+) -> bool:
     """A candidate is trustworthy enough to play when there is no requested
-    year to check against, or the years agree. A known requested year with an
-    unknown candidate year is rejected — an unverifiable release must not play
-    in place of the requested one."""
+    year to check against, or the years agree.
+
+    A known requested year with an *unknown* candidate year is normally
+    rejected, because an unverifiable release must not play in place of the
+    requested one. `title_score` carves out the one case where that rule was
+    discarding the correct film: most Archive.org items carry no `year` field at
+    all, so an exact title match was thrown away and the caller silently fell
+    back to a third-party embed, leaving the title with no downloadable file.
+    Absence of a year is not evidence of a different film, so an exact
+    normalised title match (1.0) is allowed through. A weak title match still
+    requires the year, because there a missing year really is unverifiable.
+    """
     if not requested_year:
         return True
-    return bool(candidate_year) and not year_mismatch(requested_year, candidate_year)
+    if candidate_year and not year_mismatch(requested_year, candidate_year):
+        return True
+    # No usable candidate year: only an exact title match can carry the weight.
+    if candidate_year:
+        return False
+    return title_score is not None and title_score >= 1.0
 
 
 def match_title(requested: str, candidate_title: str) -> float:
@@ -615,7 +631,7 @@ def pick_best_docs(
         score = match_title(requested, doc.get("title") or "")
         if score < 0.7:
             continue
-        if not accept_candidate(requested_year, doc.get("year")):
+        if not accept_candidate(requested_year, doc.get("year"), score):
             continue
         candidates.append((doc, score))
     candidates.sort(

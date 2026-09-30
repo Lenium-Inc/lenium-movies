@@ -32,11 +32,15 @@ export function EditProfileModal({
   const [preset, setPreset] = useState<AvatarPreset | null>(() =>
     presetById(profile.avatarId),
   );
+  // The save is a server round trip now. Closing the dialog optimistically used
+  // to be fine because the write was local; with a server write a failure would
+  // leave the viewer looking at the old name having been told it saved.
+  const [busy, setBusy] = useState(false);
 
   const trimmed = name.trim();
 
-  const handleSave = () => {
-    if (!trimmed) return;
+  const handleSave = async () => {
+    if (!trimmed || busy) return;
     // `avatarId: null` alongside a generated url is the "reset to the face
     // derived from this name" state, which is distinct from a chosen preset.
     const patch: Parameters<typeof updateProfile>[1] = {};
@@ -48,13 +52,20 @@ export function EditProfileModal({
       patch.avatarId = null;
       patch.avatar = defaultAvatarUrl(trimmed, profile.isKids);
     }
-    updateProfile(profile.id, patch);
-    onClose();
+    setBusy(true);
+    try {
+      await updateProfile(profile.id, patch);
+      onClose();
+    } catch {
+      // Keep the dialog open so the edit is not lost.
+    } finally {
+      setBusy(false);
+    }
   };
 
   const handleResetAvatar = () => {
     setPreset(null);
-    updateProfile(profile.id, {
+    void updateProfile(profile.id, {
       avatarId: null,
       avatar: defaultAvatarUrl(trimmed || profile.name, profile.isKids),
     });
@@ -151,7 +162,7 @@ export function EditProfileModal({
           <button
             type="button"
             onClick={handleSave}
-            disabled={!trimmed}
+            disabled={!trimmed || busy}
             className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-white py-3 text-sm font-bold text-black transition hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Check className="h-4 w-4" />

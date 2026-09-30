@@ -43,6 +43,7 @@ import {
 import { VideoPlayer, type StreamVariant } from "@/components/stream/VideoPlayer";
 import { EmbedPlayer } from "@/components/stream/EmbedPlayer";
 import { StreamLoader } from "@/components/stream/StreamLoader";
+import { DailyLimitNotice } from "@/components/stream/DailyLimitNotice";
 import { formatRuntime } from "@/lib/format";
 import { titleUnavailable } from "@/lib/playbackCopy";
 import { WatchTVControls, type SeasonInfo } from "@/components/stream/WatchTVControls";
@@ -57,12 +58,7 @@ import {
 import type { Movie, ResolvedStream as ResolvedStreamType, StreamVariant as StreamVariantType } from "@/components/movies/types";
 import type { StreamEpisode } from "@/services/api";
 import { buildWatchPath, resolveMediaType } from "@/lib/watchRoute";
-import {
-  readAffinity,
-  recordInteraction,
-  signalsFrom,
-  writeAffinity,
-} from "@/lib/affinity";
+import { useTasteRecorder } from "@/hooks/useTaste";
 import { TrailerEmbed } from "@/components/movies/MediaCard";
 import {
   Select,
@@ -78,6 +74,7 @@ import { isExternalEmbedUrl, orderDirectStreams } from "@/lib/streamUtils";
 import { resolveEmbedSources } from "@/lib/embedSources";
 import { tmdbImage, type TmdbImageSize } from "@/lib/tmdbImages";
 import { useAuth } from "@/context/AuthContext";
+import { useAllowance, useProfiles } from "@/hooks/useProfiles";
 import { apiHistoryAdd } from "@/services/auth";
 import {
   pushRemoveToRemote,
@@ -117,19 +114,6 @@ const RETRY_BASE_DELAY_MS = 1000;
  * the page stops retrying after this long and reports the failure.
  */
 const MAX_AUTO_RETRY_WINDOW_MS = 2 * 60 * 1000;
-
-/**
- * Starting playback is the strongest taste signal there is. Recorded straight
- * to session storage: the watch page is reachable without the catalogue hook,
- * and personalisation must never be able to interfere with playback.
- */
-function noteAffinity(movie: Movie, weight: number) {
-  try {
-    writeAffinity(recordInteraction(readAffinity(), signalsFrom(movie), weight));
-  } catch {
-    // Ignore: a blocked or full sessionStorage is not worth surfacing.
-  }
-}
 
 function classifyError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -379,6 +363,16 @@ export function WatchPage() {
   const { isInMyList, toggleMyList, addToHistory } = useLocalSession();
 
   const { user: authUser } = useAuth();
+  // Server-backed profile, so history and the daily allowance follow the
+  // viewer rather than the account.
+  const { activeProfile } = useProfiles();
+  const activeProfileId = activeProfile ? String(activeProfile.id) : null;
+  const {
+    claim: claimAllowance,
+    limited: allowanceLimited,
+    allowance: allowanceState,
+  } = useAllowance(activeProfileId);
+  const recordTaste = useTasteRecorder(activeProfileId);
 
   // Fetch movie details on mount
   useEffect(() => {
@@ -507,6 +501,16 @@ export function WatchPage() {
     async (targetSeason: number, targetEpisode: number) => {
       if (resolving || !movie) return;
       if (!attemptPlay()) return;
+      // Claim the day's allowance before spending a resolve on playback. The
+      // claim is idempotent per title, so a retry or a second tab does not
+      // burn a slot. Signed-out viewers and profiles with no server profile
+      // resolve to `true` and play unthrottled.
+      const key = `${movie.providerId}:${targetSeason}:${targetEpisode}`;
+      const allowed = await claimAllowance(key);
+      if (!allowed) {
+        setPlayError(null);
+        return;
+      }
       setResolving(true);
       setPlayError(null);
 
@@ -522,7 +526,10 @@ export function WatchPage() {
             tmdbId: movie.providerId,
           });
           setResolved(stream);
-          noteAffinity(movie, 1);
+          // Starting playback is the strongest taste signal there is. It goes
+          // to the server so the same profile ranks the same on every device;
+          // the recorder is a no-op when signed out, and never throws.
+          recordTaste("play", movie, { weight: 1 });
           base = stream.stream;
         }
         setSeason(targetSeason);
@@ -617,7 +624,7 @@ export function WatchPage() {
         setResolving(false);
       }
     },
-    [movie, resolved, resolving, navigate, resolveWithRetry]
+    [movie, resolved, resolving, navigate, resolveWithRetry, claimAllowance]
   );
 
   const playEpisode = useCallback(
@@ -761,11 +768,12 @@ export function WatchPage() {
     }
   }, [resolved?.stream, movie, addToHistory]);
 
-  // Record per-account history on the backend when signed in
+  // Record per-account history on the backend when signed in, scoped to the
+  // active profile so two viewers in one home keep separate progress.
   const recordedHistoryRef = useRef("");
   useEffect(() => {
     if (!movie || !authUser) return;
-    const key = `${movie.providerId}:${season}:${episode}`;
+    const key = `${activeProfileId}:${movie.providerId}:${season}:${episode}`;
     if (recordedHistoryRef.current === key) return;
     recordedHistoryRef.current = key;
     apiHistoryAdd({
@@ -778,8 +786,9 @@ export function WatchPage() {
       progress_seconds: watchedSeconds,
       duration_seconds: 0,
       watched_at: Date.now(),
+      profile_id: activeProfileId,
     }).catch(() => {});
-  }, [movie, authUser, season, episode, watchedSeconds]);
+  }, [movie, authUser, season, episode, watchedSeconds, activeProfileId]);
 
   // Ordered list of directly playable (non-embed) URLs. Embeds are never
   // shown or linked anywhere — every movie plays inline or shows a native
@@ -1327,6 +1336,8 @@ export function WatchPage() {
                         poster={streamPoster}
                         onClose={handleClose}
                       />
+                    ) : allowanceLimited && allowanceState ? (
+                      <DailyLimitNotice allowance={allowanceState} onClose={handleClose} />
                     ) : streamUnavailable ? (
                       <div className="absolute inset-0 flex items-center justify-center">
                         <div className="relative w-full h-full max-w-6xl max-h-[85vh] flex items-center justify-center">
@@ -1433,7 +1444,12 @@ export function WatchPage() {
                       );
                       if (wasInList) {
                         void pushRemoveToRemote(Number(movie.providerId ?? movie.id ?? 0));
+                        // Removing is a negative signal, not a neutral one: it
+                        // is the clearest statement a viewer makes about a title
+                        // they were told they might want.
+                        recordTaste("save", movie, { weight: -0.5 });
                       } else {
+                        recordTaste("save", movie, { weight: 1 });
                         void pushToggleToRemote({
                           id: Number(movie.providerId ?? movie.id),
                           mediaType: movie.mediaType,

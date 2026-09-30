@@ -17,11 +17,13 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timedelta, timezone
 
 from flask import Flask, Response, jsonify, request
 from werkzeug.exceptions import HTTPException
@@ -35,6 +37,7 @@ import authdb
 import catalog_lib
 import catalog_service
 import stream_providers
+import taste
 import tmdb_service as tmdb
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -127,7 +130,7 @@ def _find_catalog_entry(title: str, year) -> dict | None:
         score = catalog_lib.match_title(title, entry.get("title", ""))
         if score < 0.7:
             continue
-        if not catalog_lib.accept_candidate(requested_year, entry.get("year")):
+        if not catalog_lib.accept_candidate(requested_year, entry.get("year"), score):
             continue
         if best is None or score > best[0]:
             best = (score, entry)
@@ -1350,6 +1353,31 @@ def _auth_error(message: str, code: int = 401):
     return jsonify({"error": message}), code
 
 
+def _resolve_profile(user, payload=None):
+    """Resolve and authorise the profile a request is acting on.
+
+    The profile id is user-controlled, so it is always validated against the
+    signed-in account. An account that has created no profiles yet still works:
+    the caller falls back to the unprofiled path rather than being locked out.
+    """
+    store = authdb.get_store()
+    # GET and DELETE carry the profile in the query string (there is no body),
+    # so both have to be consulted or those requests silently fall back to the
+    # first profile and read the wrong watcher's history.
+    raw = (payload or {}).get("profile_id") or request.args.get("profile_id")
+    if raw in (None, ""):
+        # No profile supplied: use the account's first profile if there is one.
+        profiles = store.list_profiles(user["id"])
+        if not profiles:
+            return None
+        return profiles[0]
+    # Left as a string: ids are UUIDs on postgres and integers on sqlite, so
+    # coercing to int raised a ValueError on the uuid deployment and turned every
+    # profile-scoped request into a 500. The lookup below is the only
+    # authorisation that matters, and it works for either type.
+    return store.profile_by_id(raw, user["id"]) or False
+
+
 @app.route("/api/auth/signup", methods=["POST", "OPTIONS"])
 def api_signup():
     if request.method == "OPTIONS":
@@ -1455,6 +1483,666 @@ def api_logout():
     return jsonify({"success": True})
 
 
+# ---------------------------------------------------------------------------
+# Profiles (a home is the signed-in account; max 4)
+# ---------------------------------------------------------------------------
+
+def _serialize_profile(profile: dict) -> dict:
+    """Public shape of a profile.
+
+    `pin_hash` and `pin_salt` are deliberately absent: the client only needs to
+    know that a lock exists, and shipping the hash to the browser would make the
+    PIN brute-forceable offline.
+    """
+    return {
+        "id": profile["id"],
+        "name": profile.get("name") or "",
+        "avatar": profile.get("avatar") or "",
+        "avatar_id": profile.get("avatar_id"),
+        "is_kids": bool(profile.get("is_kids")),
+        "is_locked": bool(profile.get("is_locked")),
+        "sort_order": profile.get("sort_order") or 0,
+    }
+
+
+@app.route("/api/profiles", methods=["GET", "POST", "OPTIONS"])
+def api_profiles():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    user = _auth_user()
+    if not user:
+        return _auth_error("Sign in to manage profiles.")
+
+    store = authdb.get_store()
+    if request.method == "GET":
+        profiles = store.list_profiles(user["id"])
+        return jsonify(
+            {
+                "profiles": [_serialize_profile(p) for p in profiles],
+                "max": store.MAX_PROFILES,
+            }
+        )
+
+    payload = request.get_json(silent=True) or {}
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        return _auth_error("Enter a name for this profile.", 400)
+    if len(name) > 40:
+        return _auth_error("That name is too long.", 400)
+
+    pin = str(payload.get("pin") or "")
+    if pin and not re.match(r"^\d{4,8}$", pin):
+        return _auth_error("A PIN must be 4 to 8 digits.", 400)
+    # The account cap is a business rule, so it is enforced here rather than
+    # only in the picker UI.
+    if store.count_profiles(user["id"]) >= store.MAX_PROFILES:
+        return _auth_error(
+            f"A home can have up to {store.MAX_PROFILES} profiles.", 409
+        )
+
+    pin_hash, pin_salt = (None, None)
+    if pin:
+        pin_salt = secrets.token_hex(16)
+        pin_hash = store.hash_secret(pin, pin_salt)
+    try:
+        profile = store.create_profile(
+            user["id"],
+            name,
+            avatar=str(payload.get("avatar") or "")[:400],
+            avatar_id=(str(payload.get("avatar_id"))[:40] or None),
+            is_kids=1 if payload.get("is_kids") else 0,
+            pin_hash=pin_hash,
+            pin_salt=pin_salt,
+        )
+    except Exception:
+        app.logger.exception("profile create failed")
+        return _auth_error("Could not create the profile. Try again.", 500)
+    if not profile:
+        return _auth_error(
+            f"A home can have up to {store.MAX_PROFILES} profiles.", 409
+        )
+    return jsonify({"profile": _serialize_profile(profile)}), 201
+
+
+@app.route("/api/profiles/<profile_id>", methods=["PATCH", "DELETE", "OPTIONS"])
+def api_profile_item(profile_id: str):
+    if request.method == "OPTIONS":
+        return ("", 204)
+    user = _auth_user()
+    if not user:
+        return _auth_error("Sign in to manage profiles.")
+    store = authdb.get_store()
+    if not store.profile_by_id(profile_id, user["id"]):
+        return _auth_error("Unknown profile.", 404)
+
+    if request.method == "DELETE":
+        store.delete_profile(profile_id, user["id"])
+        return jsonify({"success": True})
+
+    payload = request.get_json(silent=True) or {}
+    updates = {}
+    if "name" in payload:
+        name = str(payload.get("name") or "").strip()
+        if not name or len(name) > 40:
+            return _auth_error("Enter a name of 1 to 40 characters.", 400)
+        updates["name"] = name
+    if "avatar" in payload:
+        updates["avatar"] = str(payload.get("avatar") or "")[:400]
+    if "avatar_id" in payload:
+        updates["avatar_id"] = str(payload.get("avatar_id") or "")[:40] or None
+    if "is_kids" in payload:
+        updates["is_kids"] = 1 if payload.get("is_kids") else 0
+    # A PIN is only ever set or replaced, never read back: sending an empty pin
+    # clears the lock, which is the documented "remove PIN" path.
+    if "pin" in payload:
+        pin = str(payload.get("pin") or "")
+        if pin and not re.match(r"^\d{4,8}$", pin):
+            return _auth_error("A PIN must be 4 to 8 digits.", 400)
+        if pin:
+            salt = secrets.token_hex(16)
+            updates["pin_salt"] = salt
+            updates["pin_hash"] = store.hash_secret(pin, salt)
+            updates["is_locked"] = 1
+        else:
+            updates["pin_hash"] = None
+            updates["pin_salt"] = None
+            updates["is_locked"] = 0
+    try:
+        updated = store.update_profile(profile_id, user["id"], **updates)
+    except Exception:
+        app.logger.exception("profile update failed")
+        return _auth_error("Could not update the profile. Try again.", 500)
+    return jsonify({"profile": _serialize_profile(updated)})
+
+
+@app.route("/api/profiles/<profile_id>/unlock", methods=["POST", "OPTIONS"])
+def api_profile_unlock(profile_id: str):
+    """Check a profile PIN.
+
+    The account password is *not* accepted here. A PIN is a child-level lock,
+    and accepting the account password here would make it look like the
+    account itself is protected by a second factor, which it is not.
+    """
+    if request.method == "OPTIONS":
+        return ("", 204)
+    user = _auth_user()
+    if not user:
+        return _auth_error("Sign in to unlock this profile.")
+    store = authdb.get_store()
+    profile = store.profile_by_id(profile_id, user["id"])
+    if not profile:
+        return _auth_error("Unknown profile.", 404)
+    if not profile.get("is_locked"):
+        return jsonify({"ok": True})
+    pin = str((request.get_json(silent=True) or {}).get("pin") or "")
+    ok = store.verify_secret(
+        pin, profile.get("pin_hash") or "", profile.get("pin_salt") or ""
+    )
+    if not ok:
+        return _auth_error("Incorrect PIN.", 401)
+    return jsonify({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# Daily allowance & referrals
+# ---------------------------------------------------------------------------
+
+def _allowance_payload(store, user, profile):
+    day = authdb.utc_today()
+    data = store.allowance(user["id"], profile["id"], day)
+    # The countdown needs an explicit reset instant, not just the day string, so
+    # the client does not have to re-derive midnight in its own timezone.
+    reset = (
+        datetime.strptime(day, "%Y-%m-%d")
+        + timedelta(days=1)
+    ).replace(tzinfo=timezone.utc)
+    data["resets_at"] = reset.isoformat()
+    data["timezone"] = "UTC"
+    return data
+
+
+# ---------------------------------------------------------------------------
+# Taste signals & recommendations
+# ---------------------------------------------------------------------------
+
+def _taste_payload() -> tuple[dict | None, dict | None, object]:
+    """Resolve the acting user, profile and parsed body in one place.
+
+    Returns `(user, profile, payload)`. `user` is None when signed out and
+    `profile` is False when the requested profile is not theirs, which the
+    callers turn into 401 and 403 respectively.
+
+    Unlike `_resolve_profile`, an explicit `profile_id` is required here. These
+    endpoints operate on one viewer's taste data, so silently substituting the
+    first profile when the id is missing or foreign would read and write the
+    wrong watcher's signals -- and would report a 409 ("create a profile") for
+    what is really a 403.
+    """
+    user = _auth_user()
+    if not user:
+        return None, None, {}
+    payload = request.get_json(silent=True) or {}
+    raw = payload.get("profile_id") or request.args.get("profile_id")
+    if raw in (None, ""):
+        profiles = authdb.get_store().list_profiles(user["id"])
+        # No id supplied: fall back to the caller's only profile, which is the
+        # common single-viewer case, but never to another account's.
+        return user, (profiles[0] if len(profiles) == 1 else None), payload
+    # Passed through as a string, not coerced to int: profile ids are UUIDs on
+    # postgres and autoincrement integers on sqlite, and `int("3f2b-...")`
+    # raised on the deployment that matters most.
+    return user, authdb.get_store().profile_by_id(raw, user["id"]) or False, payload
+
+
+def _clamp_int(raw, default: int, low: int, high: int) -> int:
+    """Parse a query-string integer, falling back instead of raising.
+
+    `int("abc")` on a public feed parameter turned a stray `?limit=` into a 500
+    with a stack trace in the log, so every numeric argument coming off the
+    query string goes through here.
+    """
+    if raw in (None, ""):
+        return default
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
+    return max(low, min(high, value))
+
+
+@app.route("/api/taste", methods=["POST", "OPTIONS"])
+def api_taste():
+    """Record one interaction for the active profile.
+
+    Only derived features are accepted. A `query` is tokenised and hashed here
+    and the text is dropped on the floor, so a private search leaves a
+    fingerprint behind rather than the words.
+    """
+    if request.method == "OPTIONS":
+        return ("", 204)
+    user, profile, payload = _taste_payload()
+    if not user:
+        return _auth_error("Sign in to personalise your feed.")
+    if profile is False:
+        return _auth_error("Unknown profile.", 403)
+    if not profile:
+        return _auth_error("Create a profile to personalise your feed.", 409)
+
+    kind = str(payload.get("kind") or "").strip().lower()
+    if kind not in taste.KIND_WEIGHTS:
+        return _auth_error("Unknown interaction type.", 400)
+
+    store = authdb.get_store()
+    profile_id = profile["id"]
+
+    if kind == "search":
+        query = str(payload.get("query") or "")
+        key = taste.query_feature_key(query)
+        if not key:
+            return jsonify({"ok": True, "recorded": False})
+        count = store.bump_search_token(profile_id, key)
+        # Below the repeat threshold this is noise, so it is counted but not
+        # folded into the weights.
+        if count < taste.SEARCH_TOKEN_MIN_HITS:
+            return jsonify({"ok": True, "recorded": True, "applied": False})
+        tokens = taste.tokenise_query(query)
+        if not tokens:
+            # Every word was a stopword or a year: the query says nothing about
+            # what this viewer likes, so it is counted but not applied.
+            return jsonify({"ok": True, "recorded": True, "applied": False})
+        # Search taste is recorded as the *repeat count* of a hashed key and
+        # nothing else. The words are deliberately not written anywhere: an
+        # earlier version folded the tokens into the weight state, which meant
+        # the query text was recoverable from taste_signals -- exactly what the
+        # hashing is meant to prevent. What a profile gains from searching is
+        # "this viewer searched for something often", not a memory of what.
+        row = store._query(
+            "SELECT weight FROM taste_signals "
+            "WHERE profile_id = ? AND kind = 'query' AND feature = ? LIMIT 1",
+            (profile_id, key),
+        )
+        repeat_weight = float(row["weight"]) if row else float(count)
+        state = store.load_taste_state(profile_id)
+        state = taste.fold_event_with_director(
+            state, "search", [f"q:{key}"], [], weight=repeat_weight
+        )
+        store.save_taste_state(profile_id, state)
+        return jsonify({"ok": True, "recorded": True, "applied": True})
+
+    genres = payload.get("genres") or payload.get("genre") or []
+    # `people` is what the client actually sends; `cast` and `director` are also
+    # accepted so the older shape keeps working. Only reading `cast` meant a
+    # client following the documented `people` field recorded no cast at all,
+    # and the director was silently dropped.
+    people = payload.get("people") or []
+    cast = payload.get("cast") or []
+    director = payload.get("director")
+    if isinstance(genres, str):
+        genres = [genres]
+    if not isinstance(genres, list):
+        genres = []
+    if not isinstance(people, list):
+        people = []
+    if not isinstance(cast, list):
+        cast = []
+    # Cast names are personal data about real people; storing the full top-billed
+    # list would be both noisy and a needless record. Three is enough to
+    # recognise a favourite without profiling a cast.
+    named = [str(p).strip() for p in (list(people) + list(cast)) if str(p).strip()]
+    named = [p for p in named if p.lower() != str(director or "").strip().lower()][:3]
+    if director:
+        named.append(str(director).strip())
+
+    store.record_taste_event(
+        profile_id,
+        kind,
+        genres=[str(g).strip() for g in genres][:8],
+        people=named,
+        media_key=(str(payload.get("media_key"))[:200] or None),
+        weight=float(payload.get("weight") or 1.0),
+    )
+    # Fold into the weights now rather than waiting for a scheduled rebuild.
+    # The state table is a cache, but if nothing ever writes it, a profile that
+    # has played twenty films still reports no signal and the feed stays
+    # unranked -- which is exactly what happened before this call.
+    state = taste.fold_event_with_director(
+        store.load_taste_state(profile_id),
+        kind,
+        [str(g).strip() for g in genres][:8],
+        named,
+        weight=float(payload.get("weight") or 1.0),
+    )
+    store.save_taste_state(profile_id, state)
+    return jsonify({"ok": True, "recorded": True, "applied": True})
+
+
+@app.route("/api/taste/state", methods=["GET", "POST", "OPTIONS"])
+def api_taste_state():
+    """Read the profile's weights, or rebuild them from the event log.
+
+    The rebuild is what a scheduled retrain calls: `taste_events` is the source
+    of truth and the state table is a cache of it, so a rollup can always be
+    recomputed rather than trusted.
+    """
+    if request.method == "OPTIONS":
+        return ("", 204)
+    user, profile, _ = _taste_payload()
+    if not user:
+        return _auth_error("Sign in to see your profile.")
+    if profile is False:
+        return _auth_error("Unknown profile.", 403)
+    if not profile:
+        return _auth_error("Create a profile to personalise your feed.", 409)
+
+    store = authdb.get_store()
+    profile_id = profile["id"]
+
+    if request.method == "POST":
+        state = taste.empty_weights()
+        for event in reversed(store.taste_events(profile_id)):
+            state = taste.fold_event_with_director(
+                state,
+                event.get("kind", "play"),
+                [g for g in (event.get("genres") or "").split(",") if g],
+                [p for p in (event.get("people") or "").split(",") if p],
+                weight=event.get("weight", 1.0),
+            )
+        # Search taste is folded in from the repeat counters rather than
+        # replayed from the log. Searches deliberately write no event -- that
+        # is what keeps the query text out of the database -- so a rebuild from
+        # events alone would silently erase everything the profile learned
+        # from searching.
+        for feature, hits in store.search_token_hits(profile_id).items():
+            if hits < taste.SEARCH_TOKEN_MIN_HITS:
+                continue
+            state = taste.fold_event_with_director(
+                state, "search", [f"q:{feature}"], [], weight=float(hits)
+            )
+        store.save_taste_state(profile_id, state)
+        # The same payload the GET returns, plus `rebuilt`. It used to return
+        # only {ok, rebuilt, state}, so a client that treated the two verbs
+        # alike read `event_count` and `has_signal` as undefined after a
+        # rebuild and concluded the profile had no signal.
+        return jsonify(
+            dict(
+                _taste_state_payload(store, profile_id, state),
+                rebuilt=True,
+            )
+        )
+
+    return jsonify(
+        _taste_state_payload(store, profile_id, store.load_taste_state(profile_id))
+    )
+
+
+def _taste_state_payload(store, profile_id, state):
+    return {
+        "profile_id": profile_id,
+        "state": state,
+        "model_version": store.model_version(profile_id) or "linear-v1",
+        "has_signal": taste.has_signal(state),
+        # How much raw material the weights came from. Useful when diagnosing a
+        # profile whose feed is not personalising: a state with features but
+        # almost no events means the cache is stale and wants a rebuild.
+        "event_count": len(store.taste_events(profile_id)),
+    }
+
+
+@app.route("/api/recommendations", methods=["GET", "OPTIONS"])
+def api_recommendations():
+    """Rank a catalogue list for the active profile.
+
+    The upstream list still decides what is in the window; this only reorders
+    it, so a profile with no history sees the plain catalogue rather than an
+    empty page.
+    """
+    if request.method == "OPTIONS":
+        return ("", 204)
+    user, profile, _ = _taste_payload()
+    # These list helpers take a page, not a count, so the window is a page and
+    # the slice bounds how much is actually returned. `?limit=abc` used to
+    # raise ValueError and surface a 500 on a public feed endpoint.
+    page = _clamp_int(request.args.get("page"), default=1, low=1, high=5)
+    limit = _clamp_int(request.args.get("limit"), default=20, low=1, high=40)
+    kind = (request.args.get("kind") or "trending").strip().lower()
+
+    if kind == "popular":
+        items = tmdb.get_popular("movie", page) or []
+    elif kind == "now_playing":
+        items = tmdb.get_now_playing(page) or []
+    else:
+        items = tmdb.get_trending_catalog("week", "all") or []
+
+    # Personalisation is an enhancement, not a gate. Requiring auth or a profile
+    # here made this a 401/403 for exactly the viewers who most need a working
+    # feed -- a signed-out visitor, or someone who has not created a profile yet
+    # and cannot fix that from this screen. The unranked list is the correct
+    # answer for them, and `personalised: False` is the honest way to say so.
+    if not user or profile is False or not profile:
+        return jsonify({"results": items[:limit], "personalised": False})
+
+    store = authdb.get_store()
+    state = store.load_taste_state(profile["id"])
+    if not taste.has_signal(state):
+        return jsonify({"results": items[:limit], "personalised": False})
+    ranked = taste.rank(state, items)
+    return jsonify(
+        {
+            "results": ranked[:limit],
+            "personalised": True,
+            "model_version": store.model_version(profile["id"]) or "linear-v1",
+        }
+    )
+
+
+@app.route("/api/recommendations/eval", methods=["GET", "OPTIONS"])
+def api_recommendations_eval():
+    """Held-out evaluation of the current model on a profile's own history.
+
+    Exposed rather than buried in a cron log because the claim "this
+    recommender works" should be checkable by the person relying on it.
+    Returns `verdict: not_better` when the model does not beat a random
+    baseline, which is the expected answer at low interaction counts.
+    """
+    if request.method == "OPTIONS":
+        return ("", 204)
+    user, profile, _ = _taste_payload()
+    if not user:
+        return _auth_error("Sign in to see your evaluation.")
+    if profile is False:
+        return _auth_error("Unknown profile.", 403)
+    if not profile:
+        return _auth_error("Create a profile first.", 409)
+    store = authdb.get_store()
+    # Unwrapped: the response is the evaluation itself. Nesting it under
+    # `evaluation` meant the client's typed field was one level too deep, so
+    # every value read as undefined and the endpoint looked broken.
+    return jsonify(taste.evaluate(store.taste_events(profile["id"])))
+
+
+@app.route("/api/allowance", methods=["GET", "OPTIONS"])
+def api_allowance():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    user = _auth_user()
+    if not user:
+        return _auth_error("Sign in to see your daily allowance.")
+    store = authdb.get_store()
+    profiles = store.list_profiles(user["id"])
+    if not profiles:
+        return jsonify(
+            {
+                "allowance": {
+                    "used": 0, "remaining": 0, "per_profile_cap": 0,
+                    "account_cap": 0, "account_used": 0, "unlocked": False,
+                    "unlimited": False,
+                    "resets_at": (
+                        datetime.now(timezone.utc).replace(
+                            hour=0, minute=0, second=0, microsecond=0
+                        ) + timedelta(days=1)
+                    ).isoformat(),
+                    "timezone": "UTC",
+                },
+                "profiles": [],
+            }
+        )
+    payload = _allowance_payload(store, user, profiles[0])
+    return jsonify(
+        {
+            "allowance": payload,
+            "profiles": [
+                dict(_allowance_payload(store, user, p), profile_id=p["id"])
+                for p in profiles
+            ],
+        }
+    )
+
+
+@app.route("/api/allowance/claim", methods=["POST", "OPTIONS"])
+def api_allowance_claim():
+    """Claim today's allowance for one title.
+
+    Called when playback starts rather than on page load, so a title the user
+    opens and immediately leaves does not burn the daily allowance. The claim is
+    idempotent per (profile, day, title), which is what makes a double click or
+    a second tab safe.
+    """
+    if request.method == "OPTIONS":
+        return ("", 204)
+    user = _auth_user()
+    if not user:
+        return _auth_error("Sign in to start watching.")
+    store = authdb.get_store()
+    payload = request.get_json(silent=True) or {}
+    profile = _resolve_profile(user, payload)
+    if profile is False:
+        return _auth_error("Unknown profile.", 403)
+    if not profile:
+        return _auth_error("Create a profile to start watching.", 409)
+
+    movie_key = str(payload.get("movie_key") or "").strip()[:200]
+    if not movie_key:
+        return _auth_error("Missing a valid title.", 400)
+
+    day = authdb.utc_today()
+    if store.has_unlocked_day(user["id"], day):
+        # An unlocked day means the cap does not apply, but the play is still
+        # recorded: the history and the "what did I watch" list depend on it.
+        store.record_play(profile["id"], day, movie_key, user["id"])
+        return jsonify(
+            {
+                "ok": True,
+                "claimed": True,
+                "allowance": _allowance_payload(store, user, profile),
+            }
+        )
+
+    # No pre-check on `remaining`. It used to run here, which had two problems:
+    # the check and the insert were separate statements, so concurrent claims
+    # could both see one slot left and both take it; and a viewer who had
+    # already used their ten titles got a 429 for re-opening a title they had
+    # already watched, which reads as "you were charged twice".
+    #
+    # The insert is now the decision -- it only writes when both caps have room
+    # -- so the only question left afterwards is why it declined.
+    claimed = store.record_play(profile["id"], day, movie_key, user["id"])
+    if not claimed and not store.claimed_today(profile["id"], day, movie_key):
+        return (
+            jsonify(
+                {
+                    "error": (
+                        "You have used today's free titles. "
+                        "Refer a friend to unlock more."
+                    ),
+                    "code": "daily_limit",
+                    "allowance": _allowance_payload(store, user, profile),
+                }
+            ),
+            429,
+        )
+    return jsonify(
+        {
+            "ok": True,
+            # False here means "already on today's bill", not "refused".
+            "claimed": claimed,
+            "allowance": _allowance_payload(store, user, profile),
+        }
+    )
+
+
+@app.route("/api/referrals", methods=["GET", "OPTIONS"])
+def api_referrals():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    user = _auth_user()
+    if not user:
+        return _auth_error("Sign in to refer friends.")
+    store = authdb.get_store()
+    stats = store.referral_stats(user["id"])
+    day = authdb.utc_today()
+    return jsonify(
+        {
+            "code": stats["code"],
+            "accepted": stats["accepted"],
+            "granted_days": stats["granted_days"],
+            "unlocked_today": store.has_unlocked_day(user["id"], day),
+            "unlocks_per_referral": authdb.REFERRAL_UNLOCKS_PER_ACCEPT,
+            "day": day,
+        }
+    )
+
+
+@app.route("/api/referrals/apply", methods=["POST", "OPTIONS"])
+def api_referrals_apply():
+    """Redeem a friend's code.
+
+    Each accepted referral unlocks one day, where a day means "the cap does not
+    apply for that UTC date". The grant is keyed to a concrete day rather than a
+    counter, because a day-based benefit should not be spendable twice and
+    should be visible in the UI as a calendar fact.
+    """
+    if request.method == "OPTIONS":
+        return ("", 204)
+    user = _auth_user()
+    if not user:
+        return _auth_error("Sign in to use a referral code.")
+    store = authdb.get_store()
+    code = str((request.get_json(silent=True) or {}).get("code") or "").strip().upper()
+    if not re.match(r"^LM[A-Z0-9]{8}$", code):
+        return _auth_error("That referral code is not valid.", 400)
+
+    if not store.accept_referral(user["id"], code):
+        return _auth_error(
+            "That code has already been used, or it is your own.", 409
+        )
+
+    # Both sides get the day, which is what the copy in DailyLimitNotice
+    # promises. Previously only the joiner was granted one, so the inviter saw
+    # their accepted count rise and nothing else happen.
+    inviter_id = store.referrer_of(user["id"])
+    for recipient in [user["id"], inviter_id]:
+        if recipient is None:
+            continue
+        # Unlocked days are consumed oldest-first so a grant always lands on a
+        # distinct future date rather than stacking on today.
+        day = authdb.utc_today()
+        for offset in range(0, authdb.REFERRAL_UNLOCKS_PER_ACCEPT):
+            target = (
+                datetime.strptime(day, "%Y-%m-%d") + timedelta(days=1 + offset)
+            ).strftime("%Y-%m-%d")
+            if not store.has_unlocked_day(recipient, target):
+                store.grant_day(recipient, target)
+    stats = store.referral_stats(user["id"])
+    return jsonify(
+        {
+            "success": True,
+            "code": stats["code"],
+            "accepted": stats["accepted"],
+            "granted_days": stats["granted_days"],
+        }
+    )
+
+
 @app.route("/api/auth/history", methods=["GET", "POST", "DELETE", "OPTIONS"])
 def api_history():
     if request.method == "OPTIONS":
@@ -1468,21 +2156,25 @@ def api_history():
 
     store = authdb.get_store()
     user_id = user["id"]
+    payload = request.get_json(silent=True) or {}
+    profile = _resolve_profile(user, payload)
+    if profile is False:
+        return _auth_error("Unknown profile.", 403)
+    profile_id = profile["id"] if profile else None
 
     if request.method == "DELETE":
-        store.clear_history(user_id)
+        store.clear_history(user_id, profile_id)
         return jsonify({"success": True})
 
     if request.method == "POST":
-        payload = request.get_json(silent=True) or {}
         fields, problem = _clean_history_fields(payload)
         if problem:
             return _auth_error(problem, 400)
-        store.add_history(user_id, fields["movie_key"], fields)
+        store.add_history(user_id, fields["movie_key"], fields, profile_id)
         return jsonify({"success": True})
 
-    history = store.history(user_id)
-    return jsonify({"history": history})
+    history = store.history(user_id, profile_id=profile_id)
+    return jsonify({"history": history, "profile_id": profile_id})
 
 
 @app.route("/api/auth/history/<path:movie_key>", methods=["DELETE", "OPTIONS"])
@@ -1492,7 +2184,13 @@ def api_history_remove(movie_key: str):
     user = _auth_user()
     if not user:
         return _auth_error("Sign in to manage your watch history.")
-    authdb.get_store().remove_history(user["id"], movie_key)
+    payload = request.get_json(silent=True) or {}
+    profile = _resolve_profile(user, payload)
+    if profile is False:
+        return _auth_error("Unknown profile.", 403)
+    authdb.get_store().remove_history(
+        user["id"], movie_key, profile["id"] if profile else None
+    )
     return jsonify({"success": True})
 
 

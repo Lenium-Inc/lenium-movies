@@ -14,6 +14,7 @@ per-user random salt. Tokens are opaque `secrets.token_urlsafe` values with a
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -27,6 +28,45 @@ from datetime import datetime, timedelta, timezone
 from runtime_config import load_env_file
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+# Daily playback policy. 10 titles per profile per day, with an account-wide
+# ceiling so adding profiles cannot multiply the total. Both are per UTC day:
+# "today" is computed with `utc_today` rather than the server's local date, so a
+# deploy in any timezone resets at the same moment for everyone.
+DAILY_TITLE_CAP = 10
+DAILY_ACCOUNT_CAP = 20
+
+# One accepted referral unlocks one day, where "a day" is a UTC date on which
+# the cap does not apply. Grants land on future dates, oldest first.
+REFERRAL_UNLOCKS_PER_ACCEPT = 1
+
+# Ambiguous characters (0/O, 1/I) are excluded so a code read aloud or retyped
+# from a screenshot survives.
+_REFERRAL_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+def utc_today(now: float | None = None) -> str:
+    """The current allowance day as YYYY-MM-DD, in UTC."""
+    ts = time.time() if now is None else now
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _make_referral_code(user_id) -> str:
+    """A stable, human-typeable code for a user.
+
+    Derived from the id with a keyed hash so it is deterministic (the same
+    account shows the same code on every device) but not guessable from the id
+    alone, and the UNIQUE constraint remains the real boundary.
+    """
+    digest = hashlib.sha256(f"lenium-referral:{user_id}".encode()).digest()
+    body = "".join(
+        _REFERRAL_ALPHABET[b % len(_REFERRAL_ALPHABET)] for b in digest[:8]
+    )
+    return f"LM{body}"
 
 load_env_file()
 
@@ -91,10 +131,14 @@ class Store:
     """Tiny dual-driver data layer. `sqlite3` by default, Postgres when a
     `DATABASE_URL` is configured and psycopg is installed."""
 
-    def __init__(self, dsn: str | None = None) -> None:
+    def __init__(self, dsn: str | None = None, dsn_path: str | None = None) -> None:
         self.dsn = (dsn or DATABASE_URL).strip()
         self.pg = bool(self.dsn) and PG_AVAILABLE
-        self.sqlite_path = os.environ.get(
+        # `SQLITE_PATH` is read per instantiation rather than cached at import:
+        # a test that wants its own database can point the env var at a temp file
+        # and build a Store afterwards. Caching it in a module global meant the
+        # value was fixed by whichever import happened first.
+        self.sqlite_path = dsn_path or os.environ.get(
             "SQLITE_PATH", os.path.join(HERE, "data", "freestream.db")
         )
 
@@ -215,9 +259,27 @@ class Store:
                 )
                 cur.execute(
                     """
+                    CREATE TABLE IF NOT EXISTS watch_profiles (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        name TEXT NOT NULL,
+                        avatar TEXT NOT NULL DEFAULT '',
+                        avatar_id TEXT,
+                        is_kids INT DEFAULT 0,
+                        is_locked INT DEFAULT 0,
+                        pin_hash TEXT,
+                        pin_salt TEXT,
+                        sort_order INT DEFAULT 0,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )
+                    """
+                )
+                cur.execute(
+                    """
                     CREATE TABLE IF NOT EXISTS watch_history (
                         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                         user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        profile_id UUID REFERENCES watch_profiles(id) ON DELETE CASCADE,
                         movie_key TEXT NOT NULL,
                         title TEXT NOT NULL,
                         year INT,
@@ -229,8 +291,112 @@ class Store:
                         completed INT DEFAULT 0,
                         watched_at BIGINT DEFAULT 0,
                         updated_at TEXT NOT NULL,
-                        UNIQUE (user_id, movie_key)
+                        UNIQUE (user_id, profile_id, movie_key)
                     )
+                    """
+                )
+                # Scoped daily playback counters, one row per profile per UTC
+                # day. A separate table rather than a counter on watch_history
+                # because a title can be replayed and must only count once, and
+                # because the day boundary is a policy decision (UTC) that is
+                # cheaper to change here than in every read path.
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS daily_plays (
+                        profile_id UUID NOT NULL REFERENCES watch_profiles(id) ON DELETE CASCADE,
+                        day TEXT NOT NULL,
+                        movie_key TEXT NOT NULL,
+                        played_at BIGINT DEFAULT 0,
+                        PRIMARY KEY (profile_id, day, movie_key)
+                    )
+                    """
+                )
+                # Referral bookkeeping. `code` is the owner's shareable string and
+                # `referred_by` is the one account that may have referred this
+                # user; UNIQUE is what makes self-referral and double-claiming
+                # impossible at the database level rather than in app logic.
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS referral_codes (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        code TEXT NOT NULL UNIQUE,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS referral_uses (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        code_id UUID NOT NULL REFERENCES referral_codes(id) ON DELETE CASCADE,
+                        referred_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        UNIQUE (code_id),
+                        UNIQUE (referred_id)
+                    )
+                    """
+                )
+                # Unlocked days granted by referrals. A separate table so a grant
+                # is auditable and revocable, and so the daily cap can be
+                # recomputed from scratch rather than by mutating a counter that
+                # can drift.
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS referral_grants (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        day TEXT NOT NULL,
+                        source TEXT NOT NULL DEFAULT 'referral',
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        UNIQUE (owner_id, day)
+                    )
+                    """
+                )
+                # Per-profile taste signals. Only derived features are stored --
+                # normalised genre/cast/director weights plus a hashed query
+                # token -- never the raw search text, so a private search cannot
+                # be read back out of this table.
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS taste_signals (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        profile_id UUID NOT NULL REFERENCES watch_profiles(id) ON DELETE CASCADE,
+                        kind TEXT NOT NULL,
+                        feature TEXT NOT NULL,
+                        weight DOUBLE PRECISION NOT NULL DEFAULT 0,
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        UNIQUE (profile_id, kind, feature)
+                    )
+                    """
+                )
+                # Append-only interaction log. This is what the recommender is
+                # scored from and what a held-out evaluation is split on, so it
+                # is kept separate from the rolled-up weights.
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS taste_events (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        profile_id UUID NOT NULL REFERENCES watch_profiles(id) ON DELETE CASCADE,
+                        kind TEXT NOT NULL,
+                        media_key TEXT,
+                        weight DOUBLE PRECISION NOT NULL DEFAULT 0,
+                        genres TEXT NOT NULL DEFAULT '',
+                        people TEXT NOT NULL DEFAULT '',
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_taste_events_profile
+                    ON taste_events(profile_id, created_at DESC)
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_taste_signals_profile
+                    ON taste_signals(profile_id)
                     """
                 )
                 cur.execute(
@@ -331,9 +497,27 @@ class Store:
                 )
                 cur.execute(
                     """
+                    CREATE TABLE IF NOT EXISTS watch_profiles (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER NOT NULL,
+                        name TEXT NOT NULL,
+                        avatar TEXT NOT NULL DEFAULT '',
+                        avatar_id TEXT,
+                        is_kids INT DEFAULT 0,
+                        is_locked INT DEFAULT 0,
+                        pin_hash TEXT,
+                        pin_salt TEXT,
+                        sort_order INT DEFAULT 0,
+                        created_at TEXT NOT NULL
+                    )
+                    """
+                )
+                cur.execute(
+                    """
                     CREATE TABLE IF NOT EXISTS watch_history (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         user_id INTEGER NOT NULL,
+                        profile_id INTEGER,
                         movie_key TEXT NOT NULL,
                         title TEXT NOT NULL,
                         year INT,
@@ -345,8 +529,92 @@ class Store:
                         completed INT DEFAULT 0,
                         watched_at BIGINT DEFAULT 0,
                         updated_at TEXT NOT NULL,
-                        UNIQUE (user_id, movie_key)
+                        UNIQUE (user_id, profile_id, movie_key)
                     )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS daily_plays (
+                        profile_id INTEGER NOT NULL,
+                        day TEXT NOT NULL,
+                        movie_key TEXT NOT NULL,
+                        played_at BIGINT DEFAULT 0,
+                        PRIMARY KEY (profile_id, day, movie_key)
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS referral_codes (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        owner_id INTEGER NOT NULL,
+                        code TEXT NOT NULL UNIQUE,
+                        created_at TEXT NOT NULL
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS referral_uses (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        code_id INTEGER NOT NULL,
+                        referred_id INTEGER NOT NULL,
+                        created_at TEXT NOT NULL,
+                        UNIQUE (code_id),
+                        UNIQUE (referred_id)
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS referral_grants (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        owner_id INTEGER NOT NULL,
+                        day TEXT NOT NULL,
+                        source TEXT NOT NULL DEFAULT 'referral',
+                        created_at TEXT NOT NULL,
+                        UNIQUE (owner_id, day)
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS taste_signals (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        profile_id INTEGER NOT NULL,
+                        kind TEXT NOT NULL,
+                        feature TEXT NOT NULL,
+                        weight REAL NOT NULL DEFAULT 0,
+                        updated_at TEXT NOT NULL,
+                        UNIQUE (profile_id, kind, feature)
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS taste_events (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        profile_id INTEGER NOT NULL,
+                        kind TEXT NOT NULL,
+                        media_key TEXT,
+                        weight REAL NOT NULL DEFAULT 0,
+                        genres TEXT NOT NULL DEFAULT '',
+                        people TEXT NOT NULL DEFAULT '',
+                        created_at TEXT NOT NULL
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_taste_events_profile
+                    ON taste_events(profile_id, created_at DESC)
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_taste_signals_profile
+                    ON taste_signals(profile_id)
                     """
                 )
                 cur.execute(
@@ -422,6 +690,743 @@ class Store:
                 conn.commit()
         finally:
             conn.close()
+        self._migrate_columns()
+        # After the columns, so the rebuild can copy the new ones.
+        self._migrate_history_unique()
+
+    def _migrate_columns(self) -> None:
+        """Additive column migrations for databases created before profiling.
+
+        `CREATE TABLE IF NOT EXISTS` is a no-op against an existing table, so
+        deploying the new profile tables alone would leave a live install with
+        the old `watch_history` shape: no `profile_id`, and a UNIQUE constraint
+        keyed on (user_id, movie_key) that would merge every profile's history
+        into one. That failure is silent, so each column is added explicitly and
+        is a no-op on a fresh database.
+        """
+        wanted = [
+            ("watch_history", "profile_id", "UUID" if self.pg else "INTEGER"),
+            ("watch_history", "duration_seconds", "INT DEFAULT 0"),
+        ]
+        for table, column, coltype in wanted:
+            if self._has_column(table, column):
+                continue
+            try:
+                self._execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+            except Exception:
+                # A concurrent deploy may have added it first, or the backend may
+                # not be privileged enough. Never fail init for this: the
+                # application tolerates a missing profile_id by treating rows as
+                # unprofiled, which is strictly better than refusing to boot.
+                pass
+
+    def _migrate_history_unique(self) -> None:
+        """Rebuild `watch_history` when its UNIQUE constraint predates profiles.
+
+        Adding a `profile_id` column is not enough. The original constraint was
+        `UNIQUE (user_id, movie_key)`, so two profiles in one home watching the
+        same title still collided on insert -- the second profile's history
+        silently overwrote the first's, or raised depending on the statement.
+        The fix has to be the constraint itself, and SQLite cannot alter one in
+        place, so the table is rebuilt and copied.
+
+        This is destructive to the old constraint, not to the rows: every
+        existing row is preserved, and rows with a NULL `profile_id` (written
+        before profiling existed) are given the account's first profile so they
+        become visible rather than orphaned.
+        """
+        try:
+            if self.pg:
+                self._rebuild_history_unique_pg()
+            else:
+                self._rebuild_history_unique_sqlite()
+        except Exception:
+            # A failed migration must not stop the process from booting. The
+            # worst case is the old collision behaviour, which is what the app
+            # did before profiles existed.
+            pass
+
+    # Columns are listed once so both backends copy exactly the same set.
+    _HISTORY_COLUMNS = (
+        "id",
+        "user_id",
+        "profile_id",
+        "movie_key",
+        "title",
+        "year",
+        "poster",
+        "backdrop",
+        "media_type",
+        "progress_seconds",
+        "duration_seconds",
+        "completed",
+        "watched_at",
+        "updated_at",
+    )
+
+    def _rebuild_history_unique_sqlite(self) -> None:
+        row = self._query(
+            "SELECT sql FROM sqlite_master WHERE name = 'watch_history'",
+            fetch_all=True,
+        )
+        # `_query` hands back dicts, and only when `fetch_all` is set does it
+        # hand back a list. Positional indexing raised KeyError here, and since
+        # the caller swallows migration errors the constraint was silently never
+        # rebuilt.
+        current = (row[0].get("sql") or "") if row else ""
+        # Already correct: nothing to do. This is the common case.
+        if "UNIQUE (user_id, profile_id, movie_key)" in current.replace("  ", " "):
+            return
+        cols = ", ".join(self._HISTORY_COLUMNS)
+        # `PRAGMA foreign_keys` is a no-op inside a transaction, and every
+        # `_execute` opens and closes its own connection -- so toggling it per
+        # statement does nothing and the rename below would fail the moment the
+        # table had any referencing foreign key. It is turned off for the whole
+        # rebuild on one connection instead.
+        conn = self._connect()
+        try:
+            conn.execute("PRAGMA foreign_keys = OFF")
+            cur = conn.cursor()
+            cur.execute("ALTER TABLE watch_history RENAME TO watch_history_legacy")
+            cur.execute(
+                """
+                CREATE TABLE watch_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    profile_id INTEGER,
+                    movie_key TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    year INT,
+                    poster TEXT,
+                    backdrop TEXT,
+                    media_type TEXT,
+                    progress_seconds INT DEFAULT 0,
+                    duration_seconds INT DEFAULT 0,
+                    completed INT DEFAULT 0,
+                    watched_at BIGINT DEFAULT 0,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE (user_id, profile_id, movie_key)
+                )
+                """
+            )
+            cols = ", ".join(self._HISTORY_COLUMNS)
+            cur.execute(
+                f"INSERT OR IGNORE INTO watch_history ({cols}) "
+                f"SELECT {cols} FROM watch_history_legacy"
+            )
+            cur.execute("DROP TABLE watch_history_legacy")
+            conn.commit()
+        finally:
+            try:
+                conn.execute("PRAGMA foreign_keys = ON")
+            finally:
+                conn.close()
+        self._adopt_orphan_history()
+        return
+
+    def _rebuild_history_unique_pg(self) -> None:
+        constraints = self._query(
+            "SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint "
+            "WHERE conrelid = 'watch_history'::regclass AND contype = 'u'"
+        )
+        defs = " | ".join((r.get("def") or "") for r in (constraints or []))
+        if "profile_id" in defs and "movie_key" in defs:
+            return
+        # A unique index on (user_id, movie_key) has to go before the new
+        # constraint can be created, and the old index is what enforces it.
+        self._execute(
+            "DROP INDEX IF EXISTS watch_history_user_id_movie_key_key"
+        )
+        self._execute("ALTER TABLE watch_history DROP CONSTRAINT IF EXISTS watch_history_user_id_movie_key_key")
+        cols = ", ".join(self._HISTORY_COLUMNS)
+        self._execute(
+            f"INSERT INTO watch_history ({cols}) "
+            f"SELECT {cols} FROM watch_history ON CONFLICT DO NOTHING"
+        )
+        self._execute(
+            "ALTER TABLE watch_history ADD CONSTRAINT watch_history_profile_key "
+            "UNIQUE (user_id, profile_id, movie_key)"
+        )
+        self._adopt_orphan_history()
+
+    def _adopt_orphan_history(self) -> None:
+        """Give pre-profile history rows the account's first profile.
+
+        Every read is scoped by `profile_id`, so a row left NULL is invisible: a
+        viewer who had history before the upgrade would find an empty Continue
+        Watching with no way to recover the rows.
+
+        Runs as a plain correlated subquery rather than a join. SQLite evaluates
+        the inner `SELECT` once for the whole statement when it is not correlated
+        to the outer row, which silently updated *no* rows -- and since the
+        caller swallows errors, that looked like a successful migration.
+        """
+        try:
+            if self.pg:
+                self._execute(
+                    "UPDATE watch_history h SET profile_id = first.id "
+                    "FROM (SELECT DISTINCT ON (user_id) id, user_id FROM watch_profiles "
+                    "      ORDER BY user_id, sort_order, created_at) AS first "
+                    "WHERE h.profile_id IS NULL AND h.user_id = first.user_id"
+                )
+            else:
+                self._execute(
+                    "UPDATE watch_history SET profile_id = ("
+                    "  SELECT p.id FROM watch_profiles AS p "
+                    "  WHERE p.user_id = watch_history.user_id "
+                    "  ORDER BY p.sort_order, p.rowid LIMIT 1"
+                    ") WHERE profile_id IS NULL "
+                    "AND EXISTS (SELECT 1 FROM watch_profiles AS q "
+                    "            WHERE q.user_id = watch_history.user_id)"
+                )
+        except Exception:
+            pass
+
+    def _has_column(self, table: str, column: str) -> bool:
+        try:
+            if self.pg:
+                rows = self._query(
+                    "SELECT 1 AS ok FROM information_schema.columns "
+                    "WHERE table_name = ? AND column_name = ? LIMIT 1",
+                    (table, column),
+                )
+            else:
+                rows = self._query(f"PRAGMA table_info({table})")
+                return any(r.get("name") == column for r in (rows or []))
+            return bool(rows)
+        except Exception:
+            return False
+
+    # -- profiles ---------------------------------------------------------
+
+    # A home is capped at 4 profiles. Enforced in the write path rather than
+    # only in the UI, because the cap is a business rule and a client-side
+    # check is not a boundary.
+    MAX_PROFILES = 4
+
+    def list_profiles(self, user_id) -> list[dict]:
+        rows = self._query(
+            "SELECT * FROM watch_profiles WHERE user_id = ? "
+            "ORDER BY sort_order ASC, created_at ASC",
+            (user_id,),
+            fetch_all=True,
+        )
+        return list(rows or [])
+
+    def profile_by_id(self, profile_id, user_id) -> dict | None:
+        # user_id is part of the predicate on purpose: a profile id is guessable
+        # (autoincrement on sqlite), so ownership must be checked server-side.
+        rows = self._query(
+            "SELECT * FROM watch_profiles WHERE id = ? AND user_id = ? LIMIT 1",
+            (profile_id, user_id),
+            fetch_all=True,
+        )
+        return rows[0] if rows else None
+
+    def count_profiles(self, user_id) -> int:
+        rows = self._query(
+            "SELECT COUNT(*) AS n FROM watch_profiles WHERE user_id = ?",
+            (user_id,),
+            fetch_all=True,
+        )
+        return int((rows[0] or {}).get("n", 0)) if rows else 0
+
+    def create_profile(
+        self,
+        user_id,
+        name: str,
+        avatar: str = "",
+        avatar_id: str | None = None,
+        is_kids: int = 0,
+        pin_hash: str | None = None,
+        pin_salt: str | None = None,
+    ) -> dict | None:
+        if self.count_profiles(user_id) >= self.MAX_PROFILES:
+            return None
+        order = self.count_profiles(user_id)
+        self._execute(
+            "INSERT INTO watch_profiles "
+            "(user_id, name, avatar, avatar_id, is_kids, is_locked, pin_hash, pin_salt, sort_order, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                user_id,
+                name,
+                avatar,
+                avatar_id,
+                1 if is_kids else 0,
+                1 if pin_hash else 0,
+                pin_hash,
+                pin_salt,
+                order,
+                _now_iso(),
+            ),
+        )
+        rows = self._query(
+            "SELECT * FROM watch_profiles WHERE user_id = ? "
+            "ORDER BY sort_order ASC, created_at ASC",
+            (user_id,),
+            fetch_all=True,
+        )
+        created = rows[-1] if rows else None
+        # The first profile of a pre-profiles account inherits that account's
+        # orphaned history. Adopting only at migration time is not enough: the
+        # migration runs at boot, when such an account usually has no profiles
+        # yet, so there is nothing to adopt into and the rows would stay
+        # invisible to every profile-scoped read forever.
+        if created and order == 0:
+            try:
+                self._execute(
+                    "UPDATE watch_history SET profile_id = ? "
+                    "WHERE user_id = ? AND profile_id IS NULL",
+                    (created["id"], user_id),
+                )
+            except Exception:
+                pass
+        return created
+
+    def update_profile(self, profile_id, user_id, **fields) -> dict | None:
+        allowed = {
+            "name",
+            "avatar",
+            "avatar_id",
+            "is_kids",
+            "is_locked",
+            "pin_hash",
+            "pin_salt",
+            "sort_order",
+        }
+        sets, params = [], []
+        for key, value in fields.items():
+            if key not in allowed:
+                continue
+            sets.append(f"{key} = ?")
+            params.append(value)
+        if not sets:
+            return self.profile_by_id(profile_id, user_id)
+        params.extend([profile_id, user_id])
+        self._execute(
+            f"UPDATE watch_profiles SET {', '.join(sets)} WHERE id = ? AND user_id = ?",
+            tuple(params),
+        )
+        return self.profile_by_id(profile_id, user_id)
+
+    def delete_profile(self, profile_id, user_id) -> bool:
+        # daily_plays and history cascade via the FK on pg; sqlite needs the
+        # rows removed explicitly, and doing it here keeps both backends
+        # observably identical. The taste tables have no FK, so without this
+        # the taste profile of a deleted viewer would sit in the database
+        # forever.
+        self._execute(
+            "DELETE FROM daily_plays WHERE profile_id = ?", (profile_id,)
+        )
+        self._execute(
+            "DELETE FROM taste_events WHERE profile_id = ?", (profile_id,)
+        )
+        self._execute(
+            "DELETE FROM taste_signals WHERE profile_id = ?", (profile_id,)
+        )
+        self._execute(
+            "DELETE FROM watch_history WHERE profile_id = ? AND user_id = ?",
+            (profile_id, user_id),
+        )
+        n = self._execute_rowcount(
+            "DELETE FROM watch_profiles WHERE id = ? AND user_id = ?",
+            (profile_id, user_id),
+        )
+        return bool(n)
+
+    # -- daily allowance & referrals ---------------------------------------
+
+    def plays_on(self, profile_id, day: str) -> int:
+        rows = self._query(
+            "SELECT COUNT(*) AS n FROM daily_plays WHERE profile_id = ? AND day = ?",
+            (profile_id, day),
+            fetch_all=True,
+        )
+        return int((rows[0] or {}).get("n", 0)) if rows else 0
+
+    def account_plays_on(self, user_id, day: str) -> int:
+        rows = self._query(
+            "SELECT COUNT(*) AS n FROM daily_plays d "
+            "JOIN watch_profiles p ON p.id = d.profile_id "
+            "WHERE p.user_id = ? AND d.day = ?",
+            (user_id, day),
+            fetch_all=True,
+        )
+        return int((rows[0] or {}).get("n", 0)) if rows else 0
+
+    def claimed_today(self, profile_id, day: str, movie_key: str) -> bool:
+        """Whether this exact title is already on today's bill.
+
+        `record_play` reports the same "no new row" outcome for a replay and for
+        a cap refusal, so the caller needs this to answer the two differently:
+        a replay is fine, a refusal is not.
+        """
+        rows = self._query(
+            "SELECT 1 AS hit FROM daily_plays "
+            "WHERE profile_id = ? AND day = ? AND movie_key = ? LIMIT 1",
+            (profile_id, day, movie_key),
+            fetch_all=True,
+        )
+        return bool(rows)
+
+    def record_play(
+        self, profile_id, day: str, movie_key: str, user_id=None
+    ) -> bool:
+        """Claim one title against today's allowance, atomically.
+
+        Returns True only if this is a new claim *and* the caps still had room.
+
+        The check and the insert must be one statement. Doing them separately
+        (as this did) let two concurrent requests both observe `remaining == 1`
+        and both insert, so a day ended up recorded as 11 of 10 used. With
+        `INSERT ... SELECT ... WHERE` the cap counts are re-read as part of the
+        write, and only one of the racing statements can see room.
+
+        The account cap needs the owning user id, which `user_id_of_profile`
+        resolves when the caller does not pass it.
+        """
+        if user_id is None:
+            row = self._query(
+                "SELECT user_id FROM watch_profiles WHERE id = ? LIMIT 1",
+                (profile_id,),
+            )
+            user_id = row.get("user_id") if row else None
+        if user_id is None:
+            return False
+        # The primary key still absorbs a replay or a double submit: the insert
+        # raises, rowcount is 0, and the claim is reported as not-new.
+        sql = (
+            "INSERT INTO daily_plays (profile_id, day, movie_key, played_at) "
+            "SELECT ?, ?, ?, ? "
+            "WHERE (SELECT COUNT(*) FROM daily_plays "
+            "        WHERE profile_id = ? AND day = ?) < ? "
+            "AND (SELECT COUNT(*) FROM daily_plays AS p "
+            "     JOIN watch_profiles AS wp ON wp.id = p.profile_id "
+            "     WHERE wp.user_id = ? AND p.day = ?) < ?"
+        )
+        try:
+            claimed = self._execute_rowcount(
+                sql,
+                (
+                    profile_id, day, movie_key, int(time.time() * 1000),
+                    profile_id, day, DAILY_TITLE_CAP,
+                    user_id, day, DAILY_ACCOUNT_CAP,
+                ),
+            ) == 1
+        except Exception:
+            # Duplicate key: this title was already claimed today. Not an error.
+            return False
+        return claimed
+
+    def referral_code_for(self, user_id) -> str:
+        """The account's shareable code, created on first use.
+
+        Lives in its own table because a code is a property of the *owner* while
+        referrals-to-me is a property of the *referred user*. Collapsing both
+        into one row makes the two one-to-one, so a user can only ever be
+        referred once in total regardless of how many people they refer.
+        """
+        row = self._query(
+            "SELECT * FROM referral_codes WHERE owner_id = ? LIMIT 1",
+            (user_id,),
+        )
+        if row:
+            return row["code"]
+        # Deterministic from the user id, so the same account sees the same code
+        # on every device and the UNIQUE constraint settles the rare race.
+        code = _make_referral_code(user_id)
+        try:
+            self._execute(
+                "INSERT INTO referral_codes (owner_id, code, created_at) "
+                "VALUES (?, ?, ?)",
+                (user_id, code, _now_iso()),
+            )
+        except Exception:
+            # Lost the race, or a code is already allocated; read it back.
+            row = self._query(
+                "SELECT * FROM referral_codes WHERE owner_id = ? LIMIT 1",
+                (user_id,),
+            )
+            if row:
+                return row["code"]
+        return code
+
+    def referral_stats(self, user_id) -> dict:
+        code = self.referral_code_for(user_id)
+        rows = self._query(
+            "SELECT COUNT(*) AS n FROM referral_uses u "
+            "JOIN referral_codes c ON c.id = u.code_id "
+            "WHERE c.owner_id = ?",
+            (user_id,),
+            fetch_all=True,
+        )
+        accepted = int((rows[0] or {}).get("n", 0)) if rows else 0
+        return {
+            "code": code,
+            "accepted": accepted,
+            "granted_days": self.granted_days(user_id),
+        }
+
+    def accept_referral(self, referred_id, code: str) -> bool:
+        """Record that `referred_id` joined via the holder of `code`.
+
+        Self-referral and double-claiming are rejected. Two constraints do the
+        work: UNIQUE(code_id) makes a code single-use, and UNIQUE(referred_id)
+        stops one account redeeming several codes to stack grants. Both are
+        database-level, so two simultaneous signups cannot both win.
+        """
+        if not code:
+            return False
+        row = self._query(
+            "SELECT * FROM referral_codes WHERE code = ? LIMIT 1",
+            (code.strip().upper(),),
+        )
+        if not row:
+            return False
+        if str(row.get("owner_id")) == str(referred_id):
+            return False
+        try:
+            self._execute(
+                "INSERT INTO referral_uses (code_id, referred_id, created_at) "
+                "VALUES (?, ?, ?)",
+                (row["id"], referred_id, _now_iso()),
+            )
+            return True
+        except Exception:
+            # Violated UNIQUE(code_id, referred_id) or UNIQUE(referred_id).
+            return False
+
+    def referrer_of(self, user_id) -> str | None:
+        """Who referred this account, if anyone.
+
+        Needed to grant the inviter their side of the reward: the joiner is
+        known at redemption time but the code owner is not, so it has to be
+        read back rather than carried through the request.
+        """
+        rows = self._query(
+            "SELECT c.owner_id AS owner_id FROM referral_uses u "
+            "JOIN referral_codes c ON c.id = u.code_id "
+            "WHERE u.referred_id = ? LIMIT 1",
+            (user_id,),
+            fetch_all=True,
+        )
+        if not rows:
+            return None
+        return rows[0].get("owner_id")
+
+    def granted_days(self, user_id) -> int:
+        rows = self._query(
+            "SELECT COUNT(*) AS n FROM referral_grants WHERE owner_id = ?",
+            (user_id,),
+            fetch_all=True,
+        )
+        return int((rows[0] or {}).get("n", 0)) if rows else 0
+
+    def grant_day(self, user_id, day: str, source: str = "referral") -> bool:
+        """Unlock the cap for one more day. Idempotent per day."""
+        try:
+            self._execute(
+                "INSERT INTO referral_grants (owner_id, day, source, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (user_id, day, source, _now_iso()),
+            )
+            return True
+        except Exception:
+            return False
+
+    def has_unlocked_day(self, user_id, day: str) -> bool:
+        row = self._query(
+            "SELECT 1 AS ok FROM referral_grants WHERE owner_id = ? AND day = ? LIMIT 1",
+            (user_id, day),
+        )
+        return bool(row)
+
+    # -- taste signals & recommender state --------------------------------
+
+    def record_taste_event(
+        self,
+        profile_id,
+        kind: str,
+        genres=None,
+        people=None,
+        media_key: str | None = None,
+        weight: float = 1.0,
+    ) -> None:
+        """Append one interaction to the event log.
+
+        `genres` and `people` arrive already reduced to derived features by
+        `taste`; the raw search text is never handed to this method, so it
+        cannot end up in the table even by accident.
+        """
+        self._execute(
+            "INSERT INTO taste_events "
+            "(profile_id, kind, media_key, weight, genres, people, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                profile_id,
+                kind,
+                media_key,
+                float(weight),
+                ",".join(genres or []),
+                ",".join(people or []),
+                int(time.time() * 1000),
+            ),
+        )
+
+    def taste_events(self, profile_id, limit: int = 500) -> list[dict]:
+        rows = self._query(
+            "SELECT kind, media_key, weight, genres, people, created_at "
+            "FROM taste_events WHERE profile_id = ? "
+            "ORDER BY created_at DESC, id DESC LIMIT ?",
+            (profile_id, limit),
+            fetch_all=True,
+        )
+        return rows or []
+
+    def search_token_hits(self, profile_id, limit: int = 200) -> dict[str, int]:
+        """How often each hashed search token has been seen.
+
+        A single query word is usually a typo, so tokens below the repeat
+        threshold are excluded from the feature space by the caller.
+        """
+        # SUM(weight), not COUNT(*): there is exactly one row per token, so a
+        # row count would always be 1 and the repeat threshold could never be
+        # cleared. The accumulated count lives in the weight column.
+        rows = self._query(
+            "SELECT feature, SUM(weight) AS n FROM taste_signals "
+            "WHERE profile_id = ? AND kind = 'query' "
+            "GROUP BY feature ORDER BY n DESC LIMIT ?",
+            (profile_id, limit),
+            fetch_all=True,
+        )
+        return {row["feature"]: int(row["n"] or 0) for row in (rows or [])}
+
+    def bump_search_token(self, profile_id, feature: str) -> int:
+        """Count one occurrence of a hashed query token, returning the total.
+
+        Increments with a single UPDATE and falls back to INSERT on no-match,
+        rather than UPDATE-then-INSERT: the second form raises a UNIQUE
+        violation whenever the UPDATE actually matched, which is the common
+        case, and a failing counter must not surface as a 500.
+        """
+        updated = self._execute_rowcount(
+            "UPDATE taste_signals SET weight = weight + 1, updated_at = ? "
+            "WHERE profile_id = ? AND kind = 'query' AND feature = ?",
+            (_now(), profile_id, feature),
+        )
+        if updated:
+            row = self._query(
+                "SELECT weight FROM taste_signals "
+                "WHERE profile_id = ? AND kind = 'query' AND feature = ? LIMIT 1",
+                (profile_id, feature),
+            )
+            return int(row["weight"]) if row else 1
+        try:
+            self._execute(
+                "INSERT INTO taste_signals "
+                "(profile_id, kind, feature, weight, updated_at) "
+                "VALUES (?, 'query', ?, 1, ?)",
+                (profile_id, feature, _now()),
+            )
+            return 1
+        except Exception:
+            # Lost a race with a concurrent search; the row now exists, so
+            # count it up once more and report the winner's total.
+            self._execute(
+                "UPDATE taste_signals SET weight = weight + 1, updated_at = ? "
+                "WHERE profile_id = ? AND kind = 'query' AND feature = ?",
+                (_now(), profile_id, feature),
+            )
+            row = self._query(
+                "SELECT weight FROM taste_signals "
+                "WHERE profile_id = ? AND kind = 'query' AND feature = ? LIMIT 1",
+                (profile_id, feature),
+            )
+            return int(row["weight"]) if row else 1
+
+    def save_taste_state(
+        self, profile_id, state: dict, model_version: str = "linear-v1"
+    ) -> None:
+        """Persist the rolled-up weight state.
+
+        The event log is the source of truth and this is a cache of it, so a bad
+        rollup can always be rebuilt by replaying `taste_events`.
+        """
+        # Every derived row is replaced, not just the version marker: dropping
+        # only the 'state' row leaves the previous genre/people rows in place,
+        # and re-inserting them trips the (profile, kind, feature) UNIQUE on
+        # every rebuild after the first. Query token counts are deliberately
+        # left alone -- they are a lifetime counter, not part of the rollup.
+        self._execute(
+            "DELETE FROM taste_signals WHERE profile_id = ? AND kind IN ('genre', 'people', 'state')",
+            (profile_id,),
+        )
+        self._execute(
+            "INSERT INTO taste_signals "
+            "(profile_id, kind, feature, weight, updated_at) "
+            "VALUES (?, 'state', ?, ?, ?)",
+            (profile_id, model_version, float(time.time()), _now()),
+        )
+        for kind in ("genre", "people"):
+            for feature, weight in (state.get(kind) or {}).items():
+                self._execute(
+                    "INSERT INTO taste_signals "
+                    "(profile_id, kind, feature, weight, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (profile_id, kind, feature, float(weight), _now()),
+                )
+
+    def load_taste_state(self, profile_id) -> dict:
+        rows = self._query(
+            "SELECT kind, feature, weight FROM taste_signals "
+            "WHERE profile_id = ? AND kind IN ('genre', 'people')",
+            (profile_id,),
+            fetch_all=True,
+        )
+        state = {"genre": {}, "people": {}}
+        for row in rows or []:
+            if row["kind"] in state:
+                state[row["kind"]][row["feature"]] = float(row["weight"] or 0)
+        return state
+
+    def model_version(self, profile_id) -> str:
+        row = self._query(
+            "SELECT feature FROM taste_signals "
+            "WHERE profile_id = ? AND kind = 'state' LIMIT 1",
+            (profile_id,),
+        )
+        return row["feature"] if row else ""
+
+    def allowance(self, user_id, profile_id, day: str) -> dict:
+        """The full allowance picture for one profile on one day.
+
+        Returns the raw numbers alongside the decision so the client can show
+        "9 of 10 used, resets at 00:00 UTC" rather than a bare refusal.
+        """
+        per_profile_cap = DAILY_TITLE_CAP
+        account_cap = DAILY_ACCOUNT_CAP
+        unlocked = self.has_unlocked_day(user_id, day)
+        used = self.plays_on(profile_id, day)
+        account_used = self.account_plays_on(user_id, day)
+        # `account_used` already includes this profile's own plays, so the
+        # account budget left is `account_cap - account_used` and the two caps
+        # are independent budgets. Subtracting `used` from the account figure a
+        # second time double-counted the profile's own consumption and cut a
+        # profile off well before its own 10.
+        account_left = max(0, account_cap - account_used)
+        effective = 10**6 if unlocked else min(per_profile_cap, account_left + used)
+        return {
+            "day": day,
+            "used": used,
+            "per_profile_cap": per_profile_cap,
+            "account_cap": account_cap,
+            "account_used": account_used,
+            "account_left": account_left,
+            "unlocked": unlocked,
+            "remaining": 10**6 if unlocked else max(0, effective - used),
+            "unlimited": unlocked,
+        }
 
     # -- users ------------------------------------------------------------
 
@@ -466,6 +1471,31 @@ class Store:
         # Self-contained: salt is embedded so `users.password_hash` needs no
         # separate column (matches the Neon-provisioned users schema).
         return f"pbkdf2_sha256${salt}${raw.hex()}"
+
+    # -- secrets (shared by account passwords and profile PINs) -----------
+
+    @staticmethod
+    def hash_secret(secret: str, salt: str) -> str:
+        """PBKDF2 hash for a profile PIN, with its salt embedded.
+
+        Same primitive and iteration count as the account password so a PIN is
+        not weaker to brute-force just because it is shorter; the practical
+        protection is that the 4-digit space is only reachable through this
+        endpoint, which is rate limited by the API guard.
+        """
+        raw = hashlib.pbkdf2_hmac(
+            "sha256", secret.encode("utf-8"), salt.encode("utf-8"), 210_000
+        )
+        return f"pbkdf2_sha256${salt}${raw.hex()}"
+
+    @staticmethod
+    def verify_secret(secret: str, stored: str, salt: str) -> bool:
+        if not secret or not stored:
+            return False
+        candidate = Store.hash_secret(secret, salt)
+        # compare_digest, not ==: a timing side channel on a PIN check is a
+        # real, if modest, leak.
+        return secrets.compare_digest(candidate, stored)
 
     def verify_password(self, user: dict, password: str) -> bool:
         import hashlib
@@ -519,79 +1549,120 @@ class Store:
         user_id: int,
         movie_key: str,
         fields: dict,
+        profile_id=None,
     ) -> None:
-        existing = self._query(
-            "SELECT id FROM watch_history WHERE user_id = ? AND movie_key = ? LIMIT 1",
-            (user_id, movie_key),
-        )
+        """Upsert one watch-progress row for a profile.
+
+        `profile_id` is part of the identity, not just a column: two profiles
+        watching the same film must keep independent progress, so both the
+        lookup and the update predicate include it. A NULL profile_id is the
+        unprofiled legacy shape and is handled by the IS NULL variants, since
+        `= NULL` never matches in SQL and would silently insert duplicates.
+        """
+        if profile_id:
+            existing = self._query(
+                "SELECT id FROM watch_history WHERE user_id = ? AND movie_key = ? "
+                "AND profile_id = ? LIMIT 1",
+                (user_id, movie_key, profile_id),
+                fetch_all=True,
+            )
+        else:
+            existing = self._query(
+                "SELECT id FROM watch_history WHERE user_id = ? AND movie_key = ? "
+                "AND profile_id IS NULL LIMIT 1",
+                (user_id, movie_key),
+                fetch_all=True,
+            )
+        if isinstance(existing, list):
+            existing = existing[0] if existing else None
         proofs = ["title", "year", "poster", "backdrop", "media_type"]
-        values = {
-            key: fields.get(key)
-            for key in proofs
-        }
+        values = {key: fields.get(key) for key in proofs}
         progress = int(fields.get("progress_seconds") or 0)
         duration = int(fields.get("duration_seconds") or 0)
         completed = 1 if fields.get("completed") else 0
         watched_at = int(fields.get("watched_at") or time.time() * 1000)
         if existing:
+            if profile_id:
+                self._execute(
+                    "UPDATE watch_history SET title = ?, year = ?, poster = ?, backdrop = ?, "
+                    "media_type = ?, progress_seconds = ?, duration_seconds = ?, completed = ?, "
+                    "watched_at = ?, updated_at = ? WHERE id = ?",
+                    (
+                        values["title"], values["year"], values["poster"],
+                        values["backdrop"], values["media_type"], progress,
+                        duration, completed, watched_at, _now(), existing["id"],
+                    ),
+                )
+            else:
+                self._execute(
+                    "UPDATE watch_history SET title = ?, year = ?, poster = ?, backdrop = ?, "
+                    "media_type = ?, progress_seconds = ?, duration_seconds = ?, completed = ?, "
+                    "watched_at = ?, updated_at = ? WHERE id = ?",
+                    (
+                        values["title"], values["year"], values["poster"],
+                        values["backdrop"], values["media_type"], progress,
+                        duration, completed, watched_at, _now(), existing["id"],
+                    ),
+                )
+        else:
             self._execute(
-                "UPDATE watch_history SET title = ?, year = ?, poster = ?, backdrop = ?, "
-                "media_type = ?, progress_seconds = ?, duration_seconds = ?, completed = ?, "
-                "watched_at = ?, updated_at = ? WHERE user_id = ? AND movie_key = ?",
+                "INSERT INTO watch_history (user_id, profile_id, movie_key, title, year, "
+                "poster, backdrop, media_type, progress_seconds, duration_seconds, "
+                "completed, watched_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    values["title"],
-                    values["year"],
-                    values["poster"],
-                    values["backdrop"],
-                    values["media_type"],
-                    progress,
-                    duration,
-                    completed,
-                    watched_at,
-                    _now(),
-                    user_id,
-                    movie_key,
+                    user_id, profile_id, movie_key, values["title"], values["year"],
+                    values["poster"], values["backdrop"], values["media_type"],
+                    progress, duration, completed, watched_at, _now(),
                 ),
+            )
+
+    def history(self, user_id: int, limit: int = 100, profile_id=None) -> list[dict]:
+        if profile_id:
+            rows = self._query(
+                "SELECT movie_key, title, year, poster, backdrop, media_type, "
+                "progress_seconds, duration_seconds, completed, watched_at "
+                "FROM watch_history WHERE user_id = ? AND profile_id = ? "
+                "ORDER BY watched_at DESC LIMIT ?",
+                (user_id, profile_id, limit),
+                fetch_all=True,
+            )
+        else:
+            rows = self._query(
+                "SELECT movie_key, title, year, poster, backdrop, media_type, "
+                "progress_seconds, duration_seconds, completed, watched_at "
+                "FROM watch_history WHERE user_id = ? AND profile_id IS NULL "
+                "ORDER BY watched_at DESC LIMIT ?",
+                (user_id, limit),
+                fetch_all=True,
+            )
+        return rows or []
+
+    def remove_history(self, user_id: int, movie_key: str, profile_id=None) -> None:
+        if profile_id:
+            self._execute(
+                "DELETE FROM watch_history WHERE user_id = ? AND movie_key = ? "
+                "AND profile_id = ?",
+                (user_id, movie_key, profile_id),
             )
         else:
             self._execute(
-                "INSERT INTO watch_history (user_id, movie_key, title, year, poster, backdrop, "
-                "media_type, progress_seconds, duration_seconds, completed, watched_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    user_id,
-                    movie_key,
-                    values["title"],
-                    values["year"],
-                    values["poster"],
-                    values["backdrop"],
-                    values["media_type"],
-                    progress,
-                    duration,
-                    completed,
-                    watched_at,
-                    _now(),
-                ),
+                "DELETE FROM watch_history WHERE user_id = ? AND movie_key = ? "
+                "AND profile_id IS NULL",
+                (user_id, movie_key),
             )
 
-    def history(self, user_id: int, limit: int = 100) -> list[dict]:
-        rows = self._query(
-            "SELECT movie_key, title, year, poster, backdrop, media_type, "
-            "progress_seconds, duration_seconds, completed, watched_at "
-            "FROM watch_history WHERE user_id = ? ORDER BY watched_at DESC LIMIT ?",
-            (user_id, limit),
-            fetch_all=True,
-        )
-        return rows or []
-
-    def remove_history(self, user_id: int, movie_key: str) -> None:
-        self._execute(
-            "DELETE FROM watch_history WHERE user_id = ? AND movie_key = ?",
-            (user_id, movie_key),
-        )
-
-    def clear_history(self, user_id: int) -> None:
-        self._execute("DELETE FROM watch_history WHERE user_id = ?", (user_id,))
+    def clear_history(self, user_id: int, profile_id=None) -> None:
+        """Clear one profile's history, or the whole account when no profile is
+        given. Scoped by default so "clear history" on a kid's profile cannot
+        wipe a parent's."""
+        if profile_id:
+            self._execute(
+                "DELETE FROM watch_history WHERE user_id = ? AND profile_id = ?",
+                (user_id, profile_id),
+            )
+        else:
+            self._execute("DELETE FROM watch_history WHERE user_id = ?", (user_id,))
 
     # -- saved media (per-account My List) --------------------------------
 

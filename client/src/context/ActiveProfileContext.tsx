@@ -2,24 +2,31 @@ import {
   createContext,
   useCallback,
   useContext,
-  useEffect,
   useMemo,
-  useState,
   type ReactNode,
 } from "react";
 import { useAuth } from "@/context/AuthContext";
+import { useProfiles } from "@/hooks/useProfiles";
+import { createAvatar, toProfileData, type ProfileData, type ProfilePatch } from "@/services/profiles";
 import type { AvatarPreset } from "@/lib/avatars";
-import {
-  createAvatar,
-  getActiveProfile,
-  getProfiles,
-  saveProfiles as persistProfiles,
-  setActiveProfile as persistActive,
-  updateStoredProfile,
-  type ProfileData,
-  type ProfilePatch,
-} from "@/services/profiles";
 
+/**
+ * Active-profile state, backed by server rows.
+ *
+ * This used to be a localStorage array of profiles with `crypto.randomUUID()`
+ * ids. That was fine while history, My List and the daily allowance were all
+ * keyed on the account, but it meant two problems once profiles became real
+ * rows: the ids the UI held were unknown to the server, and the same key
+ * (`lenium-active-profile-<userId>`) was written in two incompatible formats,
+ * so selecting a profile in the picker silently left the watch page on a
+ * different one.
+ *
+ * Now there is exactly one source of truth -- `useProfiles` -- and this context
+ * exists only to adapt the snake_case server row to the `ProfileData` shape the
+ * render layer already uses. It is deliberately a thin wrapper: every
+ * mutator is async because the server is, and callers that assumed a
+ * synchronous result have been updated.
+ */
 export interface ActiveProfileContextType {
   profiles: ProfileData[];
   activeProfile: ProfileData | null;
@@ -28,16 +35,27 @@ export interface ActiveProfileContextType {
    * `preset` is the chosen avatar when the picker was used. Omitting it keeps
    * the old behaviour of generating a face from the name, so every existing
    * caller stays valid.
+   *
+   * Async because the row is created on the server. Resolves to the new
+   * profile, or `null` if the account is already at its profile limit.
    */
   addProfile: (
     name: string,
     isKids?: boolean,
     preset?: AvatarPreset | null,
-  ) => ProfileData;
-  /** Patch name/avatar/kids in place. Returns the updated profile. */
-  updateProfile: (profileId: string, patch: ProfilePatch) => ProfileData | null;
-  deleteProfile: (profileId: string) => void;
-  refreshProfiles: () => void;
+  ) => Promise<ProfileData | null>;
+  /** Patch name/avatar/kids in place. Resolves to the updated profile. */
+  updateProfile: (
+    profileId: string,
+    patch: ProfilePatch,
+  ) => Promise<ProfileData | null>;
+  deleteProfile: (profileId: string) => Promise<void>;
+  refreshProfiles: () => Promise<void>;
+  /** Set when a profile mutation failed, e.g. the 4-profile limit. */
+  error: string | null;
+  loading: boolean;
+  /** Server-enforced profile ceiling for this account. */
+  max: number;
 }
 
 const ActiveProfileContext = createContext<
@@ -46,102 +64,87 @@ const ActiveProfileContext = createContext<
 
 export function ActiveProfileProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
-  const userId = user ? String(user.id) : null;
+  const { profiles, activeProfile, selectProfile: selectServerProfile, createProfile, updateProfile: updateServerProfile, deleteProfile: deleteServerProfile, refresh, max, loading, error } =
+    useProfiles();
 
-  const [profiles, setProfiles] = useState<ProfileData[]>([]);
-  const [activeProfile, setActiveProfile] = useState<ProfileData | null>(null);
+  // Signed out: the hook already clears, this just avoids rendering a stale
+  // profile from the previous account for a frame during sign-out.
+  const accountId = user ? String(user.id) : null;
 
-  // Reload profile state whenever the signed-in account changes.
-  useEffect(() => {
-    if (!userId) {
-      setProfiles([]);
-      setActiveProfile(null);
-      return;
-    }
-    setProfiles(getProfiles(userId));
-    setActiveProfile(getActiveProfile(userId));
-  }, [userId]);
+  const mapped = useMemo(
+    () => (accountId ? profiles.map(toProfileData) : []),
+    [accountId, profiles]
+  );
+
+  const active = useMemo(() => {
+    if (!accountId) return null;
+    return mapped.find((p) => p.id === String(activeProfile?.id)) ?? null;
+  }, [accountId, mapped, activeProfile]);
 
   const selectProfile = useCallback(
     (profile: ProfileData) => {
-      setActiveProfile(profile);
-      if (userId) persistActive(userId, profile);
+      selectServerProfile(profile.id);
     },
-    [userId]
+    [selectServerProfile]
   );
 
-  const addProfile = useCallback(
-    (name: string, isKids = false, preset: AvatarPreset | null = null) => {
-      const userIdNotNull = userId;
-      if (!userIdNotNull) {
-        throw new Error("Cannot add a profile while signed out");
-      }
-      const profile: ProfileData = {
-        id: crypto.randomUUID(),
-        name: name.trim(),
-        avatar: createAvatar(name, isKids, preset),
-        // Only a preset the viewer actually chose is recorded as chosen; a
-        // generated avatar must stay distinguishable from a picked one or the
-        // picker would highlight a face the viewer never picked.
-        avatarId: preset?.id ?? null,
-        isKids,
-        isLocked: false,
-      };
-      const updated = [...profiles, profile];
-      setProfiles(updated);
-      persistProfiles(userIdNotNull, updated);
-      return profile;
+  const addProfile: ActiveProfileContextType["addProfile"] = useCallback(
+    async (name, isKids = false, preset = null) => {
+      const trimmed = name.trim();
+      if (!trimmed) return null;
+      const created = await createProfile({
+        name: trimmed,
+        // The server has no avatar library, so the generated URL is sent as a
+        // plain string alongside the preset id. That keeps the resolved image
+        // identical on every device, which is the point of a server row.
+        avatar: createAvatar(trimmed, isKids, preset),
+        avatar_id: preset?.id ?? null,
+        is_kids: isKids,
+      });
+      return created ? toProfileData(created) : null;
     },
-    [userId, profiles]
+    [createProfile]
   );
 
-  const updateProfile = useCallback(
-    (profileId: string, patch: ProfilePatch) => {
-      const userIdNotNull = userId;
-      if (!userIdNotNull) return null;
-      const updated = updateStoredProfile(userIdNotNull, profileId, patch);
-      if (!updated) return null;
-      // Re-read rather than splicing locally: `updateStoredProfile` normalises,
-      // and a patch that clears `avatar` gets its generated url back here.
-      setProfiles(getProfiles(userIdNotNull));
-      setActiveProfile(getActiveProfile(userIdNotNull));
-      return updated;
+  const updateProfile: ActiveProfileContextType["updateProfile"] = useCallback(
+    async (profileId, patch) => {
+      const input: {
+        name?: string;
+        avatar?: string;
+        avatar_id?: string | null;
+        is_kids?: boolean;
+      } = {};
+      if (patch.name !== undefined) input.name = patch.name;
+      if (patch.avatar !== undefined) input.avatar = patch.avatar;
+      if (patch.avatarId !== undefined) input.avatar_id = patch.avatarId;
+      if (patch.isKids !== undefined) input.is_kids = patch.isKids;
+      const updated = await updateServerProfile(profileId, input);
+      return toProfileData(updated);
     },
-    [userId]
+    [updateServerProfile]
   );
 
   const deleteProfile = useCallback(
-    (profileId: string) => {
-      const userIdNotNull = userId;
-      if (!userIdNotNull) return;
-      const updated = profiles.filter((p) => p.id !== profileId);
-      setProfiles(updated);
-      persistProfiles(userIdNotNull, updated);
-      if (activeProfile?.id === profileId) {
-        setActiveProfile(null);
-        persistActive(userIdNotNull, null);
-      }
+    async (profileId: string) => {
+      await deleteServerProfile(profileId);
     },
-    [userId, profiles, activeProfile]
+    [deleteServerProfile]
   );
-
-  const refreshProfiles = useCallback(() => {
-    if (!userId) return;
-    setProfiles(getProfiles(userId));
-    setActiveProfile(getActiveProfile(userId));
-  }, [userId]);
 
   const value = useMemo(
     () => ({
-      profiles,
-      activeProfile,
+      profiles: mapped,
+      activeProfile: active,
       selectProfile,
       addProfile,
       updateProfile,
       deleteProfile,
-      refreshProfiles,
+      refreshProfiles: refresh,
+      error,
+      loading,
+      max,
     }),
-    [profiles, activeProfile, selectProfile, addProfile, updateProfile, deleteProfile, refreshProfiles]
+    [mapped, active, selectProfile, addProfile, updateProfile, deleteProfile, refresh, error, loading, max]
   );
 
   return (

@@ -231,9 +231,12 @@ export async function apiLogout(): Promise<void> {
   }
 }
 
-export async function apiHistory(): Promise<RemoteHistoryItem[]> {
+export async function apiHistory(profileId?: string | null): Promise<RemoteHistoryItem[]> {
+  // GET has no body, so the profile travels as a query parameter; the backend
+  // reads both.
+  const query = profileId ? `?profile_id=${encodeURIComponent(profileId)}` : "";
   const payload = await request<{ history: RemoteHistoryItem[] }>(
-    "/api/auth/history",
+    `/api/auth/history${query}`,
     {
       auth: true,
     }
@@ -252,6 +255,7 @@ export async function apiHistoryAdd(item: {
   duration_seconds?: number;
   completed?: boolean;
   watched_at?: number;
+  profile_id?: string | null;
 }): Promise<void> {
   await request("/api/auth/history", {
     method: "POST",
@@ -260,15 +264,297 @@ export async function apiHistoryAdd(item: {
   });
 }
 
-export async function apiHistoryRemove(movieKey: string): Promise<void> {
-  await request(`/api/auth/history/${encodeURIComponent(movieKey)}`, {
+export async function apiHistoryRemove(
+  movieKey: string,
+  profileId?: string | null
+): Promise<void> {
+  const query = profileId ? `?profile_id=${encodeURIComponent(profileId)}` : "";
+  await request(`/api/auth/history/${encodeURIComponent(movieKey)}${query}`, {
     method: "DELETE",
     auth: true,
   });
 }
 
-export async function apiHistoryClear(): Promise<void> {
-  await request("/api/auth/history", { method: "DELETE", auth: true });
+export async function apiHistoryClear(profileId?: string | null): Promise<void> {
+  const query = profileId ? `?profile_id=${encodeURIComponent(profileId)}` : "";
+  await request(`/api/auth/history${query}`, { method: "DELETE", auth: true });
+}
+
+// ---------------------------------------------------------------------------
+// Profiles, daily allowance and referrals
+// ---------------------------------------------------------------------------
+
+export interface ApiProfile {
+  id: string;
+  name: string;
+  avatar: string;
+  avatar_id: string | null;
+  is_kids: boolean;
+  is_locked: boolean;
+  sort_order: number;
+}
+
+// ---------------------------------------------------------------------------
+// taste & recommendations
+// ---------------------------------------------------------------------------
+
+/**
+ * Interactions the linear model understands. The weights live server-side; a
+ * client that invents a new kind gets a 400 rather than silently widening the
+ * vocabulary.
+ */
+export type TasteKind = "play" | "complete" | "save" | "rate" | "search";
+
+export interface TasteResult {
+  ok: boolean;
+  /** False when the interaction carried no usable signal. */
+  recorded?: boolean;
+  /** False when the interaction was counted but not folded into the weights. */
+  applied?: boolean;
+}
+
+export interface TasteWeights {
+  genre: Record<string, number>;
+  people: Record<string, number>;
+}
+
+export interface TasteStateResponse {
+  profile_id: string | number;
+  state: TasteWeights;
+  model_version: string | null;
+  event_count: number;
+}
+
+export interface RecommendationResponse {
+  results: unknown[];
+  /**
+   * False when the profile has no usable signal yet, in which case `results` is
+   * the untouched upstream list. Callers must not label it as personalised.
+   */
+  personalised: boolean;
+  model_version?: string;
+}
+
+/**
+ * Held-out evaluation of the model on a profile's own history.
+ *
+ * `verdict` is the only field to branch on: the scores are meaningless without
+ * it, and the endpoint returns them as `null` when there is not enough data to
+ * measure anything.
+ */
+export interface RecommendationEval {
+  samples: number;
+  train?: number;
+  held_out?: number;
+  /** Distinct features the model could rank. */
+  candidates?: number;
+  hit_rate_at_5: number | null;
+  /** What a random pick of the same size would score. */
+  random_hit_rate: number | null;
+  /** The best any ranking could score, given unreachable held-out features. */
+  best_possible: number | null;
+  /**
+   * `better` -- measurably beats random.
+   * `not_better` -- enough data, but no better than picking at random.
+   * `insufficient_data` -- too few distinct features to measure; this is not a
+   *   claim that the model is bad.
+   */
+  verdict: "better" | "not_better" | "insufficient_data";
+  /**
+   * Always `self_contained`. The candidate pool is the viewer's own features
+   * rather than the real catalogue, so this shows the ordering predicts the
+   * viewer's own behaviour and nothing more.
+   */
+  scope: "self_contained";
+}
+
+/**
+ * Record one interaction.
+ *
+ * `query` is only meaningful for `kind: "search"`, and the server drops the
+ * text immediately -- it stores a salted fingerprint of the token set, so a
+ * repeated private search is recognisable as a habit without the words ever
+ * reaching the database.
+ */
+export async function apiTaste(input: {
+  profile_id: string | number;
+  kind: TasteKind;
+  genres?: string[];
+  people?: string[];
+  query?: string;
+  weight?: number;
+}): Promise<TasteResult> {
+  return request<TasteResult>("/api/taste", {
+    method: "POST",
+    body: input,
+    auth: true,
+  });
+}
+
+export async function apiTasteState(
+  profileId: string | number
+): Promise<TasteStateResponse> {
+  return request<TasteStateResponse>(
+    `/api/taste/state?profile_id=${encodeURIComponent(profileId)}`,
+    { auth: true }
+  );
+}
+
+/** Replay the event log to rebuild the weight cache. */
+export async function apiTasteRebuild(
+  profileId: string | number
+): Promise<TasteStateResponse> {
+  return request<TasteStateResponse>("/api/taste/state", {
+    method: "POST",
+    body: { profile_id: profileId },
+    auth: true,
+  });
+}
+
+export async function apiRecommendations(input: {
+  profile_id: string | number;
+  kind?: "trending" | "popular" | "now_playing";
+  page?: number;
+  limit?: number;
+}): Promise<RecommendationResponse> {
+  const params = new URLSearchParams();
+  params.set("profile_id", String(input.profile_id));
+  if (input.kind) params.set("kind", input.kind);
+  if (input.page) params.set("page", String(input.page));
+  if (input.limit) params.set("limit", String(input.limit));
+  return request<RecommendationResponse>(`/api/recommendations?${params}`, {
+    auth: true,
+  });
+}
+
+export async function apiRecommendationEval(
+  profileId: string | number
+): Promise<RecommendationEval> {
+  return request<RecommendationEval>(
+    `/api/recommendations/eval?profile_id=${encodeURIComponent(profileId)}`,
+    { auth: true }
+  );
+}
+
+export async function apiProfiles(): Promise<{ profiles: ApiProfile[]; max: number }> {
+  const payload = await request<{ profiles: ApiProfile[]; max: number }>(
+    "/api/profiles",
+    { auth: true }
+  );
+  return payload;
+}
+
+export async function apiProfileCreate(input: {
+  name: string;
+  avatar?: string;
+  avatar_id?: string | null;
+  is_kids?: boolean;
+  pin?: string;
+}): Promise<ApiProfile> {
+  const payload = await request<{ profile: ApiProfile }>("/api/profiles", {
+    method: "POST",
+    body: input,
+    auth: true,
+  });
+  return payload.profile;
+}
+
+export async function apiProfileUpdate(
+  profileId: string,
+  input: {
+    name?: string;
+    avatar?: string;
+    avatar_id?: string | null;
+    is_kids?: boolean;
+    /** 4-8 digits to set a lock, or "" to remove it. Never read back. */
+    pin?: string;
+  }
+): Promise<ApiProfile> {
+  const payload = await request<{ profile: ApiProfile }>(
+    `/api/profiles/${encodeURIComponent(profileId)}`,
+    { method: "PATCH", body: input, auth: true }
+  );
+  return payload.profile;
+}
+
+export async function apiProfileDelete(profileId: string): Promise<void> {
+  await request(`/api/profiles/${encodeURIComponent(profileId)}`, {
+    method: "DELETE",
+    auth: true,
+  });
+}
+
+export async function apiProfileUnlock(profileId: string, pin: string): Promise<void> {
+  await request(`/api/profiles/${encodeURIComponent(profileId)}/unlock`, {
+    method: "POST",
+    body: { pin },
+    auth: true,
+  });
+}
+
+export interface DailyAllowance {
+  profile_id?: string;
+  day: string;
+  used: number;
+  per_profile_cap: number;
+  account_cap: number;
+  account_used: number;
+  account_left?: number;
+  unlocked: boolean;
+  unlimited: boolean;
+  remaining: number;
+  /** ISO instant of the next 00:00 UTC. */
+  resets_at: string;
+  timezone: "UTC" | string;
+}
+
+export async function apiAllowance(profileId?: string | null): Promise<{
+  allowance: DailyAllowance;
+  profiles: DailyAllowance[];
+}> {
+  const query = profileId ? `?profile_id=${encodeURIComponent(profileId)}` : "";
+  return request<{ allowance: DailyAllowance; profiles: DailyAllowance[] }>(
+    `/api/allowance${query}`,
+    { auth: true }
+  );
+}
+
+export interface ReferralStatus {
+  code: string;
+  accepted: number;
+  granted_days: number;
+  unlocked_today: boolean;
+  unlocks_per_referral: number;
+  day: string;
+}
+
+export async function apiReferralStatus(): Promise<ReferralStatus> {
+  return request<ReferralStatus>("/api/referrals", { auth: true });
+}
+
+export async function apiReferralApply(code: string): Promise<ReferralStatus> {
+  return request<ReferralStatus>("/api/referrals/apply", {
+    method: "POST",
+    body: { code },
+    auth: true,
+  });
+}
+
+/**
+ * Claim today's allowance for a title.
+ *
+ * Returns the new allowance on success. On the daily limit it throws an
+ * `AuthApiError` with `status` 429 whose message is already written for the
+ * viewer, so the player can surface it verbatim instead of inventing a reason.
+ */
+export async function apiClaimAllowance(
+  profileId: string | null,
+  movieKey: string
+): Promise<{ claimed: boolean; allowance: DailyAllowance }> {
+  return request<{ claimed: boolean; allowance: DailyAllowance }>(
+    "/api/allowance/claim",
+    { method: "POST", body: { profile_id: profileId, movie_key: movieKey }, auth: true }
+  );
 }
 
 // ---------------------------------------------------------------------------
