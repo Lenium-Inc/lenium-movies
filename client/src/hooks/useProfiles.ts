@@ -242,11 +242,20 @@ export function useAllowance(profileId: string | null): AllowanceState {
         setLimited(null);
         return true;
       } catch (err) {
-        const anyErr = err as { status?: number; message?: string; body?: { resets_at?: string } };
+        const anyErr = err as {
+          status?: number;
+          message?: string;
+          body?: { resets_at?: string; allowance?: { resets_at?: string } };
+        };
         if (anyErr?.status === 429) {
+          // The reset time lives on the allowance object the 429 carries. It was
+          // read from `body.resets_at`, which is never set, so the notice always
+          // rendered an empty reset time even though the server had sent it.
+          const resetsAt =
+            anyErr.body?.allowance?.resets_at ?? anyErr.body?.resets_at ?? "";
           setLimited({
             message: anyErr.message || "You have used today's free titles.",
-            resetsAt: anyErr.body?.resets_at ?? "",
+            resetsAt,
           });
           void load();
           return false;

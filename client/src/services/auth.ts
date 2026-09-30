@@ -68,10 +68,20 @@ export function clearSession(): void {
 
 export class AuthApiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  /**
+   * The parsed JSON body, when the error response had one.
+   *
+   * This existed only to read `message` and threw the rest away, so the 429
+   * from `/api/allowance/claim` lost the `allowance` object attached to it --
+   * including `resets_at`, which is the one thing a viewer needs to know when
+   * told they have used today's free titles.
+   */
+  body: Record<string, unknown> | null;
+  constructor(message: string, status: number, body: Record<string, unknown> | null = null) {
     super(message);
     this.name = "AuthApiError";
     this.status = status;
+    this.body = body;
   }
 }
 
@@ -148,8 +158,13 @@ async function request<T>(
 
   if (!response.ok) {
     let message = `Request failed (${response.status})`;
+    let body: Record<string, unknown> | null = null;
     try {
-      const payload = (await response.json()) as { error?: string };
+      const payload = (await response.json()) as {
+        error?: string;
+        [key: string]: unknown;
+      };
+      body = payload;
       if (payload.error) message = payload.error;
     } catch {
       /* non-JSON error body */
@@ -166,7 +181,7 @@ async function request<T>(
     if (options.auth && response.status === 401) {
       clearSession();
     }
-    throw new AuthApiError(message, response.status);
+    throw new AuthApiError(message, response.status, body);
   }
   return (await response.json()) as T;
 }

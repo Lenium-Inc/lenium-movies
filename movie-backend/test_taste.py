@@ -29,12 +29,21 @@ import taste  # noqa: E402
 import app as app_module  # noqa: E402
 
 
+# One store instance for the whole suite, pointed at a throwaway file. The app
+# reaches the database through `authdb.get_store()`, a process-wide singleton
+# created on first call from `SQLITE_PATH` -- an env var every suite in this
+# directory overwrites at import time, so whichever module imported last owned
+# the database and the others ran against it. Each suite therefore installs its
+# own store on the app immediately before exercising it (see `_client`), and
+# direct assertions share the same instance.
+_THEIR_STORE = authdb.Store(dsn="")
+_THEIR_STORE.pg = False
+_THEIR_STORE.sqlite_path = os.path.join(_TMP, "taste.db")
+_THEIR_STORE.init()
+
+
 def _store() -> authdb.Store:
-    store = authdb.Store(dsn="")
-    store.pg = False
-    store.sqlite_path = os.path.join(_TMP, "taste.db")
-    store.init()
-    return store
+    return _THEIR_STORE
 
 
 _SEQ = [0]
@@ -47,6 +56,9 @@ def _unique(prefix: str) -> str:
 
 def _client():
     app_module.app.config["TESTING"] = True
+    # Point the app at this suite's store for the duration of the test, so a
+    # request handler and a direct `_store()` assertion always see the same data.
+    authdb.set_store(_THEIR_STORE)
     return app_module.app.test_client()
 
 
@@ -430,7 +442,7 @@ def test_state_is_a_rebuildable_cache_not_the_source_of_truth():
     pid = _profile(client, headers)
     for _ in range(4):
         client.post(
-            "/api/taste", headers=owner_headers(headers),
+            "/api/taste", headers=headers,
             json={"profile_id": pid, "kind": "play", "genres": ["horror"]},
         )
     store = _store()
@@ -447,10 +459,6 @@ def test_state_is_a_rebuildable_cache_not_the_source_of_truth():
     ).get_json()["state"]
     assert rebuilt == first
     assert "comedy" not in rebuilt["genre"]
-
-
-def owner_headers(headers: dict) -> dict:
-    return headers
 
 
 def test_recommendations_fall_back_when_there_is_no_signal():
@@ -482,6 +490,65 @@ def test_recommendations_are_capped_and_bounded():
         query_string={"profile_id": pid, "page": "99"},
     )
     assert resp.status_code == 200
+
+
+def test_ranking_promotes_a_matching_tmdb_list_row():
+    """A TMDB list row carries `genre_ids`, not genre names.
+
+    This is the shape the feed actually gets: `get_trending_catalog` returns
+    `genre_ids` only. If the model scores on names alone, every row scores 0.0
+    against a profile that has learned affinities, so ranking is a no-op while
+    the endpoint still reports `personalised: True`. Score genre_ids as a
+    fallback so the flag and the ordering can both be true.
+    """
+    state = taste.empty_weights()
+    state = taste.fold_event_with_director(
+        state, "play", ["Horror"], [], weight=1.0
+    )
+    # A trending row: names absent, ids present (27 = Horror).
+    items = [
+        {"id": 1, "title": "Comedy", "genre_ids": [35]},
+        {"id": 2, "title": "Horror film", "genre_ids": [27]},
+    ]
+    scores = taste.ranked_scores(state, items)
+    # The horror row must actually score above the comedy row.
+    assert scores[1] > scores[0], scores
+    assert max(scores) > 0
+    ranked = taste.rank(state, items)
+    assert ranked[0]["id"] == 2
+
+
+def test_personalised_is_false_when_nothing_on_the_page_matches():
+    """`personalised: True` over an all-zero ranking is a claim that did not happen.
+
+    A profile can have real signal but the current page may contain none of it.
+    Reporting True there is exactly the dishonest case the client renders as a
+    "For You" row.
+    """
+    client = _client()
+    headers, _ = _account(client, "nomatch")
+    pid = _profile(client, headers)
+    # Give the profile a strong, specific affinity...
+    client.post(
+        "/api/taste", headers=headers,
+        json={"profile_id": pid, "kind": "play", "genres": ["Horror"]},
+    )
+    # ...but feed the endpoint a page of nothing matching.
+    import tmdb_service as tmdb
+
+    original = tmdb.get_trending_catalog
+    tmdb.get_trending_catalog = lambda *a, **k: [
+        {"id": 1, "title": "Romcom", "genre_ids": [10749]},
+    ]
+    try:
+        resp = client.get(
+            "/api/recommendations", headers=headers,
+            query_string={"profile_id": pid},
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["personalised"] is False
+    finally:
+        tmdb.get_trending_catalog = original
 
 
 def test_cast_list_is_bounded():

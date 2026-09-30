@@ -20,7 +20,7 @@ export function AddProfileForm({
   /** Called with the created profile when the form is submitted. */
   onDone?: (profileId: string) => void;
 }) {
-  const { addProfile } = useActiveProfile();
+  const { addProfile, profiles, max, error } = useActiveProfile();
   const [name, setName] = useState("");
   const [kids, setKids] = useState(false);
   // `null` means "no preset chosen yet", which previews the avatar that will be
@@ -33,16 +33,31 @@ export function AddProfileForm({
   // disabled until the row comes back -- otherwise a double click can spend two
   // of the four slots and the form looks like it did nothing.
   const [busy, setBusy] = useState(false);
+  // A 4-digit lock, for a kids profile or a shared TV. Optional: leaving it
+  // blank creates an unlocked profile, which is the common case.
+  const [pin, setPin] = useState("");
+  const [pinError, setPinError] = useState<string | null>(null);
+  // The account is capped server-side. The form used to ignore `profiles.length`
+  // and just fail on the 409, so the button looked broken at the limit instead of
+  // explaining it.
+  const atLimit = profiles.length >= max;
 
   const handleAdd = async () => {
     if (!name.trim() || busy) return;
+    const digits = pin.replace(/\D/g, "");
+    if (pin && digits.length !== 4) {
+      setPinError("A profile PIN is exactly 4 digits.");
+      return;
+    }
+    setPinError(null);
     setBusy(true);
     try {
-      const profile = await addProfile(name, kids, preset);
+      const profile = await addProfile(name, kids, preset, digits || undefined);
       if (!profile) return;
       setName("");
       setKids(false);
       setPreset(null);
+      setPin("");
       onDone?.(profile.id);
     } finally {
       setBusy(false);
@@ -107,13 +122,48 @@ export function AddProfileForm({
         <AvatarPicker value={preset?.id ?? null} onChange={setPreset} />
       </div>
 
+      <div className="mt-5">
+        <label htmlFor="add-profile-pin" className="text-sm text-white/70">
+          PIN <span className="text-white/40">(optional)</span>
+        </label>
+        <input
+          id="add-profile-pin"
+          type="password"
+          inputMode="numeric"
+          autoComplete="new-password"
+          maxLength={4}
+          value={pin}
+          onChange={e => setPin(e.target.value.replace(/\D/g, ""))}
+          placeholder="4 digits"
+          aria-describedby={pinError ? "add-profile-pin-error" : undefined}
+          className="mt-2 w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white placeholder-white/30 outline-none transition focus:border-violet-500/60 focus:ring-1 focus:ring-violet-500/30"
+        />
+        {pinError && (
+          <p id="add-profile-pin-error" className="mt-2 text-xs text-red-300">
+            {pinError}
+          </p>
+        )}
+      </div>
+
+      {atLimit && (
+        <p className="mt-5 rounded-lg bg-white/5 p-3 text-sm text-amber-200">
+          This account already has {profiles.length} profiles, which is the limit
+          of {max}. Delete one to make room.
+        </p>
+      )}
+      {error && !atLimit && (
+        <p className="mt-5 rounded-lg bg-red-500/10 p-3 text-sm text-red-200">
+          {error}
+        </p>
+      )}
+
       <button
         type="button"
-        disabled={!name.trim() || busy}
+        disabled={!name.trim() || busy || atLimit}
         onClick={handleAdd}
         className="mt-6 w-full rounded-xl bg-white py-3 text-sm font-bold text-black transition hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-40"
       >
-        {busy ? "Creating…" : "Continue"}
+        {busy ? "Creating…" : atLimit ? "Profile limit reached" : "Continue"}
       </button>
     </div>
   );

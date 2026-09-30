@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { CalendarClock, Gift, Share2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useReferral } from "@/hooks/useProfiles";
@@ -28,8 +29,35 @@ export function DailyLimitNotice({
   allowance: DailyAllowance;
   onClose?: () => void;
 }) {
-  const { status, apply } = useReferral();
+  const { status, apply, refresh } = useReferral();
   const unlocked = status?.granted_days ?? 0;
+  // The invited viewer needs somewhere to type the code they were sent. `apply`
+  // existed and was tested but no screen ever called it, so the second half of
+  // "refer a friend, you both get a day" was not reachable from the product --
+  // the inviter had a share button and the invitee had nothing.
+  const [code, setCode] = useState("");
+  const [applying, setApplying] = useState(false);
+  const [redeemError, setRedeemError] = useState<string | null>(null);
+  const [redeemed, setRedeemed] = useState(false);
+
+  const redeem = async () => {
+    const trimmed = code.trim().toUpperCase();
+    if (!trimmed) return;
+    setApplying(true);
+    setRedeemError(null);
+    try {
+      await apply(trimmed);
+      setRedeemed(true);
+      setCode("");
+      await refresh();
+    } catch (err) {
+      setRedeemError(
+        err instanceof Error ? err.message : "That code could not be applied."
+      );
+    } finally {
+      setApplying(false);
+    }
+  };
 
   return (
     <div className="absolute inset-0 flex items-center justify-center p-6">
@@ -91,6 +119,45 @@ export function DailyLimitNotice({
             Sign in to get a referral code.
           </div>
         )}
+
+        {redeemed && (
+          <p className="mt-3 text-sm text-emerald-300">
+            Code applied &mdash; your unlocked day is queued.
+          </p>
+        )}
+
+        <div className="mt-4 rounded-lg bg-white/5 p-4">
+          <label
+            htmlFor="redeem-referral"
+            className="text-xs uppercase tracking-wide text-white/60"
+          >
+            Got a code from a friend?
+          </label>
+          <div className="mt-2 flex gap-2">
+            <input
+              id="redeem-referral"
+              value={code}
+              onChange={(event) => setCode(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void redeem();
+              }}
+              placeholder="LM1234ABCD"
+              spellCheck={false}
+              autoComplete="off"
+              className="min-w-0 flex-1 rounded-md border border-white/20 bg-black/40 px-3 py-2 font-mono text-sm uppercase tracking-widest text-white placeholder:text-white/30 focus:border-white/50 focus:outline-none"
+            />
+            <Button
+              variant="secondary"
+              onClick={() => void redeem()}
+              disabled={applying || code.trim().length === 0}
+            >
+              {applying ? "Applying…" : "Apply"}
+            </Button>
+          </div>
+          {redeemError && (
+            <p className="mt-2 text-xs text-red-300">{redeemError}</p>
+          )}
+        </div>
 
         {onClose && (
           <Button className="mt-5 w-full" variant="ghost" onClick={onClose}>

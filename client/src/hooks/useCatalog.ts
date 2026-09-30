@@ -11,7 +11,7 @@ import {
   type StreamMovie,
 } from "@/services/api";
 import { savedListIds, subscribeList, toggleListSave } from "@/services/lists";
-import { useProfiles } from "@/hooks/useProfiles";
+import { useActiveProfile } from "@/context/ActiveProfileContext";
 import { useTasteFeed, useTasteRecorder } from "@/hooks/useTaste";
 import {
   affinityQueryParams,
@@ -214,7 +214,12 @@ export function useCatalog(): UseCatalog {
   // The server is the source of truth for taste; the session cache below stays
   // so a click re-ranks the visible grid immediately instead of after a
   // round trip.
-  const { activeProfile } = useProfiles();
+  // Read the active profile from the shared context rather than calling
+  // `useProfiles()` again. Three independent instances of that hook each kept
+  // their own copy of the list and their own `activeId`, so selecting a profile
+  // in the switcher updated one of them and not the others -- which is exactly
+  // the drift the context was introduced to remove.
+  const { activeProfile } = useActiveProfile();
   const activeProfileId = activeProfile ? String(activeProfile.id) : null;
   const recordTaste = useTasteRecorder(activeProfileId);
   // No profile means nothing to rank, so the "For You" row is never requested
@@ -572,6 +577,12 @@ export function useCatalog(): UseCatalog {
       // ...then the durable copy. The recorder is a no-op when signed out and
       // never rejects, so this cannot interfere with the click that triggered it.
       recordTaste(
+        // A negative weight is a rejection ("removed this from my list"). The
+        // server folds it as a subtraction, so `save` with a negative weight now
+        // pulls the title's features down instead of being dropped. It used to
+        // be discarded by the model's `base <= 0` guard, which meant the
+        // rejection was recorded in the event log and changed nothing about the
+        // feed.
         weight > 0 ? "play" : "save",
         { genre: movie.genre, cast: movie.cast, director: movie.director },
         { weight }

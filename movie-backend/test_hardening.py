@@ -28,11 +28,14 @@ def _fresh_client():
     store.pg = False
     store.sqlite_path = os.path.join(_TMP, "hardening.db")
     store.init()
-    authdb._store = store
+    # Install via the public setter rather than reaching into the private
+    # `_store` global, and do it on the app's authdb module (which is the same
+    # object) so request handlers and this test share one store.
+    authdb.set_store(store)
 
     import app as application
 
-    application.authdb._store = store
+    application.authdb.set_store(store)
     return store, application.app.test_client()
 
 

@@ -19,10 +19,8 @@ cannot be reconstructed from this module's tables.
 from __future__ import annotations
 
 import hashlib
-import json
 import math
 import re
-import time
 
 # A person mention is a far stronger signal than a genre, which every title in
 # a genre shares. These match the client's previous constants exactly.
@@ -80,6 +78,20 @@ SEARCH_TOKEN_MIN_HITS = 2
 # K covers most or all of the pool and no ordering could have been wrong.
 TOP_K = 5
 MIN_CANDIDATES_FOR_VERDICT = 8
+
+# TMDB genre id -> display name. Lives here rather than in `tmdb_service` so the
+# model stays a pure module with no provider dependency, and `tmdb_service`
+# imports it from here rather than keeping a second copy that can drift. Events
+# are recorded with genre *names*, so ranking a list endpoint row (which only
+# carries ids) means mapping ids back to these names.
+GENRE_NAMES = {
+    28: "Action", 12: "Adventure", 16: "Animation", 35: "Comedy", 80: "Crime",
+    99: "Documentary", 18: "Drama", 10751: "Family", 14: "Fantasy", 36: "History",
+    27: "Horror", 10402: "Music", 9648: "Mystery", 10749: "Romance", 878: "Sci-Fi",
+    10770: "TV Movie", 53: "Thriller", 10752: "War", 37: "Western", 10762: "Kids",
+    10763: "News", 10764: "Reality", 10765: "Sci-Fi & Fantasy", 10766: "Soap",
+    10767: "Talk", 10768: "War & Politics",
+}
 
 
 def normalise_feature(value: str) -> str:
@@ -157,8 +169,17 @@ def fold_event_with_director(
     director=None,
     weight: float = 1.0,
 ) -> dict[str, dict[str, float]]:
+    """Fold one interaction into the decayed weight state.
+
+    A negative `weight` (what "removed this from my list" sends) subtracts from
+    the features of that title rather than being ignored: the event used to hit
+    the `base <= 0` guard below and return the state untouched, so a rejection
+    was recorded in the log and changed nothing about what the feed recommends.
+    Subtracting lets a profile back away from something it no longer wants,
+    while the decay-and-trim loop still forgets it eventually.
+    """
     base = weight * KIND_WEIGHTS.get(kind, 0.25)
-    if base <= 0:
+    if base == 0:
         return state
     next_state = {
         "genre": _decay(state.get("genre", {})),
@@ -176,6 +197,10 @@ def fold_event_with_director(
     if dkey:
         next_state["people"][dkey] = next_state["people"].get(dkey, 0) + DIRECTOR_WEIGHT * base
     return {
+        # A subtract-only feature can land below MIN_WEIGHT (or go negative);
+        # trimming on insert drops it, so a rejection fully cancels a feature
+        # rather than leaving a negative weight that would rank against
+        # everything.
         "genre": _trim(next_state["genre"], MAX_GENRES),
         "people": _trim(next_state["people"], MAX_PEOPLE),
     }
@@ -202,6 +227,11 @@ def rank(weights: dict[str, dict[str, float]], items) -> list:
     Sorting on the original index as the tiebreaker is what keeps paging stable:
     the same input always produces the same output, so scrolling never
     reshuffles titles the viewer has already seen.
+
+    Candidates whose `genres` is empty but whose `genre_ids` is not are scored on
+    the ids as well. TMDB's list endpoints only carry ids, so without this the
+    whole feed scored 0.0 against a profile that had learned real affinities and
+    the endpoint reported `personalised: True` over an untouched list.
     """
     genre_w = weights.get("genre", {})
     people_w = weights.get("people", {})
@@ -212,9 +242,44 @@ def rank(weights: dict[str, dict[str, float]], items) -> list:
         genres = _field(item, "genres") or _field(item, "genre") or []
         cast = _field(item, "cast") or []
         director = _field(item, "director")
-        scored.append((score(weights, genres, cast, director), index, item))
+        item_score = score(weights, genres, cast, director)
+        if item_score == 0.0:
+            item_score = score(weights, _genre_keys(item), [], None)
+        scored.append((item_score, index, item))
     scored.sort(key=lambda entry: (-entry[0], entry[1]))
     return [entry[2] for entry in scored]
+
+
+def ranked_scores(weights: dict[str, dict[str, float]], items) -> list:
+    """The per-item scores `rank` would sort on, in input order.
+
+    Exposed so a caller can tell whether ranking actually moved anything before
+    it claims to have personalised a list.
+    """
+    genre_w = weights.get("genre", {})
+    people_w = weights.get("people", {})
+    if not genre_w and not people_w:
+        return [0.0] * len(list(items))
+    out = []
+    for item in items:
+        genres = _field(item, "genres") or _field(item, "genre") or []
+        cast = _field(item, "cast") or []
+        director = _field(item, "director")
+        value = score(weights, genres, cast, director)
+        if value == 0.0:
+            value = score(weights, _genre_keys(item), [], None)
+        out.append(value)
+    return out
+
+
+def _genre_keys(item) -> list:
+    """Genre features for a TMDB list row, which carries ids but not names."""
+    raw = _field(item, "genre_ids") or []
+    keys = []
+    for gid in raw:
+        name = GENRE_NAMES.get(gid)
+        keys.append(name if name else f"genre:{gid}")
+    return keys
 
 
 def _field(item, name):
@@ -416,32 +481,3 @@ def _split_list(value) -> list[str]:
     if isinstance(value, list):
         return [str(v) for v in value if v]
     return [part for part in str(value).split(",") if part]
-
-
-def serialise_state(state: dict[str, dict[str, float]]) -> str:
-    return json.dumps(state, sort_keys=True)
-
-
-def parse_state(raw) -> dict[str, dict[str, float]]:
-    if not raw:
-        return empty_weights()
-    try:
-        parsed = json.loads(raw)
-    except (TypeError, ValueError):
-        return empty_weights()
-    if not isinstance(parsed, dict):
-        return empty_weights()
-    out: dict[str, dict[str, float]] = {"genre": {}, "people": {}}
-    for kind in ("genre", "people"):
-        section = parsed.get(kind)
-        if isinstance(section, dict):
-            out[kind] = {
-                str(k): float(v)
-                for k, v in section.items()
-                if isinstance(v, (int, float))
-            }
-    return out
-
-
-def now_ms() -> int:
-    return int(time.time() * 1000)

@@ -32,11 +32,25 @@ authdb.PG_AVAILABLE = False
 
 import app as app_module  # noqa: E402
 
+# One store instance for the whole suite on a throwaway file. The app reaches
+# the database through `authdb.get_store()`, a process-wide singleton created on
+# first call from `SQLITE_PATH` -- an env var every suite in this directory
+# overwrites at import time, so whichever module imported last owned the
+# database and the others ran against it (passing alone, failing together).
+# Each suite installs its own store on the app just before exercising it (see
+# `_fresh_client`), and `get_store()` calls inside tests then return the same
+# instance the handlers used.
+_store = authdb.Store(dsn="")
+_store.pg = False
+_store.sqlite_path = os.path.join(_TMP, "profiles.db")
+_store.init()
+
 
 _EMAIL_SEQ = [0]
 
 
 def _fresh_client():
+    authdb.set_store(_store)
     app_module.app.config["TESTING"] = True
     return app_module.app.test_client()
 

@@ -43,7 +43,7 @@ import {
 import { VideoPlayer, type StreamVariant } from "@/components/stream/VideoPlayer";
 import { EmbedPlayer } from "@/components/stream/EmbedPlayer";
 import { StreamLoader } from "@/components/stream/StreamLoader";
-import { DailyLimitNotice } from "@/components/stream/DailyLimitNotice";
+import { AllowanceMeter, DailyLimitNotice } from "@/components/stream/DailyLimitNotice";
 import { formatRuntime } from "@/lib/format";
 import { titleUnavailable } from "@/lib/playbackCopy";
 import { WatchTVControls, type SeasonInfo } from "@/components/stream/WatchTVControls";
@@ -74,7 +74,8 @@ import { isExternalEmbedUrl, orderDirectStreams } from "@/lib/streamUtils";
 import { resolveEmbedSources } from "@/lib/embedSources";
 import { tmdbImage, type TmdbImageSize } from "@/lib/tmdbImages";
 import { useAuth } from "@/context/AuthContext";
-import { useAllowance, useProfiles } from "@/hooks/useProfiles";
+import { useAllowance } from "@/hooks/useProfiles";
+import { useActiveProfile } from "@/context/ActiveProfileContext";
 import { apiHistoryAdd } from "@/services/auth";
 import {
   pushRemoveToRemote,
@@ -365,7 +366,10 @@ export function WatchPage() {
   const { user: authUser } = useAuth();
   // Server-backed profile, so history and the daily allowance follow the
   // viewer rather than the account.
-  const { activeProfile } = useProfiles();
+  // From the shared context, so the profile selected here is the same one the
+  // home feed and the switcher are using -- a second `useProfiles()` instance
+  // held its own copy of the list and drifted out of sync with this one.
+  const { activeProfile } = useActiveProfile();
   const activeProfileId = activeProfile ? String(activeProfile.id) : null;
   const {
     claim: claimAllowance,
@@ -1268,8 +1272,18 @@ export function WatchPage() {
                       </button>
                     </div>
 
-                    {/* Top-right overlay: Share button */}
-                    <div className="absolute top-4 right-4 z-20">
+                    {/*
+                      Top-right overlay: Share button, with the remaining
+                      allowance beside it. The limit is part of the offer, so
+                      showing what is left while someone is watching is more
+                      honest than only explaining it once it is gone.
+                    */}
+                    <div className="absolute top-4 right-4 z-20 flex items-center gap-3">
+                      {allowanceState && !allowanceLimited && (
+                        <div className="rounded-full bg-black/60 border border-white/10 backdrop-blur-md px-3 py-1.5">
+                          <AllowanceMeter allowance={allowanceState} />
+                        </div>
+                      )}
                       <button
                         onClick={handleShare}
                         aria-label="Share link"

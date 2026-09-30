@@ -1071,17 +1071,25 @@ class Store:
         return bool(rows)
 
     def record_play(
-        self, profile_id, day: str, movie_key: str, user_id=None
+        self, profile_id, day: str, movie_key: str, user_id=None, enforce_caps: bool = True
     ) -> bool:
         """Claim one title against today's allowance, atomically.
 
-        Returns True only if this is a new claim *and* the caps still had room.
+        Returns True only if this is a new claim *and*, when `enforce_caps` is
+        set, the caps still had room.
 
         The check and the insert must be one statement. Doing them separately
         (as this did) let two concurrent requests both observe `remaining == 1`
         and both insert, so a day ended up recorded as 11 of 10 used. With
         `INSERT ... SELECT ... WHERE` the cap counts are re-read as part of the
         write, and only one of the racing statements can see room.
+
+        `enforce_caps=False` is the referral case. An unlocked day has no cap to
+        charge, but the play still has to be recorded because history and the
+        "what did I watch" list are built from these rows. Going through the
+        capped statement anyway meant a viewer who unlocked the day still had
+        their history truncated at 10 titles, which is precisely what the
+        unlock was supposed to stop.
 
         The account cap needs the owning user id, which `user_id_of_profile`
         resolves when the caller does not pass it.
@@ -1096,24 +1104,29 @@ class Store:
             return False
         # The primary key still absorbs a replay or a double submit: the insert
         # raises, rowcount is 0, and the claim is reported as not-new.
-        sql = (
-            "INSERT INTO daily_plays (profile_id, day, movie_key, played_at) "
-            "SELECT ?, ?, ?, ? "
-            "WHERE (SELECT COUNT(*) FROM daily_plays "
-            "        WHERE profile_id = ? AND day = ?) < ? "
-            "AND (SELECT COUNT(*) FROM daily_plays AS p "
-            "     JOIN watch_profiles AS wp ON wp.id = p.profile_id "
-            "     WHERE wp.user_id = ? AND p.day = ?) < ?"
-        )
+        if enforce_caps:
+            sql = (
+                "INSERT INTO daily_plays (profile_id, day, movie_key, played_at) "
+                "SELECT ?, ?, ?, ? "
+                "WHERE (SELECT COUNT(*) FROM daily_plays "
+                "        WHERE profile_id = ? AND day = ?) < ? "
+                "AND (SELECT COUNT(*) FROM daily_plays AS p "
+                "     JOIN watch_profiles AS wp ON wp.id = p.profile_id "
+                "     WHERE wp.user_id = ? AND p.day = ?) < ?"
+            )
+            params = (
+                profile_id, day, movie_key, int(time.time() * 1000),
+                profile_id, day, DAILY_TITLE_CAP,
+                user_id, day, DAILY_ACCOUNT_CAP,
+            )
+        else:
+            sql = (
+                "INSERT INTO daily_plays (profile_id, day, movie_key, played_at) "
+                "VALUES (?, ?, ?, ?)"
+            )
+            params = (profile_id, day, movie_key, int(time.time() * 1000))
         try:
-            claimed = self._execute_rowcount(
-                sql,
-                (
-                    profile_id, day, movie_key, int(time.time() * 1000),
-                    profile_id, day, DAILY_TITLE_CAP,
-                    user_id, day, DAILY_ACCOUNT_CAP,
-                ),
-            ) == 1
+            claimed = self._execute_rowcount(sql, params) == 1
         except Exception:
             # Duplicate key: this title was already claimed today. Not an error.
             return False
@@ -1344,6 +1357,19 @@ class Store:
                 (profile_id, feature),
             )
             return int(row["weight"]) if row else 1
+
+    def search_token_weight(self, profile_id, feature: str) -> float:
+        """How many times this profile has searched for the hashed token.
+
+        Read separately from `bump_search_token` so a caller can turn the repeat
+        count into a taste weight without reaching into the private `_query`.
+        """
+        row = self._query(
+            "SELECT weight FROM taste_signals "
+            "WHERE profile_id = ? AND kind = 'query' AND feature = ? LIMIT 1",
+            (profile_id, feature),
+        )
+        return float(row["weight"]) if row else 0.0
 
     def save_taste_state(
         self, profile_id, state: dict, model_version: str = "linear-v1"
@@ -1986,6 +2012,20 @@ def get_store() -> Store:
         _store = Store()
         _store.init()
     return _store
+
+
+def set_store(store: Store | None) -> None:
+    """Install or clear the process-wide store.
+
+    Every handler reaches the database through `get_store()`, so a test suite
+    that builds its own throwaway database has no way to point the app at it.
+    The tests instead raced over this singleton: whichever suite imported first
+    set `SQLITE_PATH`, and the other's fixture was silently ignored, so the
+    suites passed alone and failed together. Tests call this to own the store
+    for the duration; passing `None` restores the default lazy behaviour.
+    """
+    global _store
+    _store = store
 
 
 def serialize_user(user: dict | None) -> dict | None:

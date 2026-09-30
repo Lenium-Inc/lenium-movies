@@ -5,6 +5,10 @@ import urllib.parse
 from typing import Optional, Dict, Any, List
 
 from runtime_config import ssl_context, tmdb_api_key
+# The genre id -> name map is owned by the recommender, which needs it to score
+# the list endpoints (those return ids only). Imported rather than duplicated so
+# the two copies cannot drift; the values are unchanged from the original literal.
+from taste import GENRE_NAMES as GENRE_MAP
 
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p"
@@ -396,14 +400,9 @@ def get_trailer_key(media_id: int, media_type: str) -> Optional[str]:
     return select_trailer_key(data.get("results", []))
 
 
-GENRE_MAP = {
-    28: "Action", 12: "Adventure", 16: "Animation", 35: "Comedy", 80: "Crime",
-    99: "Documentary", 18: "Drama", 10751: "Family", 14: "Fantasy", 36: "History",
-    27: "Horror", 10402: "Music", 9648: "Mystery", 10749: "Romance", 878: "Sci-Fi",
-    10770: "TV Movie", 53: "Thriller", 10752: "War", 37: "Western", 10762: "Kids",
-    10763: "News", 10764: "Reality", 10765: "Sci-Fi & Fantasy", 10766: "Soap",
-    10767: "Talk", 10768: "War & Politics"
-}
+# The id -> name map is owned by the recommender, which needs it to score the
+# list endpoints (which return ids only). Imported rather than duplicated so the
+# two cannot drift; the values are unchanged from the original literal here.
 
 
 def get_genre_names(genre_ids: List[int]) -> List[str]:

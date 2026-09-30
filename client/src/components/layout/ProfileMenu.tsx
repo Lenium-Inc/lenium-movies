@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { LogOut, Plus, Settings, Users } from "lucide-react";
+import { LogOut, Lock, Plus, Settings, Users } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/context/AuthContext";
 import { useActiveProfile } from "@/context/ActiveProfileContext";
@@ -12,9 +12,16 @@ import { ProfileAvatar } from "@/components/profile/ProfileAvatar";
  */
 export function ProfileMenu() {
   const { user, isLoading, logout } = useAuth();
-  const { profiles, activeProfile, selectProfile } = useActiveProfile();
+  const { profiles, activeProfile, selectProfile, unlockProfile } = useActiveProfile();
   const [, navigate] = useLocation();
   const [open, setOpen] = useState(false);
+  // A locked profile is one with a PIN. The switcher used to render those tiles
+  // `disabled` with no way to unlock, so a PIN set on a kids profile made it
+  // permanently unreachable -- the unlock endpoint existed and had no caller.
+  const [unlocking, setUnlocking] = useState<{ id: string; name: string } | null>(null);
+  const [pin, setPin] = useState("");
+  const [pinBusy, setPinBusy] = useState(false);
+  const [pinError, setPinError] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -56,8 +63,33 @@ export function ProfileMenu() {
 
   const handleSwitch = (profileId: string) => {
     const profile = profiles.find((p) => p.id === profileId);
-    if (!profile || profile.isLocked) return;
+    if (!profile) return;
+    if (profile.isLocked) {
+      // Ask for the PIN instead of silently refusing.
+      setUnlocking({ id: profile.id, name: profile.name });
+      setPin("");
+      setPinError(null);
+      return;
+    }
     selectProfile(profile);
+    setOpen(false);
+  };
+
+  const submitPin = async () => {
+    if (!unlocking || pinBusy) return;
+    setPinBusy(true);
+    setPinError(null);
+    const ok = await unlockProfile(unlocking.id, pin);
+    setPinBusy(false);
+    if (!ok) {
+      setPinError("That PIN did not match.");
+      setPin("");
+      return;
+    }
+    const profile = profiles.find((p) => p.id === unlocking.id);
+    if (profile) selectProfile(profile);
+    setUnlocking(null);
+    setPin("");
     setOpen(false);
   };
 
@@ -120,12 +152,19 @@ export function ProfileMenu() {
                       key={profile.id}
                       type="button"
                       onClick={() => handleSwitch(profile.id)}
-                      disabled={profile.isLocked}
-                      className={`flex flex-col items-center gap-1 rounded-lg border p-2 transition ${
+                      // A locked profile is a real target now: clicking it opens
+                      // the PIN prompt. It was `disabled`, so a profile with a PIN
+                      // could never be unlocked from the only place it appears.
+                      aria-label={
+                        profile.isLocked
+                          ? `Unlock ${profile.name}`
+                          : `Switch to ${profile.name}`
+                      }
+                      className={`relative flex flex-col items-center gap-1 rounded-lg border p-2 transition ${
                         isActive
                           ? "border-zinc-600 bg-zinc-800"
                           : "border-zinc-800 bg-zinc-900 hover:border-zinc-600 hover:bg-zinc-800/60"
-                      } disabled:cursor-not-allowed disabled:opacity-40`}
+                      }`}
                     >
                       {/* Was a bare <img> with no fallback, so a profile with a
                           missing or unreachable avatar rendered a broken-image
@@ -134,6 +173,12 @@ export function ProfileMenu() {
                       <span className="w-full truncate text-center text-[10px] leading-3 text-zinc-300">
                         {profile.name}
                       </span>
+                      {profile.isLocked && (
+                        <Lock
+                          className="absolute right-1 top-1 h-3 w-3 text-zinc-400"
+                          aria-hidden
+                        />
+                      )}
                     </button>
                   );
                 })}
@@ -160,7 +205,13 @@ export function ProfileMenu() {
             </Link>
             <button
               type="button"
-              onClick={() => setOpen(false)}
+              onClick={() => {
+                // Went nowhere before: the handler only closed the menu, so a
+                // button labelled "Add Profile" silently did nothing. It goes to
+                // the manage-profiles section that actually has the form.
+                setOpen(false);
+                navigate("/profile#manage-profiles");
+              }}
               className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-zinc-800 hover:text-white"
             >
               <Plus className="h-4 w-4" />
@@ -178,6 +229,64 @@ export function ProfileMenu() {
             <LogOut className="h-4 w-4" />
             Sign Out
           </button>
+
+          {unlocking && (
+            <div className="mt-2 rounded-lg border border-zinc-700 bg-zinc-800/80 p-3">
+              <label
+                htmlFor="profile-unlock-pin"
+                className="flex items-center gap-2 text-xs font-medium text-zinc-200"
+              >
+                <Lock className="h-3.5 w-3.5" aria-hidden />
+                Enter the PIN for {unlocking.name}
+              </label>
+              <input
+                id="profile-unlock-pin"
+                type="password"
+                inputMode="numeric"
+                autoComplete="off"
+                maxLength={4}
+                autoFocus
+                value={pin}
+                onChange={(e) => {
+                  setPin(e.target.value.replace(/\D/g, ""));
+                  setPinError(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void submitPin();
+                  if (e.key === "Escape") setUnlocking(null);
+                }}
+                aria-invalid={pinError ? true : undefined}
+                aria-describedby={pinError ? "profile-unlock-error" : undefined}
+                className="mt-2 w-full rounded-md border border-zinc-600 bg-black/40 px-3 py-2 text-sm tracking-[0.3em] text-white outline-none focus:border-violet-500"
+              />
+              {pinError && (
+                <p
+                  id="profile-unlock-error"
+                  role="alert"
+                  className="mt-1.5 text-xs text-red-300"
+                >
+                  {pinError}
+                </p>
+              )}
+              <div className="mt-2 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => void submitPin()}
+                  disabled={pinBusy || pin.length !== 4}
+                  className="flex-1 rounded-md bg-white px-3 py-1.5 text-xs font-bold text-black disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {pinBusy ? "Checking…" : "Unlock"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUnlocking(null)}
+                  className="rounded-md px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:bg-zinc-700"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

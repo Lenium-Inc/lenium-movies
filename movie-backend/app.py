@@ -1756,12 +1756,7 @@ def api_taste():
         # the query text was recoverable from taste_signals -- exactly what the
         # hashing is meant to prevent. What a profile gains from searching is
         # "this viewer searched for something often", not a memory of what.
-        row = store._query(
-            "SELECT weight FROM taste_signals "
-            "WHERE profile_id = ? AND kind = 'query' AND feature = ? LIMIT 1",
-            (profile_id, key),
-        )
-        repeat_weight = float(row["weight"]) if row else float(count)
+        repeat_weight = store.search_token_weight(profile_id, key) or float(count)
         state = store.load_taste_state(profile_id)
         state = taste.fold_event_with_director(
             state, "search", [f"q:{key}"], [], weight=repeat_weight
@@ -1913,6 +1908,17 @@ def api_recommendations():
     else:
         items = tmdb.get_trending_catalog("week", "all") or []
 
+    # Rank on the same normalised shape the catalogue serves, then return that
+    # shape. The raw TMDB rows only carry `poster_path` and `genre_ids`, so
+    # returning them directly made the "For You" row render posterless cards
+    # with no year or genres -- the client maps `CatalogItem`, and a raw TMDB
+    # dict is not one.
+    items = [
+        tmdb.normalize_tmdb_item(item, item.get("media_type") or "movie")
+        for item in items
+    ]
+    items = [item for item in items if item]
+
     # Personalisation is an enhancement, not a gate. Requiring auth or a profile
     # here made this a 401/403 for exactly the viewers who most need a working
     # feed -- a signed-out visitor, or someone who has not created a profile yet
@@ -1926,10 +1932,18 @@ def api_recommendations():
     if not taste.has_signal(state):
         return jsonify({"results": items[:limit], "personalised": False})
     ranked = taste.rank(state, items)
+    # `has_signal` says the profile has *something* to match on; it does not say
+    # any of this particular page matches. Reporting `personalised: True` over a
+    # list where every score was 0.0 is the claim the client renders as "For
+    # You", so the flag follows whether ranking moved the page.
+    scores = taste.ranked_scores(state, items)
+    if max(scores) <= 0.0:
+        return jsonify({"results": items[:limit], "personalised": False})
     return jsonify(
         {
             "results": ranked[:limit],
             "personalised": True,
+            "top_score": round(max(scores), 4),
             "model_version": store.model_version(profile["id"]) or "linear-v1",
         }
     )
@@ -1986,7 +2000,16 @@ def api_allowance():
                 "profiles": [],
             }
         )
-    payload = _allowance_payload(store, user, profiles[0])
+    # The headline allowance must be the *active* profile's. It used to be
+    # `profiles[0]`, so a household with four profiles was metered against
+    # whichever account was created first -- the client sends ?profile_id= and
+    # the server ignored it. `profiles` still carries every profile's numbers,
+    # which is what the switcher renders.
+    active = _resolve_profile(user)
+    if active is False or not isinstance(active, dict):
+        active = profiles[0]
+    payload = _allowance_payload(store, user, active)
+    payload["profile_id"] = active["id"]
     return jsonify(
         {
             "allowance": payload,
@@ -2028,7 +2051,7 @@ def api_allowance_claim():
     if store.has_unlocked_day(user["id"], day):
         # An unlocked day means the cap does not apply, but the play is still
         # recorded: the history and the "what did I watch" list depend on it.
-        store.record_play(profile["id"], day, movie_key, user["id"])
+        store.record_play(profile["id"], day, movie_key, user["id"], enforce_caps=False)
         return jsonify(
             {
                 "ok": True,
