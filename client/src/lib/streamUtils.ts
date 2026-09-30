@@ -55,3 +55,32 @@ export function getStreamType(url: string): StreamType {
   }
   return "embed";
 }
+
+/**
+ * Play order for directly playable URLs, lowest first.
+ *
+ * 0. HLS (`.m3u8`) -- the format the player owns end to end, through hls.js
+ *    or native HLS. It never needs a third-party frame, so it is the only
+ *    candidate that cannot pull an ad provider's scripts into the page.
+ * 1. The other recognised media files (`.mp4`, `.mpd`).
+ * 2. Anything unrecognised: a URL whose host is not in the embed registry and
+ *    whose path is not a media file is usually a raw third-party player page
+ *    the backend handed back unlabelled. It is kept as a last resort rather
+ *    than dropped -- the registry cannot know every provider -- but it must
+ *    never outrank a real manifest, because handing it to `<video>` first
+ *    costs a full stall-detection cycle before the good source is tried.
+ *
+ * Ties keep the order the resolver returned, so backend preference survives
+ * within each tier.
+ */
+export function directStreamRank(url: string): number {
+  const type = getStreamType(url);
+  if (type === "hls") return 0;
+  if (type === "mp4" || type === "dash") return 1;
+  return 2;
+}
+
+/** `urls` stably re-ordered so backend HLS plays before anything else. */
+export function orderDirectStreams(urls: Iterable<string>): string[] {
+  return Array.from(urls).sort((a, b) => directStreamRank(a) - directStreamRank(b));
+}

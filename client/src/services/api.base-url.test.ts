@@ -81,30 +81,45 @@ describe("MOVIE_API_BASE_URL resolution", () => {
   });
 });
 
-describe("fallback origin warning", () => {
+describe("fallback origin reporting", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
-  it("warns when production silently uses the hardcoded fallback", async () => {
+  it("stays silent when production silently uses the hardcoded fallback", async () => {
+    // The fallback used to log a paragraph on every build shipped without the
+    // variable. It is now reported only through the flag below, so the
+    // production console keeps quiet.
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.resetModules();
     vi.stubEnv("PROD", true);
     vi.stubEnv("VITE_MOVIE_API_BASE_URL", "");
     vi.stubEnv("VITE_API_URL", undefined as unknown as string);
-    await import("./api");
-    expect(warn).toHaveBeenCalledOnce();
-    expect(String(warn.mock.calls[0]?.[0])).toContain(RENDER);
+    const mod = await import("./api");
+    expect(mod.MOVIE_API_BASE_URL).toBe(RENDER);
+    expect(mod.USING_FALLBACK_BACKEND_ORIGIN).toBe(true);
+    expect(warn).not.toHaveBeenCalled();
   });
 
-  it("stays quiet when an origin is configured", async () => {
+  it("keeps the flag false when an origin is configured", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.resetModules();
     vi.stubEnv("PROD", true);
     vi.stubEnv("VITE_MOVIE_API_BASE_URL", "https://backend.example.com");
     vi.stubEnv("VITE_API_URL", undefined as unknown as string);
-    await import("./api");
+    const mod = await import("./api");
+    expect(mod.USING_FALLBACK_BACKEND_ORIGIN).toBe(false);
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("keeps the flag false in development, where the fallback never applies", async () => {
+    vi.resetModules();
+    vi.stubEnv("PROD", false);
+    vi.stubEnv("VITE_MOVIE_API_BASE_URL", "");
+    vi.stubEnv("VITE_API_URL", undefined as unknown as string);
+    const mod = await import("./api");
+    expect(mod.MOVIE_API_BASE_URL).toBe("");
+    expect(mod.USING_FALLBACK_BACKEND_ORIGIN).toBe(false);
   });
 });

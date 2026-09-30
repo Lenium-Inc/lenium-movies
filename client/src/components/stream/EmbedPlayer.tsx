@@ -232,17 +232,26 @@ export function EmbedPlayer({
         allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
         allowFullScreen
         // allow-scripts + allow-same-origin is safe here only because every
-        // provider is a distinct origin from this app. Omitting allow-popups
-        // and allow-top-navigation is what blocks forced popups/redirects.
-        // Do not widen this to satisfy a provider that refuses to be framed:
-        // allow-scripts + allow-same-origin already lets the framed document
-        // lift its own sandbox, and adding top-navigation hands it the top
-        // window. Providers that refuse are skipped instead.
-        sandbox="allow-scripts allow-same-origin allow-forms"
-        // Not "no-referrer": providers that gate embeds on the referring page
-        // answer a referrer-less request with their "cannot be played here"
-        // error, and a strict origin is enough to satisfy them.
-        referrerPolicy="strict-origin-when-cross-origin"
+        // provider is a distinct origin from this app. allow-presentation is
+        // what the `allow` token above already promised, so the sandbox does
+        // not contradict the permissions policy.
+        //
+        // Deliberately omitted: allow-popups, allow-popups-to-escape-sandbox
+        // and allow-top-navigation. Provider ad scripts (the `apu.php`
+        // popunder family) depend on opening a tab or navigating the top
+        // window to convert an impression; without those tokens they run
+        // inside a frame that cannot reach either, which is also what stops
+        // them from spinning up ever more documents and WebGL contexts in the
+        // background. Do not widen this to satisfy a provider that refuses to
+        // be framed -- allow-scripts + allow-same-origin already lets the
+        // framed document lift its own sandbox, and adding top-navigation
+        // hands it the top window. Providers that refuse are skipped instead.
+        sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
+        // No referrer is sent to the provider at all. Several third-party
+        // hosts reject a framed handshake with 403 Forbidden based on the
+        // referring origin, and withholding this page's URL from ad networks
+        // costs the provider nothing it is entitled to.
+        referrerPolicy="no-referrer"
         onLoad={handleLoad}
       />
 

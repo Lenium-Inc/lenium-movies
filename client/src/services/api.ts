@@ -214,8 +214,12 @@ export function subtitleTrackUrl(url: string): string {
  * present but blank is not the same as an absent one: that is the shape
  * .env.example ships, and what you get from pasting that line into a dashboard.
  * So production falls back to the deployed backend rather than silently
- * pointing at the SPA's own /api/*. `warnUsingFallbackOrigin` below reports
- * whenever that fallback is what got used.
+ * pointing at the SPA's own /api/*. The fallback is deliberately silent in the
+ * console: it fires on every production build that ships without the variable,
+ * which made it a standing line of noise on a page that already logs resolver
+ * chatter, and it told the viewer nothing they could act on. It is reported
+ * instead through `USING_FALLBACK_BACKEND_ORIGIN`, which a diagnostic surface
+ * can read without shouting at every visitor.
  *
  * Two things to know about the fallback. It is the origin every user's
  * `Authorization: Bearer` token is sent to (auth.ts), and *.onrender.com is a
@@ -236,18 +240,13 @@ export const MOVIE_API_BASE_URL = (
   (import.meta.env.PROD ? FALLBACK_BACKEND_ORIGIN : "")
 ).replace(/\/+$/, "");
 
-function warnUsingFallbackOrigin() {
-  if (!import.meta.env.PROD || CONFIGURED_BACKEND_ORIGIN) return;
-  console.warn(
-    "[config] VITE_MOVIE_API_BASE_URL was absent or empty at build time, so " +
-      `this build is using the hardcoded fallback ${FALLBACK_BACKEND_ORIGIN}. ` +
-      "If that is not expected, set the variable in Vercel under the scope " +
-      "matching this deployment (Preview builds do not read Production values) " +
-      "and redeploy -- Vite inlines it, so a rebuild is required."
-  );
-}
-
-warnUsingFallbackOrigin();
+/**
+ * True when this build carries no configured backend origin and is therefore
+ * talking to the hardcoded Render URL above. The only signal the fallback
+ * leaves behind -- nothing is logged.
+ */
+export const USING_FALLBACK_BACKEND_ORIGIN =
+  MOVIE_API_BASE_URL === FALLBACK_BACKEND_ORIGIN;
 
 /** Build a full API URL for the movie backend. */
 export function apiUrl(path: string): string {

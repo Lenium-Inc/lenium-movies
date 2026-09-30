@@ -74,7 +74,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { isExternalEmbedUrl } from "@/lib/streamUtils";
+import { isExternalEmbedUrl, orderDirectStreams } from "@/lib/streamUtils";
 import { resolveEmbedSources } from "@/lib/embedSources";
 import { tmdbImage, type TmdbImageSize } from "@/lib/tmdbImages";
 import { useAuth } from "@/context/AuthContext";
@@ -784,6 +784,13 @@ export function WatchPage() {
   // Ordered list of directly playable (non-embed) URLs. Embeds are never
   // shown or linked anywhere — every movie plays inline or shows a native
   // stream state instead.
+  //
+  // Ordering is part of the contract, not incidental: backend HLS comes first,
+  // then the other media files, then anything the registry could not classify.
+  // The resolver returns its chain in provider order, and that order can put a
+  // raw third-party player page ahead of a manifest, which would hand the ad
+  // provider's scripts a `<video>` slot they cannot fill while the working
+  // stream waits behind them.
   const playableCandidates: string[] = useMemo(() => {
     const stream = resolved?.stream;
     if (!stream) return [];
@@ -800,7 +807,7 @@ export function WatchPage() {
     for (const variant of stream.streams ?? []) {
       if (variant.url && !isExternalEmbedUrl(variant.url)) urls.add(variant.url);
     }
-    return Array.from(urls);
+    return orderDirectStreams(urls);
   }, [resolved]);
 
   const [sourceIndex, setSourceIndex] = useState(0);
@@ -1280,6 +1287,13 @@ export function WatchPage() {
                       it replaced ("Optimizing high-definition stream…",
                       "Resolving playback sources…") described retries that had
                       nothing to do with the stated activity.
+
+                      The order between 1 and 2 is absolute, not a preference:
+                      a payload that carries both a manifest and an embed URL
+                      plays the manifest (HLS first, see `orderDirectStreams`)
+                      and never mounts the frame, because the embed is the only
+                      one of the two that pulls a third-party ad provider's
+                      scripts into the page.
                     */}
                     {currentStreamUrl && !streamUnavailable ? (
                       <VideoPlayer
