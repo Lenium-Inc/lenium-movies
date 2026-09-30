@@ -1,4 +1,8 @@
-# FreeStream Documentation Audit
+# Stream Vy Documentation Audit
+
+> **Historical record — not a description of the current product.**
+>
+> This audited an earlier state of the repository, when the catalogue was fixtures and playback was a toast. Those findings were fixed: the catalogue is live TMDB, playback is real, and the account, profile, and allowance features are server-backed. The **recommendations** below (provider contracts, CDN, queues, RPO/RTO, budget envelopes) were never implemented. Kept as a record of what was identified and why; see [roadmap](roadmap.md) for what is still open.
 
 ## Executive verdict
 

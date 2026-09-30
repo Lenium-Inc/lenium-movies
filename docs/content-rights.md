@@ -1,39 +1,110 @@
-# FreeStream Content and Rights Model
+# Stream Vy Content and Playback
 
-## Allowed sources
+**This is the document that most needs to be read before any public claim.**
 
-FreeStream may distribute licensed titles, public-domain works after verification, creator-submitted works with documented rights, and authorized partner catalogues. Metadata may be synchronized from legitimate providers, but the provider record is not proof of streaming rights.
+An earlier version of this file described a rights-management system: a
+`RightsGrant` entity with rights owner, contract reference, territory, start and
+end dates, permitted playback method, platform and monetization restrictions, an
+evidence package, a reviewer decision, overlap and precedence rules, 90/30/7-day
+expiry alerts, a one-business-hour takedown SLA, and a policy engine that evaluates
+deny → takedown → expiry → territory → platform → source **and fails closed**.
 
-## Rights record
+**None of that is implemented.** There is no rights table, no rights evaluation,
+no evidence store, no reviewer, no expiry job, and no policy engine. Any document
+describing publication as gated on a valid rights grant is describing fiction.
 
-Every streamable title requires rights owner or provider, contract/reference ID, territory, start and end dates, permitted playback method, platform and monetization restrictions, playback provider, status, evidence reference, and audit history. Rights are separate from movie metadata and media assets.
+## What actually happens when someone presses play
 
-## Verification workflow
+```text
+client  -> POST /api/movies/resolve   (title or tmdb id + media type)
+server  -> stream_providers.resolve()
+            tier 1  direct   Archive.org-backed catalog entry -> real MP4/HLS
+            tier 2  embed    third-party iframe, ordered by priority
+          -> first playable source + remaining ordered candidates
+client  -> plays direct source through /api/movies/stream  (server relay)
+        -> or renders the first embed candidate in an iframe, labelled as an embed
+```
 
-An operator or partner submits evidence. A rights reviewer validates scope and dates. The system stores the decision and evidence reference. A playback source is attached only after approval. Publication requires an active rights grant for at least one configured territory and a ready media source.
+The client never decides which provider to use. Before `stream_providers.py`
+existed, two disjoint provider lists lived in `app.py` and
+`client/src/lib/embedSources.ts`, and "the primary is down" was decided in the
+browser, one click at a time. Each provider now has a health record with a
+cooldown, so a provider that just failed is skipped rather than re-probed on the
+next request. A request fails only after every enabled provider is tried.
 
-## Takedown and expiry
+## The two tiers, honestly
 
-A rights takedown immediately blocks new sessions and removes or marks the public availability state according to policy. A scheduled expiry blocks new playback after the end timestamp. Operators receive advance alerts and all changes are audited.
+**Direct (Archive.org).** `movie-backend/movies.json` carries a catalog of titles
+with public identifiers. Playback is a genuine MP4/HLS stream relayed by our own
+server, which is what makes seeking, range requests, and downloads work. The
+titles are presented as public-domain works from Archive.org's public collections.
+**We do not verify that claim per title.** The catalog is a list of identifiers
+with a provenance assumption, not an audited rights determination. Nothing in the
+code would notice if an entry were wrong.
 
-## Prohibited acquisition
+**Embed.** Anything not in the direct catalog resolves to a third-party iframe
+(`vidsrc` and six sibling hosts, in priority order). The UI states that it is an
+embed. That host decides what plays, where it plays, and whether it plays. We
+probe providers server-side to skip dead ones, but we do not control, audit, or
+have a contractual relationship with them. Some are the kind of site that hosts
+unauthorized copies.
 
-The product must not scrape unauthorized stream indexes, download unauthorized movies, bypass DRM, bypass geo-restrictions, or infer a right to stream from a public URL. Provider adapters must require explicit credentials and contract metadata before enabling playback.
+`STREAM_PROVIDER_ORDER` and `STREAM_PROVIDER_DISABLED` reshape the chain without a
+code change, which means the direct tier can be disabled and the product becomes
+entirely dependent on third-party embeds. That is an operator decision with legal
+weight and no guard rail in the code.
 
-## Audit remediation: evidence and conflict controls
+## What is not hosted
 
-### Evidence package
+No application media files are stored, transcoded, packaged, or delivered from
+object storage. There is no HLS packaging pipeline, no FFmpeg worker, no CDN with
+signed URLs, no DRM, no captions pipeline, and no media upload path. `/api/movies/
+download` relays a byte range for a title the direct catalog already carries; it
+does not originate a download of anything.
 
-A rights grant is not valid until its evidence package records the rights owner, chain of title or public-domain basis, signed agreement reference, permitted territories, dates in UTC, platforms, monetization permissions, language and subtitle permissions, DRM requirements, takedown contact, and reviewer decision. Evidence files are private, versioned, access-controlled, virus-scanned, and retained according to legal policy.
+## What is disclosed to users
 
-### Overlap and precedence
+`client/src/pages/Terms.tsx` and `client/src/pages/Dmca.tsx` state, in plain
+language:
 
-The system rejects overlapping grants that create ambiguous authority for the same movie, territory, platform, and time window unless an administrator records an explicit precedence rule. Takedown overrides publication and all ordinary grants. The policy engine evaluates deny, takedown, expiry, territory, platform, and source state in that order.
+- playback is relayed from Archive.org or served by third-party embed providers,
+- we do not host the media,
+- what is stored about a viewer's watching (history, progress, saved media,
+  derived taste features, and daily play counts),
+- the takedown contact and that verified takedown requests are honoured.
 
-### Operational targets
+`client/src/pages/Home.tsx` states the same in-product, next to the fact that the
+free allowance is 10 titles per profile per day and 20 per account per day.
 
-Rights expiry alerts run at 90, 30, and 7 days. A takedown request is acknowledged within one business hour and blocks new playback as soon as the authorized operator or verified webhook confirms it. Public metadata remains available only when contractually permitted; otherwise the page is unpublished, redirected, or returned as 410 according to the legal decision.
+## DMCA and takedown
 
-### Legal gates
+`/dmca` publishes a contact address and states that a verified takedown request
+removes the title. That is a **manual** process: a human reads the request, edits
+`movies.json` or disables the provider, and redeploys. There is no automated
+takedown pipeline, no webhook, no blocklist table, and no SLA. Do not describe
+takedown as immediate or self-service.
 
-A legal or rights reviewer must approve the evidence model, standard contract fields, public-domain verification method, notice-and-takedown process, territorial policy, and retention schedule before production ingestion is enabled.
+## What would have to be true before claiming licensed content
+
+1. A `RightsGrant`-shaped entity with owner, contract or public-domain basis,
+   territory, validity dates, permitted playback method, platform limits, and an
+   evidence reference.
+2. Policy evaluation in the resolve path, so an unentitled title never reaches
+   the client, with an explicit decision for the not-configured case rather than
+   a default-allow.
+3. A publication gate: a title appears only when its rights state allows it.
+4. A takedown path that actually blocks new sessions without a redeploy.
+5. Legal review of the evidence model, the Archive.org public-domain
+   assumption, the embed tier, and the DMCA process.
+
+Until then, the honest product description is the one in [prd](prd.md): a free
+discovery and playback front end over publicly reachable sources, with no claim
+to hold streaming rights.
+
+## Prohibited
+
+The product does not scrape stream indexes it was not given, bypass DRM,
+paywalls, geo-restrictions, or access controls, download copyrighted media
+without permission, or infer a right to stream from a public URL. That is a
+constraint on how this code may be extended, and it is why the embed tier is
+described plainly rather than dressed up as a provider integration.

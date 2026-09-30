@@ -1,29 +1,32 @@
-# FreeStream Integrations
+# Stream Vy Integrations
 
-| Integration       | Purpose                            | Required configuration                                   |
-| ----------------- | ---------------------------------- | -------------------------------------------------------- |
-| Metadata provider | Licensed metadata and IDs          | API key, provider terms, rate limits, attribution policy |
-| Search engine     | Fuzzy search and facets            | Endpoint, admin key, index name, schema version          |
-| Object storage    | Artwork, uploads, captions         | Bucket, region, credentials, lifecycle policy            |
-| CDN               | Public artwork and media delivery  | Distribution, origin, cache policy, signed access        |
-| Video provider    | HLS/DASH, packaging, captions, DRM | Account, signing secret, webhook secret, territories     |
-| Email provider    | Verification, reset, notifications | API key, sending domain, templates, bounce handling      |
-| Error tracking    | Application diagnostics            | DSN, PII scrubbing rules, retention                      |
-| Analytics         | Product and playback measurement   | Site ID, consent policy, event schema                    |
-| Malware scanner   | Upload quarantine                  | Service endpoint or worker package, timeout, retention   |
+Every external dependency the code actually has. The previous version of this
+file listed a search engine, object storage, a CDN, a video provider, an email
+provider, error tracking, analytics, and a malware scanner. **None of those
+integrations exist in this codebase.**
 
-The application must start in a safe state when a provider is not configured. A missing provider produces an honest unavailable state and an operator-facing configuration warning; it must never produce a successful fake response.
+| Integration          | Used by                          | Configuration            | Behavior when unconfigured                            |
+| -------------------- | -------------------------------- | ------------------------ | ----------------------------------------------------- |
+| TMDB                 | `tmdb_service.py`, `catalog_service.py` | `TMDB_API_KEY`   | Lookups skipped, warning printed, cached catalog served |
+| Archive.org          | `stream_providers.py`, relay routes | none                | Direct tier unavailable; embeds carry the title       |
+| TMDB curated collections | `/api/catalog/discover`    | none                    | Shelf omitted                                          |
+| Trakt (optional)     | `catalog_service.py`             | `TRAKT_CLIENT_ID`       | Skipped                                                |
+| OMDb (optional)      | `catalog_service.py`             | `OMDB_API_KEY`          | Skipped; not a fallback for OMDb-only results         |
+| Postgres (optional)  | `authdb.Store`                   | `DATABASE_URL`          | Falls back to SQLite                                   |
+| YouTube (via TMDB)   | Trailer routes                   | none                    | No-trailer state                                       |
 
-## Audit remediation: provider contracts
+## Rules this codebase follows
 
-### Metadata provider contract
+- A missing provider produces an **honest unavailable state** and an
+  operator-facing warning, never a fabricated success.
+- No secret is inlined into a `VITE_*` variable, and no provider is called
+  directly from the browser.
+- Outbound TLS is always verifying; see [environment](environment.md).
 
-The adapter must expose rate limits, attribution requirements, terms version, locale coverage, stable external IDs, change timestamps, deletion signals, pagination limits, and webhook or polling behavior. Sync stores raw provider payloads in restricted storage when contractually allowed, plus normalized fields and field-level provenance. A provider outage freezes the last verified index rather than deleting catalogue records.
+## Framework plumbing that is not an integration
 
-### Playback provider contract
-
-The adapter must declare manifest type, DRM systems, token TTL, revocation support, caption and audio behavior, webhook verification, concurrency limits, regional availability, SLA, egress pricing, and data-processing terms. Provider health is checked without exposing media URLs. The application supports a per-title source preference and a controlled fallback only when the rights grant covers the fallback source.
-
-### Integration exit criteria
-
-No provider is production-approved until sandbox tests verify signed access expiry, revocation, rights denial, captions, audio selection, outage behavior, webhook replay protection, and export or migration of provider IDs. The provider registry stores contract version, review date, data residency, subprocessors, and deprecation plan.
+`server/_core/oauth.ts`, `storageProxy.ts`, `imageGeneration.ts`, `llm.ts`,
+`voiceTranscription.ts`, `map.ts`, and `dataApi.ts` are template framework
+modules. The product has no OAuth login, no object storage, no image generation,
+no LLM feature, and no maps. They are reachable only through `/api/trpc`, which
+the client does not call.

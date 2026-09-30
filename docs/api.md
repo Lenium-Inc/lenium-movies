@@ -1,56 +1,127 @@
-# FreeStream API Contract
+# Stream Vy API
 
-## Principles
+All routes are served by the single Flask app in `movie-backend/app.py`. There is
+no version prefix, no tRPC surface, and no GraphQL. Any document describing
+`catalog.home`, `playback.createSession`, or a rights error code
+(`RIGHTS_UNAVAILABLE`, `TERRITORY_RESTRICTED`, `MEDIA_NOT_READY`,
+`PROVIDER_UNAVAILABLE`) describes a system that does not exist — those procedures
+and error codes are not in this codebase.
 
-The API is versioned, typed, authenticated by session, and organized by domain. Browser clients do not call metadata providers directly. The server owns caching, provenance, rights evaluation, and provider credentials.
+## Conventions
 
-## Public procedures
+- **Auth**: `Authorization: Bearer <token>` from `/api/auth/login` or `/signup`.
+  Tokens are opaque `secrets.token_urlsafe` values backed by a `sessions` row
+  with a 30-day expiry. The token itself is what the client stores; profile PINs
+  are never returned by any endpoint.
+- **CORS**: exact-match against `ALLOWED_ORIGINS`. Requests with no `Origin`
+  header — including the Express wrapper's server-to-server call — are unaffected.
+- **Errors**: JSON `{"error": "..."} `with a real HTTP status. There is no
+  error-code enum; the previous `*_UNAVAILABLE` taxonomy was invented.
+- **Allowance**: play and claim paths are server-enforced at 10 titles per
+  profile per day and 20 per account per day, resetting at 00:00 UTC. A referral
+  acceptance grants one uncapped day to both parties.
 
-| Procedure                  | Input                       | Output                                                        |
-| -------------------------- | --------------------------- | ------------------------------------------------------------- |
-| `catalog.home`             | locale, optional cursor     | featured rows and stable collection references                |
-| `catalog.search`           | query, facets, sort, cursor | results, facets, suggestions, zero-result hints               |
-| `catalog.movieBySlug`      | slug                        | canonical movie data, availability state, structured metadata |
-| `catalog.collectionBySlug` | slug, cursor                | published collection and items                                |
-| `catalog.personBySlug`     | slug                        | filmography when indexable                                    |
+## Public catalogue
 
-## Authenticated procedures
+| Route                          | Method       | Purpose                                            |
+| ------------------------------ | ------------ | -------------------------------------------------- |
+| `/`                            | GET          | Health check. Returns `{"status": "online", ...}`  |
+| `/api/search`                  | GET          | TMDB search                                        |
+| `/api/search/suggest`          | GET          | Search suggestions                                 |
+| `/api/movies/feeds`            | GET          | Trending / popular / now playing / on the air      |
+| `/api/movies/trending`         | GET          | Trending only                                      |
+| `/api/movies/popular`          | GET          | Popular only                                       |
+| `/api/movies/now_playing`      | GET          | Now playing only                                   |
+| `/api/movies/on_the_air`       | GET          | On the air only                                    |
+| `/api/catalog/discover`        | GET          | Discover shelves                                   |
+| `/api/catalog/search`          | GET          | Cached catalogue search                            |
+| `/api/media/<id>`              | GET          | One catalog record by id                           |
+| `/api/movies/resolve`          | GET, POST    | Resolve a title to a playable state                |
+| `/api/episodes`                | GET          | Season/episode details for a series                |
+| `/api/movies/trailer`          | GET          | Trailer for a title                                |
+| `/api/catalog/movieTrailer`    | GET          | Trailer by TMDB id                                 |
+| `/api/subtitles`               | GET          | Subtitle relay                                     |
 
-`account.me`, `account.updatePreferences`, `watchlist.list`, `watchlist.add`, `watchlist.remove`, `history.list`, `history.remove`, `history.clear`, `progress.upsert`, `rating.upsert`, and `review.create/update/delete/report`.
+## Playback
 
-## Playback procedures
+| Route                        | Method    | Notes                                                          |
+| ---------------------------- | --------- | -------------------------------------------------------------- |
+| `/api/get-stream`            | GET       | Direct (Archive.org) source, ordered candidates                 |
+| `/api/movies/stream`         | GET       | Byte relay for range requests and seeking                       |
+| `/api/movies/download`       | GET       | Explicit download path; a **GET**, so it is not CSRF-relevant  |
 
-`playback.createSession` accepts movie ID, device context, and optional resume position. It returns a session ID, signed manifest access, expiry, caption tracks, and allowed capabilities. It must return a typed denial such as `RIGHTS_UNAVAILABLE`, `TERRITORY_RESTRICTED`, `MEDIA_NOT_READY`, or `PROVIDER_UNAVAILABLE` without leaking secrets. `playback.heartbeat` and `playback.complete` accept the session ID and validated telemetry fields.
+`stream_providers.resolve()` returns the first playable provider plus the
+remaining ordered candidates. The client renders the first and may fail over
+client-side. `STREAM_PROVIDER_DISABLED` and `STREAM_PROVIDER_ORDER` reshape the
+chain without a code change.
 
-## Admin procedures
+## Accounts
 
-Admin APIs cover movies, providers, rights, submissions, collections, reviews, search indexing, ingestion jobs, ad-blocking rules, audit logs, and system health. Every mutating procedure checks role and writes an audit event.
+| Route                      | Method     | Notes                                                     |
+| -------------------------- | ---------- | --------------------------------------------------------- |
+| `/api/auth/signup`         | POST       | Creates the account                                       |
+| `/api/auth/login`          | POST       | Returns a bearer token                                    |
+| `/api/auth/me`             | GET        | Current user and profile summary                          |
+| `/api/auth/logout`         | POST       | Revokes the session row                                   |
+| `/api/auth/account`        | DELETE     | Requires email **and** password; deletes everything (§below) |
 
-## Provider interfaces
+`DELETE /api/auth/account` explicitly deletes profiles, history, daily plays,
+allowance, taste signals and events, saved media, shares, invitations, referral
+uses, and sessions — including rows in tables that have no foreign key to
+`users`, which is why an explicit list is used instead of relying on cascade.
+Accounts with an account-wide history cannot be deleted by the generic endpoint
+and must go through the account flow.
 
-```ts
-interface MetadataProvider {
-  search(input: ProviderSearchInput): Promise<ProviderMovieRef[]>;
-  getMovie(externalId: string): Promise<ProviderMovieRecord>;
-}
+## Profiles and taste
 
-interface PlaybackProvider {
-  createAccess(input: PlaybackAccessInput): Promise<PlaybackAccess>;
-  revokeAccess(input: RevokeAccessInput): Promise<void>;
-}
+| Route                            | Method     | Notes                                |
+| -------------------------------- | ---------- | ------------------------------------ |
+| `/api/profiles`                  | GET, POST  | List or create; max 4 per account    |
+| `/api/profiles/<profile_id>`     | PATCH, DELETE | Rename, recolor, reorder, PIN, delete |
+| `/api/profiles/<profile_id>/unlock` | POST    | Verifies the child-level PIN         |
+| `/api/taste`                     | POST       | Record a signal                      |
+| `/api/taste/state`               | GET, POST  | Read and replace derived state       |
+| `/api/recommendations`           | GET        | Ranked titles for the active profile |
+| `/api/recommendations/eval`      | GET        | Offline evaluation of the model      |
 
-interface SearchIndex {
-  upsert(document: SearchDocument): Promise<void>;
-  delete(id: string): Promise<void>;
-}
-```
+A profile PIN is a household lock, not the account password. The account password
+is not accepted at the unlock route.
 
-Provider adapters must expose health, retry, timeout, and provenance behavior. Development adapters may return clearly labeled fixtures only in non-production environments.
+## Allowance and referrals
 
-## Audit remediation: API safety
+| Route                     | Method | Notes                                              |
+| ------------------------- | ------ | -------------------------------------------------- |
+| `/api/allowance`          | GET    | Per-profile and per-account remaining today        |
+| `/api/allowance/claim`    | POST   | Consumes a play; the only path that decrements     |
+| `/api/referrals`          | GET    | This account's code and status                    |
+| `/api/referrals/apply`    | POST   | Redeem a code; unlocks a day for both parties      |
 
-All mutating procedures accept an idempotency key where retries could duplicate an action. Cursor pagination uses opaque, signed cursors tied to the query shape; offset pagination is not used for high-volume feeds. Public search inputs have maximum length, facet count, page size, timeout, and rate limits. API responses use stable error codes, request IDs, and no provider secret or internal contract detail.
+## History, list, and sharing
 
-Playback session creation is rate limited per account, device fingerprint policy, and IP risk signal without using invasive tracking as a default. Session tokens are one-time or short-lived where possible, cannot be replayed after expiry, and are revoked on rights takedown. Progress writes are throttled and idempotent.
+| Route                                        | Method            |
+| -------------------------------------------- | ----------------- |
+| `/api/auth/history`                          | GET, POST, DELETE |
+| `/api/auth/history/<path:movie_key>`         | DELETE            |
+| `/api/auth/my-list`                          | GET, POST, DELETE |
+| `/api/auth/my-list/<int:media_id>`           | DELETE            |
+| `/api/auth/shares`                           | GET, POST         |
+| `/api/auth/shares/<token>`                   | GET               |
+| `/api/auth/shares/<token>/accept`            | POST              |
+| `/api/auth/shares/<token>/members`           | GET               |
+| `/api/auth/shares/<token>/members/<member_id>` | DELETE          |
+| `/api/auth/shares/<token>/revoke`            | POST              |
+| `/api/auth/shared/<owner_id>/my-list`        | GET               |
 
-The API publishes deprecation dates and version headers. Webhooks are isolated from browser procedures, validate signatures and timestamps, reject replays, and write an audit event before applying state changes.
+Share tokens are readable by anyone holding the link; the token is the
+capability, which is why the client accepts two URL shapes
+(`/list/share/:token` and `/share/:token`) for links minted outside the app.
+Member removal and revoke are owner-only and return 403 otherwise.
+
+## Gaps
+
+- No rate limiting, idempotency keys, or signed cursors at the API layer. The
+  rate limiter lives in the Express wrapper, so hitting Flask directly bypasses
+  it. This is a real exposure, not a design choice.
+- No request IDs or structured error codes.
+- No webhooks.
+- No admin routes.

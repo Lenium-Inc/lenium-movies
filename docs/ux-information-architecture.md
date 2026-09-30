@@ -1,211 +1,135 @@
-# FreeStream Streaming Product UX Specification
+# Stream Vy UX and Information Architecture
 
-## Executive direction
+This describes the interface as built. The previous version specified a
+224–248px persistent sidebar, a 56–64px sticky header, a `/discover` route, a
+`/genres` directory, a `/collections` directory, mood prompts, `VideoAsset`-backed
+trailer panels, and pixel budgets for every breakpoint. **None of that is what
+ships.** There is no sidebar, no separate browse route, and no mood prompt.
 
-FreeStream should operate as a **catalogue-first movie discovery application**. The interface should help a viewer move from opening the product to identifying a worthwhile title with minimal visual and cognitive friction.
+## Shape of the app
 
-The reference image is used only to study information architecture and interaction patterns. FreeStream will not copy its branding, visual identity, content, artwork, layout details, or unauthorized streaming model. FreeStream will retain its existing black, white, and refined grayscale brand palette.
+Discovery is a **single page with a view state**, not a route per destination.
+`Navbar` sets a `View` value (`home`, `movies`, `tv`, `trending`, plus internal
+`new`, `popular`, `genres`, `collections`) and `Home` renders accordingly. The
+public navigation exposes four: **Home, Explore, Trending, Shows.** My List is a
+real route at `/my-list`.
 
-The chosen direction is **Compact Catalog Shell**. It combines persistent application navigation, a collapsible desktop sidebar, a compact header, a reduced featured area, dense poster rows, and clear separation between metadata, trailers, watchlists, and authorized playback.
+The one true exception: `/hero`, a scratch design page with fifteen hardcoded
+fake titles, invented genre taxonomies, and a raw `alert()` as its details view,
+served on a public route with no auth guard. It looked like the product and was
+not, so it was removed rather than hidden.
 
-## Problems being corrected
-
-The current product gives too much visual weight to one featured title. It uses large editorial typography and generous empty space before the catalogue becomes visible. This makes the product resemble a cinematic marketing site rather than a service used repeatedly for browsing.
-
-The redesign reduces hero prominence, moves navigation and categories closer to the top of the viewport, increases poster density, and makes search available from every primary screen. Premium quality will come from consistent spacing, clear hierarchy, fast interactions, accessible contrast, and reliable content states rather than oversized type or ornamental layout.
-
-## Information architecture
-
-### Persistent application shell
-
-The shell is present on authenticated and public catalogue routes. It provides a stable way to move between discovery contexts without returning to the homepage.
-
-| Area         | Desktop                       | Tablet                   | Mobile                                   | Purpose                       |
-| ------------ | ----------------------------- | ------------------------ | ---------------------------------------- | ----------------------------- |
-| Sidebar      | Expanded or collapsed         | Collapsed by default     | Replaced by bottom navigation and drawer | Primary catalogue navigation  |
-| Header       | Brand, global search, profile | Brand, search, profile   | Brand, search icon, menu                 | Global orientation and search |
-| Main content | Dense rows and grids          | Dense rows and grids     | Swipeable rows and compact grids         | Discovery and selection       |
-| Player state | Dedicated route or modal      | Dedicated route or modal | Full-screen route or bottom sheet        | Authorized playback only      |
-
-### Sidebar navigation
-
-The expanded desktop sidebar is approximately **224–248 pixels wide**. It uses the existing dark surface and grayscale accent system. It should not visually dominate the catalogue.
-
-| Navigation item | Route             | Visibility                   | Behavior                                                             |
-| --------------- | ----------------- | ---------------------------- | -------------------------------------------------------------------- |
-| Home            | `/`               | Public                       | Personalized or general discovery landing page                       |
-| Movies          | `/movies`         | Public                       | Movie catalogue landing page                                         |
-| TV Shows        | `/tv`             | Public when TV records exist | TV catalogue landing page; do not show an empty fake section         |
-| New             | `/recently-added` | Public                       | Recently ingested and approved records                               |
-| Popular         | `/popular`        | Public                       | Provider-backed popularity ordering                                  |
-| Genres          | `/genres`         | Public                       | Genre directory with real counts only when counts exist              |
-| Collections     | `/collections`    | Public                       | Curated collections containing real records                          |
-| My List         | `/my-list`        | Authenticated                | Persisted watchlist; unauthenticated users see a sign-in explanation |
-
-The sidebar includes no fabricated badges, watch counts, notification counts, or catalogue totals. If a destination has no records, the interface explains why and provides an appropriate next action.
-
-### Compact header
-
-The header is **56–64 pixels high** and remains sticky during catalogue browsing. It contains the FreeStream mark, the current section label when useful, a search control, and the account control.
-
-Search is always reachable. On desktop and tablet, the search field is visible in the header. On mobile, a search icon opens a full-width search surface with focus placed in the input. The search surface supports movies, actors, directors, and genres only when corresponding real records or provider results exist.
-
-Notifications are not included in the first implementation. They should only be added when the product has a real notification event model, a persistence policy, and a clear user benefit.
-
-## Homepage structure
-
-The homepage is a discovery surface, not a marketing landing page.
+## Home
 
 ```text
-Persistent shell
-├── Compact featured strip
-├── Fast category chips
-├── Trending Now
-├── Popular on FreeStream
-├── Recently Added
-├── Top Rated
-├── Hidden Gems
-├── Classic Cinema
-├── Independent Films
-└── Documentaries
+Navbar (brand, search, view links, account)
+├── hero backdrop wash (80vh, blurred, from the featured record only)
+├── Spotlight          -> owns the page h1 (the featured title)
+├── Discover section   -> h2, filter panel + InfiniteMovieGrid
+├── poster rows        -> MovieRow per shelf
+├── TMDB attribution
+└── allowance + hosting disclosure
 ```
 
-### Featured strip
+The `h1`/heading discipline is deliberate. The Spotlight owns the page `h1` on
+the home view; the Discover and row sections use `h2`. A duplicate `h1` on the
+same page was a real defect and was fixed rather than left because two headings
+looked similar.
 
-The featured area occupies approximately **280–390 pixels** depending on viewport height. It should occupy about **35–45% of the initial desktop viewport**, not most of the page.
+## Navigation
 
-It contains one real movie record at a time. The information hierarchy is:
+`Navbar` carries the brand mark, a search field (`NavbarSearch`), the four view
+links, a My List link, and the account control (`ProfileMenu`). A menu button
+handles narrow viewports. Search is reachable from every view; a search pushed
+back from the navbar is applied to the shared catalogue state rather than opening
+a separate results route.
 
-1. Title.
-2. Year, runtime, genres, and provider-backed rating where available.
-3. A short synopsis from the metadata provider.
-4. A details action.
-5. A watch action only when an authorized playback source exists.
-6. A list action only when watchlist persistence is available.
+## Catalogue filters
 
-A trailer action is shown only when a verified `VideoAsset` exists. A trailer never implies that the movie itself is streamable.
+`DiscoverDropdown` owns **genre, media type, and sort order** as one panel with a
+draft state and an explicit Apply, and it forwards all three to `useCatalog`.
 
-### Category chips
+This panel used to own `selectedSort` and `selectedType` as local state while its
+Apply handler only ever forwarded `genre` — so choosing "Top Rated" or "Shows"
+did nothing at all. Every option now does what its label says, applied to both
+the shelf views and the paged browse grid. A label that does nothing is worse
+than a missing control.
 
-Category chips appear immediately below the featured strip. They are horizontally scrollable on small screens. The initial set is derived from available real genres and should not display empty categories unless the product intentionally supports an empty-state directory.
+## Cards
 
-Recommended initial chips are **All**, **Action**, **Adventure**, **Comedy**, **Crime**, **Drama**, **Family**, **Mystery**, **Romance**, **Science Fiction**, and **Thriller**. The API should return the available set rather than treating this list as a permanent hardcoded catalogue.
+`MediaCard` / `MovieCard` render a 2:3 poster with title, year, and score when
+the source provides one. Ratings are shown only when provenance and scale are
+known; a missing value is omitted rather than replaced with a number. There are no
+watch counts, review summaries, or popularity claims anywhere in the UI.
 
-### Horizontal rows
+`SkeletonMovieCard` preserves row geometry during load. `CatalogEmptyState`
+explains an empty or failed catalogue instead of padding it with fixtures.
 
-Each row contains a title, optional description, a horizontal poster rail, and a restrained “View all” action. The rail should show approximately **6–8 cards on desktop**, **4–6 on tablet**, and **2–3 on mobile**.
+## Watch
 
-Rows are populated from real provider or curated records. A row must be hidden, replaced with a useful empty state, or populated through a documented query when it has no records. The system must not duplicate cards merely to make the catalogue appear larger.
+`/watch/:id` is the only playback surface. Resolution order:
 
-## Movie card specification
+1. A direct source renders `VideoPlayer` with quality variants and subtitle
+   tracks, streamed through the server relay so seeking and range requests work.
+2. If the chain settles on an embed provider, `EmbedPlayer` renders it and the
+   page states that it is a third-party embed rather than native playback.
+3. `AllowanceMeter` and `DailyLimitNotice` show the real server allowance and what
+   happens when it is spent.
 
-Posters are the primary visual object. Cards use a consistent **2:3 poster ratio**, a restrained radius, and a dark surface behind missing artwork. Cards should not use oversized title typography.
+`useEmbedFailure` drives client-side failover when a source dies mid-playback.
+`WatchTVControls` and `EpisodeMatrix` cover series.
 
-| Card element       | Desktop                                | Tablet                | Mobile                          |
-| ------------------ | -------------------------------------- | --------------------- | ------------------------------- |
-| Poster width       | 150–180px                              | 140–165px             | 124–150px                       |
-| Poster ratio       | 2:3                                    | 2:3                   | 2:3                             |
-| Visible metadata   | Title, year, genre, score if available | Same                  | Title, year, score if available |
-| Hover/focus action | Details, save, trailer if available    | Focus-visible actions | Tap opens details               |
-| Motion             | 150–220ms opacity/transform            | Same                  | Minimal; respect reduced motion |
+## Accounts and household
 
-Ratings are displayed only when the source, scale, and provenance are known. Missing values use labels such as **Rating unavailable**, not invented numeric values. Watch counts, popularity claims, and review summaries are excluded unless backed by real data.
+| Route        | Component        | Notes                                                     |
+| ------------ | ---------------- | --------------------------------------------------------- |
+| `/login`     | `AuthPage`       | Shared component, `mode` prop                             |
+| `/signup`    | `AuthPage`       | Same                                                       |
+| `/profiles`  | `ProfilesPage`   | Create, order, avatar, PIN                                |
+| `/profile`   | `Profile`        | Account, allowance, referral, ratings, **account deletion** |
+| `/my-list`   | `MyList`         | Server-backed list                                         |
 
-## Discovery architecture
+`ShareListDialog` mints and manages invite tokens. `AddProfileForm`,
+`AvatarPicker`, and `EditProfileModal` own profile editing. The account-deletion
+panel is disclosure-gated: it states exactly what is removed, and requires the
+email **and** the password.
 
-The discovery experience is a dedicated route rather than a modal-only feature.
+## Legal surfaces
 
-| Route          | Main controls                                                | Result shape                                       |
-| -------------- | ------------------------------------------------------------ | -------------------------------------------------- |
-| `/discover`    | Genre, year, country, language, runtime, score, release date | Dense poster grid with result count only when real |
-| `/search`      | Query, result type, optional filters                         | Grouped results for movies, people, and genres     |
-| `/genres`      | Genre directory                                              | Real genre records and real movie links            |
-| `/collections` | Curated collection directory                                 | Collection cards and real member titles            |
+`/terms`, `/privacy`, and `/dmca` render through `LegalLayout`, linked from the
+footer. `Privacy.tsx` states that there are no analytics, lists the actual
+`localStorage` keys, and explains that external playback providers set their own
+cookies. `Terms.tsx` and `Dmca.tsx` disclose the Archive.org relay, the embed
+tier, downloads, and stored viewing data.
 
-Mood prompts such as **Something funny**, **Something scary**, **Something romantic**, **Something intense**, and **Under 90 minutes** are query shortcuts. They must resolve to documented filters or curated collections. A mood button must not pretend to use personalization when no behavioral model exists.
+## State requirements
 
-### Search behavior
+| State                | Behavior                                                            |
+| -------------------- | ------------------------------------------------------------------- |
+| Loading              | `SkeletonMovieCard`; `TopProgressBar` while any request is in flight  |
+| Empty catalogue      | `CatalogEmptyState` explains it; no fixtures                         |
+| Provider error       | Navigation preserved, retry offered, no fake data                    |
+| Missing artwork      | Explicit artwork-unavailable surface                                 |
+| Missing rating       | Omitted                                                              |
+| Trailer unavailable  | No player; states that no trailer was found                          |
+| Playback unavailable | Explained, never simulated                                          |
+| Allowance spent      | `DailyLimitNotice`, from the real server allowance                   |
+| Unauthorized list    | Explains sign-in; does not claim persistence                          |
+| Unknown route        | `NotFound`                                                           |
 
-Search should provide a focused input immediately, debounce requests, cancel stale requests, and show results without navigating through multiple empty intermediary screens. Results should distinguish exact title matches from people and genre matches.
+## Guardrails
 
-Search URLs should be shareable but arbitrary search and filter combinations should remain `noindex` unless they meet the documented SEO threshold for unique, useful landing pages.
+Keep the grayscale palette. Do not introduce copied branding or reference
+assets. Do not add unauthorized stream sources, unknown-provider iframes, fake
+counters, fake ratings, or hardcoded catalogue rows. Do not ship a control whose
+label does not match its behavior.
 
-## Movie detail architecture
+## Gaps
 
-The movie detail page is allowed to be more cinematic than the homepage, but it remains task-oriented.
-
-```text
-Back link and breadcrumb
-├── Backdrop and compact title block
-├── Poster and core metadata
-├── Synopsis and genres
-├── Watch action when authorized playback exists
-├── Trailer panel when verified VideoAsset exists
-├── Add to My List when persistence exists
-├── Cast and crew when real records exist
-├── Similar movies from a documented query
-└── Availability and rights status when known
-```
-
-The page must represent metadata, trailer, and stream as independent capabilities. It may state **Metadata available**, **Trailer available**, and **Playback unavailable** simultaneously. It must never turn a trailer into a watch button or infer rights from a metadata record.
-
-## Responsive layout specification
-
-### Desktop: 1280 pixels and wider
-
-The shell uses a two-column layout. The sidebar is 224–248 pixels wide. The main content has a maximum width near 1480 pixels and uses 24–32 pixels of horizontal padding.
-
-The featured strip spans the main content area and uses a restrained backdrop treatment. The first row begins within the initial viewport on typical laptop heights. Poster rails use horizontal overflow instead of shrinking cards below usable text and touch sizes.
-
-On wide screens, the search field remains visible in the header. Hover actions may appear on cards, but every action must remain keyboard accessible through focus states.
-
-### Tablet: 768–1279 pixels
-
-The sidebar is collapsed into an icon rail or drawer. The header retains a visible search affordance. The main content uses 16–24 pixels of padding.
-
-The featured strip is shorter than desktop. Rows show 4–6 posters. Filter controls may wrap to a second line, but the first screen must still expose categories and the beginning of the first content row.
-
-### Mobile: 320–767 pixels
-
-The sidebar becomes a drawer opened from the menu button. A compact bottom navigation may expose Home, Movies, Search, and My List. The header remains sticky and never consumes more than 56 pixels excluding the product announcement or status banner.
-
-The featured strip is approximately 240–310 pixels tall. The synopsis is limited to a short excerpt. Category chips use horizontal scrolling. Rows show 2–3 posters, and poster cards use tap-first interaction rather than hover-only actions.
-
-The mobile details surface may use a bottom sheet, but it must preserve an obvious close action, focus management, and a scrollable content region. Embedded trailers should not autoplay and must respect mobile data usage expectations.
-
-## State and trust requirements
-
-| State                     | Required interface behavior                                         |
-| ------------------------- | ------------------------------------------------------------------- |
-| Loading                   | Show stable skeletons that preserve row geometry                    |
-| Empty catalogue           | Explain the missing provider or records; do not show fixtures       |
-| Provider error            | Preserve navigation and show retry guidance                         |
-| Missing artwork           | Show an explicit artwork-unavailable surface                        |
-| Missing rating            | Show “Rating unavailable” or omit the rating                        |
-| Trailer unavailable       | Omit the player and state that no verified trailer was found        |
-| Playback unavailable      | Show a disabled or explanatory watch state; never simulate playback |
-| Unauthorized My List      | Explain sign-in and do not claim persistence                        |
-| Deleted or expired record | Use redirect, 404, or 410 policy from the SEO specification         |
-
-## Implementation guardrails
-
-The implementation must use the existing FreeStream grayscale palette. It must not introduce copied branding or reference assets. It must not add unauthorized streaming sources, iframe players for unknown providers, fake counters, fake ratings, or hardcoded movie catalogue rows.
-
-The first implementation should prioritize persistent navigation, real TMDB-backed movie rows, search, movie details, cached verified trailers, and truthful unavailable states. TV shows, personalization, notification systems, and richer collections should remain hidden until the corresponding real data and backend capabilities exist.
-
-## Definition of done for the redesign
-
-The redesign is ready for implementation when the following conditions are accepted:
-
-1. The homepage exposes real catalogue rows before the fold ends.
-2. Search is accessible from every primary viewport.
-3. Sidebar, header, mobile drawer, and bottom navigation have clear route ownership.
-4. Cards expose only data-backed metadata and actions.
-5. Watch, trailer, and list capabilities are visually and technically independent.
-6. Empty, loading, provider-error, and unavailable states are designed before feature coding.
-7. Desktop, tablet, and mobile behavior follows the dimensions in this document.
-
-## References
-
-[1]: https://developer.themoviedb.org/docs/faq "TMDB API FAQ"
-[2]: https://www.themoviedb.org/api-terms-of-use "TMDB API Terms of Use"
+- No dedicated browse, genre, or collection route: they are view states inside
+  `/`, so none of them is independently linkable or shareable.
+- `genres` and `collections` views render an explicit explanation that real
+  records have not been imported, rather than an empty grid.
+- No route-level code splitting; the build emits one large chunk.
+- The 2:3 poster rails use horizontal overflow rather than shrinking cards below
+  a usable touch target on mobile.

@@ -1,47 +1,60 @@
-# FreeStream Production Documentation
+# Stream Vy Documentation
 
-This directory defines the production target for FreeStream, a high-performance movie discovery and authorized streaming platform. The documents intentionally precede further production coding because provider, rights, identity, infrastructure, and compliance decisions materially change the implementation.
+These documents describe **the code in this repository as it actually is**. Where
+a system is not built, the document says so instead of describing it as if it
+were. Nothing here is a launch approval, a legal opinion, or a production-readiness
+claim.
 
-## Documents
+## Read these first
 
-1. [Architecture](architecture.md)
-2. [Product requirements](prd.md)
-3. [Features](features.md)
-4. [Sitemap](sitemap.md)
-5. [User journeys](userjourney.md)
-6. [Use cases](usecases.md)
-7. [Data model](data-model.md)
-8. [API](api.md)
-9. [Security](security.md)
-10. [SEO](seo.md)
-11. [Performance](performance.md)
-12. [Testing](testing.md)
-13. [Content rights](content-rights.md)
-14. [Ad blocking](ad-blocking.md)
-15. [Integrations](integrations.md)
-16. [Deployment](deployment.md)
-17. [Environment](environment.md)
-18. [Roadmap](roadmap.md)
-19. [Agent instructions](agent.md)
-20. [Metadata provider](metadata-provider.md)
-21. [Trailer architecture](trailer-architecture.md)
+| Document                              | What it answers                                     |
+| ------------------------------------- | --------------------------------------------------- |
+| [Product requirements](prd.md)        | What the product is, what it does, what it refuses  |
+| [Architecture](architecture.md)      | How the SPA, Express wrapper, and Flask backend fit |
+| [API](api.md)                         | Every route the backend actually serves             |
+| [Data model](data-model.md)           | Every table that actually exists                    |
+| [Security](security.md)               | Real controls, and the real gaps                    |
+| [Content and playback](content-rights.md) | What is streamed, how, and what is not known     |
+| [Environment](environment.md)         | The variables the code reads                        |
+| [Testing](testing.md)                 | How to run the suites and what they cover           |
+| [Deployment](deployment.md)           | How it is deployed and what needs config            |
 
-## Current state
+## Supporting documents
 
-The deployed WebDev project now consumes live TMDB metadata through a server-only provider adapter and supports cached, official YouTube trailer assets. It still does not claim to provide licensed streaming playback, rights, or availability; those remain separate production capabilities.
+| Document                                     | What it answers                                  |
+| -------------------------------------------- | ------------------------------------------------ |
+| [Feature map](features.md)                   | Feature-by-feature honest status                 |
+| [Metadata provider](metadata-provider.md)    | How TMDB is used, and the licensing caveat       |
+| [Trailers](trailer-architecture.md)          | How trailers resolve, and what is not cached     |
+| [Integrations](integrations.md)              | Every external dependency and its fallback       |
+| [User journeys](userjourney.md)              | The flows that work end to end                   |
+| [Use cases](usecases.md)                     | Actor-level capabilities and their authorization |
+| [Agent instructions](agent.md)               | Non-negotiable rules for contributors            |
+| [Roadmap](roadmap.md)                        | Known gaps, in dependency order                  |
 
-## Immediate decisions
+## Historical records
 
-The owner must complete TMDB commercial licensing and attribution review, confirm target territories, authentication policy, and playback provider before public launch. The schema, provider adapters, environment contract, and deployment plan must remain aligned with those decisions.
+These were accurate audits of an earlier state of this repository. They are kept
+because deleting an audit erases the reasoning, **not** because they describe the
+current product. Where they conflict with the documents above, the documents
+above win.
 
-## Audit
+- [Documentation audit (historical)](audit.md)
+- [Production-readiness audit (historical)](production-readiness-audit.md)
+- [Performance report (historical)](performance-report.md)
 
-The cross-functional production audit is documented in [audit.md](audit.md). It records findings, severity, remediation, and launch blockers across rights, playback, CDN, search, SEO, security, privacy, accessibility, disaster recovery, monitoring, and cost.
+## Removed as fiction
 
-## Performance audit
+`sitemap.md`, `seo.md`, and `ad-blocking.md` described a server-rendered
+catalogue, a sitemap generator, and a rule-based ad-blocking engine. None of those
+exist. The gaps they describe are recorded in [roadmap](roadmap.md) and
+[feature map](features.md) instead of being documented as features.
 
-The latest measured performance audit, including before/after browser timings, image payloads, build sizes, scope limitations, and remaining production work, is documented in [performance-report.md](performance-report.md).
+## Honest status summary
 
-## Production-readiness audit
-
-The evidence-based implementation audit, classification matrix, safe remediation record, and external blockers are documented in [production-readiness-audit.md](production-readiness-audit.md).
+Stream Vy is a working movie discovery and playback product, not a rights-managed
+streaming platform. The catalogue, accounts, profiles, taste recommendations,
+daily allowance, history, shared lists, and playback are real and server-backed.
+Explicit rights approval, creator submission, moderation, review, and analytics
+pipelines are not built. See [content and playback](content-rights.md) for the
+distinction that matters most.

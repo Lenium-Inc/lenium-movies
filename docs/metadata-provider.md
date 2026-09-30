@@ -1,21 +1,57 @@
-# FreeStream metadata provider
+# Stream Vy Metadata Provider
 
-## Primary provider
+## What is actually wired
 
-FreeStream now uses a server-side **TMDB adapter** for movie metadata. The adapter is provider-neutral at the application boundary: the UI consumes normalized `MetadataMovie` records, while TMDB-specific IDs, URLs, and response fields remain inside `server/providers/tmdb.ts`.
+TMDB, called **from the Python backend only**: `movie-backend/tmdb_service.py`
+for TMDB's API and `movie-backend/catalog_service.py` for aggregation across TMDB,
+an optional Trakt breadth list, and optional OMDb enrichment and fallback. The
+browser never calls TMDB, and `TMDB_API_KEY` never reaches a `VITE_*` variable.
 
-The server exposes `catalog.status`, `catalog.popular`, `catalog.search`, and `catalog.movieById` through tRPC. Provider credentials never reach the browser. Search input is length-limited and the provider request is made only from the server.
+An earlier version of this document said the adapter lives in
+`server/providers/tmdb.ts` and is exposed through tRPC procedures
+`catalog.status`, `catalog.popular`, `catalog.search`, and `catalog.movieById`.
+Those procedures do exist in `server/routers.ts`, but **nothing calls them** — the
+client has no tRPC client, and the `/api` proxy points at Flask, which serves no
+`/api/trpc` route. The file remains as dead template framework code.
 
-## Required configuration
+## Configuration
 
-Set the server-only secret `TMDB_API_KEY`. Do not place it in `VITE_*` variables, client code, committed `.env` files, or browser requests. The current environment does not contain this secret, so the application honestly shows `Metadata provider not connected` instead of rendering fixture movies.
+`TMDB_API_KEY` in the environment or `movie-backend/.env`. Unset is not fatal:
+auth and the local catalog keep working, live lookups are skipped, and a warning
+prints once. The previous version of this file claimed the environment contained
+no secret and the UI showed `Metadata provider not connected`; the key is now
+read from the environment, and the fallback is a warning plus the cached catalog,
+not a fixture list.
 
-## Commercial and attribution requirements
+## Normalization
 
-TMDB’s official FAQ states that its free API access is for non-commercial use with attribution, while commercial projects must contact TMDB for a commercial license. Before enabling this provider for a public or revenue-generating FreeStream deployment, obtain written commercial approval from TMDB and configure the approved attribution/branding. See [TMDB API FAQ](https://developer.themoviedb.org/docs/faq) and [TMDB API terms](https://www.themoviedb.org/api-terms-of-use).
+Every upstream response is normalized into one `MediaItem` shape before it leaves
+the backend, so the client never parses a provider payload. `movie-backend/
+movies.json` supplies the direct-playback catalog. `media_items` stores the result
+write-through and is the outage fallback.
 
-TMDB metadata does not grant streaming rights. Rights grants, playback sources, captions, availability, and authorization remain separate FreeStream capabilities and must not be inferred from a TMDB record. Images are returned through TMDB image URLs only after the appropriate license and usage review; production artwork handling should be finalized before broad launch.
+TLS is always verifying: `runtime_config.ssl_context()` prefers certifi's CA
+bundle, falls back to the system trust store, and never falls back to
+`_create_unverified_context()`. That last one matters — the old code fell back to
+accept-any-certificate, which would have exposed the API key in transit.
+
+## Licensing and attribution
+
+TMDB's own terms state that free API access is for non-commercial use with
+attribution, and that commercial use requires contacting them. Before a
+revenue-generating deployment, obtain written commercial approval and configure
+the approved attribution. `client/src/pages/Home.tsx` carries the TMDB
+attribution now, alongside the disclosure that the app does not host media.
+
+- [TMDB API FAQ](https://developer.themoviedb.org/docs/faq)
+- [TMDB API terms](https://www.themoviedb.org/api-terms-of-use)
+
+TMDB metadata does not grant streaming rights. It is not a rights record and
+nothing in the code treats it as one.
 
 ## Fallback policy
 
-There is no silent fixture fallback. If TMDB is unavailable or unconfigured, FreeStream shows an explicit empty/provider state. A future fallback provider must implement the same normalized contract, preserve its own provider IDs and provenance, and be approved for the intended commercial use before activation.
+There is no silent fixture fallback. When TMDB is unreachable, the endpoint
+serves the persisted `media_items` cache and the UI shows the cached state. A
+future second metadata provider must implement the same normalized contract,
+preserve its own external IDs, and be approved for the intended use first.

@@ -1,29 +1,51 @@
-# FreeStream Performance Plan
+# Stream Vy Performance
 
-## Budgets
+The previous version of this file specified p75 LCP/INP/CLS budgets, AVIF and
+WebP derivative pipelines with focal-point metadata, Redis caching, CDN edge
+caching, AVIF placeholders, and Core Web Vitals tracking. There is no image
+processing pipeline, no Redis, no CDN, and no real-user monitoring in this
+codebase. Those budgets are aspirations; this document records what is measured.
 
-Target a fast first meaningful render on mid-tier mobile, a responsive search interaction, and a movie page that does not wait on playback-provider calls. Establish measured budgets for HTML, critical CSS, JavaScript, image bytes, API latency, and search latency before launch.
+## What was measured
 
-## Rendering
+The last measurement was taken against an earlier fixture-driven prototype and is
+preserved in [performance-report.md](performance-report.md) as a historical
+record. **It is no longer a description of this application**: it reports six
+fixture movies, no catalogue API, no player, and a 3-test suite, and it measures
+a home page that no longer exists in that form.
 
-Server-render public movie, collection, genre, and browse pages where crawlability and first paint benefit. Keep personalization and private account state client-enhanced. Avoid request waterfalls by loading canonical metadata and availability in one server boundary.
+It is not the place to claim a current number. There is no performance
+instrumentation, no budget enforcement, and no baseline for the real catalogue,
+the relay, or the player.
 
-## Media and images
+## What is known about the real request path
 
-Store originals privately, generate responsive derivatives, use modern formats, lazy-load below-the-fold artwork, and preload only the hero asset. Video should flow from the CDN or managed provider rather than through the application server.
+- Every catalogue request re-fetches from TMDB, normalizes, and writes through to
+  `media_items`. This is a deliberate freshness choice: the catalogue is always
+  current, driven by real traffic, with no nightly seeder. It also means catalogue
+  latency is upstream latency, plus a write.
+- Search and catalog queries run against SQLite with indexes on
+  `(media_type, year DESC)`, `(popularity DESC)`, and `genres_key`. Adequate at
+  this catalogue size; a search engine is not needed and adding one would be
+  premature.
+- The direct playback path proxies bytes through Flask. That is a deliberate
+  trade: it is what makes seeking, range requests, and downloads work. It also
+  means video egress is our server's, not a CDN's.
+- The build emits a chunk over 500 KB and Vite warns about it. Route-level code
+  splitting is the obvious next step and has not been done.
 
-## Data and cache
+## Known costs, in priority order
 
-Index catalogue queries, cache stable public responses at the edge, cache hot metadata in Redis, and invalidate by movie or collection version. Do not cache personalized responses across users. Search uses its own derived index and is reconciled through a background job.
+1. Video egress through the relay rather than a CDN.
+2. No route-level code splitting in the client bundle.
+3. A TMDB call on every catalogue request, by design.
+4. A TMDB call per trailer request, which a `videoAssets` table would remove.
+5. Images requested from TMDB's CDN at 1,280px backdrops / 420px posters, with
+   non-hero images lazy-loaded. There is no first-party derivative generation.
 
-## Measurement
+## Before any performance claim is made
 
-Track Core Web Vitals, search latency, movie-page response time, playback startup, rebuffering, error rate, and provider latency by device class and region. Use synthetic checks and real-user measurements with privacy review.
-
-## Audit remediation: measurable budgets
-
-Initial release budgets are: p75 LCP under 2.5 seconds on mobile, p75 INP under 200 ms, p75 CLS under 0.1, public HTML under 100 KB compressed where practical, critical JavaScript under 180 KB compressed, search p95 under 300 ms for cached/common queries, and movie-page p95 under 800 ms excluding third-party playback startup. Budgets are measured in CI and real-user monitoring; exceptions require an owner and expiry date.
-
-Artwork processing creates AVIF and WebP derivatives at named widths, preserves focal point metadata, strips unnecessary metadata, and records source rights. The UI uses `srcset`/`sizes`, explicit dimensions, alt text from verified title data, and a low-quality placeholder only when it is generated from the same approved asset. Hero art is preloaded only on the route where it is the LCP candidate.
-
-Network-aware UX uses low-data artwork, poster-only rows, retry controls, and no autoplay by default. The player does not compete with page-critical resources. Caches use stale-while-revalidate for stable catalogue data and never share user-specific watch state.
+Measure p75 LCP, INP, and CLS with repeated mobile field samples. Throttle 4G.
+Add catalogue queries with `EXPLAIN ANALYZE`. Measure relay throughput and range
+latency against real Archive.org responses. Load-test a large catalogue. Until
+then, a number in this document would be a guess.

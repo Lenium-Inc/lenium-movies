@@ -1,8 +1,12 @@
-# FreeStream Performance Audit Report
+# Stream Vy Performance Audit Report
+
+> **Historical record — not a description of the current product.**
+>
+> These measurements were taken against a fixture-driven prototype with six hardcoded movies, no catalogue API, no player, and a 3-test suite. It is not a measurement of the current application. Kept because the image and bundle optimizations described here are still in the code; the numbers are not current. See [performance](performance.md).
 
 ## Scope and conclusion
 
-This audit evaluated the current FreeStream WebDev prototype, not a production streaming system. The homepage was measurable. Search, browse, movie detail, watchlist, player, database queries, search service latency, and cache-hit rate are not implemented in the current checkpoint, so those surfaces are reported as **not available**, not estimated. No feature work was added.
+This audit evaluated the current Stream Vy WebDev prototype, not a production streaming system. The homepage was measurable. Search, browse, movie detail, watchlist, player, database queries, search service latency, and cache-hit rate are not implemented in the current checkpoint, so those surfaces are reported as **not available**, not estimated. No feature work was added.
 
 The highest-impact measured issue was image payload. The second was unnecessary client/runtime weight from an unused global tooltip provider. Both were addressed without adding arbitrary caching or changing product behavior.
 

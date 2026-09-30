@@ -1,100 +1,125 @@
-# FreeStream Production Architecture
+# Stream Vy Architecture
 
-## Decision summary
+## What is actually running
 
-FreeStream should use a modular monolith first. The browser-facing application, API procedures, rights policy, ingestion workflows, and admin capabilities remain in one deployable codebase with strict module boundaries. Background jobs and media processing run as separately scalable workers only when their workload requires it.
-
-The current WebDev implementation is a visual prototype. It uses React, Tailwind, tRPC, Manus OAuth, and a MySQL-compatible database scaffold. Production work must replace fixture content with provider-backed records and must not expose playback controls until rights validation succeeds.
-
-## Proposed stack
-
-| Concern          | Production choice                                                   | Reason                                                        |
-| ---------------- | ------------------------------------------------------------------- | ------------------------------------------------------------- |
-| Web application  | Next.js or equivalent SSR-capable React runtime                     | Crawlable movie pages and low client JavaScript               |
-| API              | TypeScript procedures behind a versioned API boundary               | Typed contracts and modular authorization                     |
-| Primary database | PostgreSQL with Prisma or Drizzle                                   | Relational integrity, indexing, and auditability              |
-| Search           | Meilisearch initially; OpenSearch if scale or analytics requires it | Typo tolerance and faceted search                             |
-| Cache            | Redis-compatible service                                            | Sessions, rate limits, hot catalogue responses, queues        |
-| Media storage    | S3-compatible object storage                                        | Durable source and derivative storage                         |
-| Media delivery   | CDN with signed URLs                                                | Efficient delivery without proxying video through the app     |
-| Video            | Managed video provider or FFmpeg worker pipeline                    | HLS/DASH packaging, thumbnails, captions, DRM integration     |
-| Auth             | Managed OAuth plus verified email identity                          | Secure session lifecycle and lower credential risk            |
-| Observability    | Structured logs, metrics, traces, error tracking                    | Playback, ingestion, and rights operations require visibility |
-
-## Boundaries
+Three processes, in this order:
 
 ```text
-Browser / crawlers
-        |
-SSR web + API gateway
-        |
-+-------+----------+-------------+-------------+
-|       |          |             |             |
-Catalog Search  Rights       Accounts       Admin
-|       |          |             |             |
-+-------+----------+-------------+-------------+
-        |
-PostgreSQL  Redis  Object storage / CDN  Job queue
-        |
-Metadata providers | Video providers | Email | Analytics
+Browser
+  |
+  |  static assets
+  v
+Vite SPA  (client/, React 19 + Wouter + Tailwind 4)
+  |                                    |
+  |  same-origin /api in dev           |  cross-origin /api in production
+  v                                    v
+Express wrapper  --proxy /api-->  Flask backend  (movie-backend/app.py)
+server/_core/index.ts                    |
+  |                                      +--> authdb.Store  (Postgres or SQLite)
+  |                                      +--> catalog_service / tmdb_service
+  |                                      +--> stream_providers
+  |                                      +--> taste
+  v
+Archive.org (relayed) | third-party embed iframes | TMDB
 ```
 
-Metadata, media, and rights are separate domains. A movie row describes a work. A media asset describes a file or derivative. A playback source describes a provider endpoint. A rights grant determines whether that source may be exposed for a viewer, territory, platform, and date.
+The Express wrapper is not scaffolding and should not be deleted. It serves the
+built SPA in production, attaches Vite middleware in development, proxies `/api`
+to Flask, and applies the request rate limiting. The client never talks to Flask
+directly in dev — Vite's proxy keeps every request same-origin.
 
-## Runtime flows
+## Frontend
 
-A public movie request loads canonical metadata server-side, resolves availability without revealing temporary playback URLs, and emits structured metadata. A play request creates a short-lived playback session after the rights policy confirms territory, dates, platform, account state, and provider restrictions. The application returns only the provider-specific signed access token or URL.
+- React 19 SPA, client-side routing with Wouter. No SSR.
+- Requests go through the typed services in `client/src/services/*`, which
+  resolve a base URL from `VITE_MOVIE_API_BASE_URL` and attach the bearer token.
+- Context providers in `client/src/main.tsx`: `LocalSessionProvider` (offline
+  demo), `AuthProvider` (real account), `ActiveProfileProvider` (household
+  profile).
+- **There is no tRPC client and no react-query cache.** The template shipped one
+  pointed at `/api/trpc`; nothing in the product used it, and because the `/api`
+  proxy goes to Flask — which serves no `/api/trpc` route — every call through it
+  404'd. It was removed rather than left as a dependency with no caller.
+- `vite.config.ts` is at the repository root. It defines the `@` alias, proxies
+  `/api` to `http://localhost:5000`, writes the SPA to `dist/public`, and bundles
+  the server to `dist/index.js` via esbuild.
 
-Ingestion is idempotent: fetch, validate, normalize, deduplicate, preserve provenance, persist, index, process artwork, and publish only after required metadata and rights checks pass. Video processing is asynchronous and never blocks catalogue browsing.
+## Backend
 
-## Decisions still required
+One Flask app, no blueprints, 46 route rules in `movie-backend/app.py`. It is the
+single source of truth for the provider chain: `stream_providers.resolve()`
+walks an ordered manifest of a direct (Archive.org) tier and an embed tier,
+consults a per-provider health record with cooldowns, and returns the first
+playable source plus the remaining candidates for client-side failover. A
+request only fails once every enabled provider has been attempted.
 
-The team must choose the initial metadata provider, the managed video provider, the primary territories, monetization model, identity provider policy, and whether creator uploads are in MVP. These choices affect contracts, storage, moderation, and compliance.
+Before this module existed, two disjoint provider lists lived in `app.py` and
+`client/src/lib/embedSources.ts` and failover was decided in the browser, one
+click at a time. That is why the client no longer has a "Try another source"
+button as its primary path.
 
-## References
+`catalog_service` re-fetches live titles on every catalogue request, normalizes
+them into one `MediaItem` contract, and persists them write-through to
+`media_items`. That table doubles as the fallback when every upstream call fails.
+There is deliberately no nightly seeder: the catalogue is driven by real traffic.
 
-[1]: https://nextjs.org/docs "Next.js Documentation"
-[2]: https://www.postgresql.org/docs/ "PostgreSQL Documentation"
-[3]: https://www.w3.org/TR/media-source/ "W3C Media Source Extensions"
-[4]: https://www.rfc-editor.org/rfc/rfc7519 "RFC 7519 JSON Web Token"
+## Storage
 
-## Architecture diagram
+`authdb.Store` picks a backend at construction:
+
+| Condition                | Backend                                   |
+| ------------------------ | ----------------------------------------- |
+| `DATABASE_URL` is set    | PostgreSQL via `psycopg` (Neon in practice) |
+| `DATABASE_URL` is unset  | SQLite file at `movie-backend/data/`      |
+
+There is no ORM, no migration framework, and no Neon-specific code path. Schema
+changes are `CREATE TABLE IF NOT EXISTS` statements in the store modules, so
+adding a column means editing the DDL and testing it. That is a real limitation,
+not a design choice: see [data model](data-model.md).
+
+## Data flow: what happens when a viewer presses play
+
+1. The client asks `/api/movies/resolve` with a title, TMDB id, and media type.
+2. The server resolves a record and asks `stream_providers.resolve()`.
+3. A direct catalog hit returns an Archive.org source. The player plays it
+   through `/api/movies/stream`, which relays the bytes so range requests and
+   seeking work. `/api/movies/download` is the explicit download path.
+4. No direct hit means an ordered list of embed candidates. The client renders
+   the first in an iframe and labels the state as an embed, not as native
+   playback.
+5. Every path through this decrements the daily allowance server-side.
+
+## Why there is no search engine, cache, or queue
+
+At a household-and-hundreds-of-titles scale, PostgreSQL indexing and an in-process
+SQLite catalog answer search faster than Meilisearch does, and there is no
+long-running job that would justify a queue or Redis. The previous
+documentation specified all three. They were removed as noise, not deferred:
+if measured load ever justifies them, [roadmap](roadmap.md) says so.
+
+## Deployment split
+
+The SPA is deployed to Vercel (`vercel.json`, `vite build`, output
+`dist/public`, all routes rewritten to `index.html`). The Flask backend is a
+separate Gunicorn service, in practice on Render. Because Vercel hosts no API of
+its own, production browser requests are cross-origin to Flask, which is why
+`ALLOWED_ORIGINS` exists. See [deployment](deployment.md) and
+[environment](environment.md).
+
+## Diagram
 
 ```mermaid
 flowchart TD
-  B[Browser and crawlers] --> W[SSR web and API]
-  W --> C[Catalogue module]
-  W --> A[Account module]
-  W --> R[Rights policy]
-  W --> P[Playback session]
-  C --> DB[(PostgreSQL)]
-  A --> DB
-  R --> DB
-  P --> VP[Authorized video provider]
-  C --> S[(Search index)]
-  C --> CDN[CDN and object storage]
-  J[Background workers] --> DB
-  J --> S
-  J --> CDN
-  J --> MP[Metadata providers]
+  B[Browser] -->|static| V[Vercel / Express-served SPA]
+  V -->|"/api, bearer token"| F[Flask app.py]
+  F --> S[authdb.Store]
+  F --> C[catalog_service]
+  F --> P[stream_providers]
+  F --> T[taste]
+  S --> DB[(Postgres or SQLite)]
+  C --> TMDB[TMDB API]
+  P --> AR[Archive.org, relayed]
+  P --> EM[Third-party embeds]
+  X[Express wrapper] -. proxies /api .-> F
+  X -. serves SPA, rate limits .-> V
 ```
-
-## Audit remediation: portability and scale
-
-### Provider-neutral playback
-
-The domain model must not store provider-specific assumptions in `Movie`, `RightsGrant`, or the public API. Each playback adapter declares capabilities such as HLS, DASH, DRM systems, caption formats, audio tracks, token binding, revocation, and webhook support. A capability matrix is evaluated before a title is published. Provider IDs and manifests remain adapter data behind a stable `PlaybackSource` contract.
-
-Playback provider migration uses dual-read or shadow validation in staging, followed by per-title cutover. New sessions use the selected source while existing sessions honor the original session contract. The system must support at least two approved provider adapters before production claims provider independence.
-
-### CDN and origin rules
-
-Artwork and public derivatives use immutable content hashes in their URLs. CDN cache keys exclude cookies and irrelevant query parameters. Private originals, manifests, caption files, and segments use signed access and origin protection. The CDN uses an origin shield, bounded TTLs for mutable availability metadata, purge-by-version rather than purge-by-wildcard, and egress monitoring by title and provider.
-
-### Work queues and backpressure
-
-Every long-running workflow has an idempotency key, retry policy, dead-letter queue, maximum attempts, timeout, and operator replay action. Media processing and metadata ingestion are separate queues. Queue depth, age of oldest job, and provider rate-limit responses are monitored. Workers apply bounded concurrency so one provider or title cannot exhaust the system.
-
-### Scale triggers
-
-The first scale trigger is measured load, not a premature microservice split. Split a module only when its CPU, memory, queue, database contention, or deployment cadence is independently constrained. Read replicas, search sharding, database partitioning, and regional media delivery are preferred before adding more application services.
