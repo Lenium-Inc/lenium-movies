@@ -7,58 +7,168 @@
       content="width=device-width, initial-scale=1.0, maximum-scale=1"
     />
     <meta name="theme-color" content="#0b0b0e" />
+    
+    <!-- Primary Meta Tags -->
+    <meta name="title" content="Stream Vy - Free Movies Online | Watch Public Domain Films" />
     <meta
       name="description"
-      content="Discover public-domain and openly licensed movies on Stream Vy. Browse curated films, search by title or genre, and build your personal watchlist."
+      content="Stream Vy is the best free movie streaming platform. Watch thousands of public domain and openly licensed films. Browse by genre, search movies, build your watchlist, and enjoy free streaming without ads. Stream Vy movies online now!"
     />
-    <meta name="robots" content="index, follow, max-image-preview:large" />
-    <meta name="googlebot" content="index, follow" />
+    <meta name="keywords" content="free movies, stream movies online, public domain movies, free streaming, vyvirid, stream vy, watch movies free, online cinema, movie database, film streaming" />
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
+    <meta name="googlebot" content="index, follow, max-image-preview:large" />
+    <meta name="bingbot" content="index, follow" />
     <meta name="application-name" content="Stream Vy" />
-    <meta name="author" content="Stream Vy" />
+    <meta name="apple-mobile-web-app-title" content="Stream Vy" />
+    <meta name="author" content="Lenium Inc" />
+    <meta name="creator" content="Lenium Inc" />
+    <meta name="publisher" content="Lenium Inc" />
+    <meta name="revisit-after" content="7 days" />
+    <meta name="language" content="English" />
+    <meta name="distribution" content="global" />
+    <meta name="rating" content="general" />
+    
+    <!-- Canonical URL -->
     <link rel="canonical" href="https://vy-virid.vercel.app/" />
     <link rel="sitemap" type="application/xml" href="/sitemap.xml" />
-
+    
+    <!-- Open Graph / Facebook -->
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Stream Vy" />
-    <meta property="og:title" content="Stream Vy — Discover films worth watching" />
+    <meta property="og:title" content="Stream Vy - Free Movies Online | Watch Public Domain Films" />
     <meta
       property="og:description"
-      content="Discover public-domain and openly licensed movies, browse by genre, and build your personal watchlist."
+      content="Discover and stream thousands of public domain and openly licensed movies for free. Browse by genre, search, build your watchlist. The best free movie streaming platform."
     />
     <meta property="og:url" content="https://vy-virid.vercel.app/" />
     <meta property="og:image" content="https://vy-virid.vercel.app/stream-vy-mark.svg" />
-    <meta property="og:image:alt" content="Stream Vy movie discovery" />
-
-    <meta name="twitter:card" content="summary" />
-    <meta name="twitter:title" content="Stream Vy — Discover films worth watching" />
+    <meta property="og:image:alt" content="Stream Vy - Free Movie Streaming Platform" />
+    <meta property="og:locale" content="en_US" />
+    
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Stream Vy - Free Movies Online | Watch Public Domain Films" />
     <meta
       name="twitter:description"
-      content="Discover public-domain and openly licensed movies, browse by genre, and build your personal watchlist."
+      content="Stream Vy: Watch thousands of free public domain movies online. Browse by genre, search movies, build your watchlist. The ultimate free movie streaming platform."
     />
     <meta name="twitter:image" content="https://vy-virid.vercel.app/stream-vy-mark.svg" />
-
+    <meta name="twitter:creator" content="@StreamVy" />
+    <meta name="twitter:site" content="@StreamVy" />
+    
+    <!-- Schema.org Structured Data -->
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
         "@type": "WebSite",
         "name": "Stream Vy",
+        "alternateName": ["vyvirid", "Vy Virid"],
         "url": "https://vy-virid.vercel.app/",
-        "description": "A movie discovery platform for public-domain and openly licensed films.",
-        "potentialAction": {
-          "@type": "SearchAction",
-          "target": "https://vy-virid.vercel.app/?search={search_term_string}",
-          "query-input": "required name=search_term_string"
+        "description": "Free movie streaming platform with thousands of public domain and openly licensed films",
+        "image": "https://vy-virid.vercel.app/stream-vy-mark.svg",
+        "sameAs": [
+          "https://github.com/Lenium-Inc/lenium-movies"
+        ],
+        "creator": {
+          "@type": "Organization",
+          "name": "Lenium Inc",
+          "url": "https://github.com/Lenium-Inc"
+        },
+        "potentialAction": [
+          {
+            "@type": "SearchAction",
+            "target": {
+              "@type": "EntryPoint",
+              "urlTemplate": "https://vy-virid.vercel.app/?search={search_term_string}"
+            },
+            "query-input": "required name=search_term_string"
+          },
+          {
+            "@type": "ViewAction",
+            "name": "Browse Movies",
+            "target": "https://vy-virid.vercel.app/"
+          }
+        ],
+        "mainEntity": {
+          "@type": "CollectionPage",
+          "name": "Free Movie Streaming Library",
+          "description": "Explore thousands of public domain and openly licensed films",
+          "url": "https://vy-virid.vercel.app/"
         }
       }
     </script>
-
+    
+    <!-- Movie/Video Schema -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "VideoObject",
+        "name": "Stream Vy - Free Movie Streaming",
+        "description": "Stream thousands of public domain movies for free on Stream Vy. Browse, search, and build your personal watchlist.",
+        "thumbnailUrl": "https://vy-virid.vercel.app/stream-vy-mark.svg",
+        "uploadDate": "2026-10-01T00:00:00Z",
+        "duration": "PT0H0M0S"
+      }
+    </script>
+    
+    <!-- Organization Schema -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "Organization",
+        "name": "Stream Vy",
+        "url": "https://vy-virid.vercel.app/",
+        "description": "Free movie streaming platform for public domain and openly licensed films",
+        "image": "https://vy-virid.vercel.app/stream-vy-mark.svg",
+        "sameAs": [
+          "https://github.com/Lenium-Inc/lenium-movies"
+        ],
+        "contact": {
+          "@type": "ContactPoint",
+          "contactType": "Customer Service",
+          "url": "https://vy-virid.vercel.app/terms"
+        }
+      }
+    </script>
+    
+    <!-- Breadcrumb Schema -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "BreadcrumbList",
+        "itemListElement": [
+          {
+            "@type": "ListItem",
+            "position": 1,
+            "name": "Home",
+            "item": "https://vy-virid.vercel.app/"
+          },
+          {
+            "@type": "ListItem",
+            "position": 2,
+            "name": "Browse Movies",
+            "item": "https://vy-virid.vercel.app/"
+          }
+        ]
+      }
+    </script>
+    
+    <!-- Verification & Analytics -->
     <meta
       name="google-site-verification"
       content="j7jpZ4Rw36PBl13aJRvA50xKeobt_LhrirSzDBWUthc"
     />
+    
+    <!-- Icons -->
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="alternate icon" href="/favicon.ico" sizes="32x32" />
-    <title>Stream Vy — Discover films worth watching</title>
+    <link rel="apple-touch-icon" href="/favicon.svg" />
+    
+    <!-- DNS Prefetch -->
+    <link rel="dns-prefetch" href="//www.themoviedb.org" />
+    <link rel="preconnect" href="https://www.themoviedb.org" />
+    
+    <title>Stream Vy - Free Movies Online | Watch Public Domain Films</title>
   </head>
   <body>
     <div id="root"></div>
