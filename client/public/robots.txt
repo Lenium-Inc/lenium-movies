@@ -1,0 +1,12 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /login
+Disallow: /signup
+Disallow: /profile
+Disallow: /profiles
+Disallow: /my-list
+Disallow: /share/
+Disallow: /list/share/
+
+Sitemap: https://vy-virid.vercel.app/sitemap.xml
