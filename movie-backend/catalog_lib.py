@@ -595,6 +595,60 @@ def accept_candidate(
     return title_score is not None and title_score >= 1.0
 
 
+# The season and episode numbers must be *marked*, never bare: a candidate
+# named "Alien 3" or "1917" must not read as S03E01 or S19E17. So the pattern
+# needs an explicit `x`, `e` or the word `episode` between the two numbers.
+_EPISODE_TOKEN = re.compile(
+    r"(?:\b(?:season|series)\s*)?(?:s\s*)?(?P<season>\d{1,2})"
+    r"[\s._-]*(?:x|e(?:pisode)?)[\s._-]*(?P<episode>\d{1,3})\b",
+    re.IGNORECASE,
+)
+
+
+def parse_episode_token(title: str) -> tuple[int, int] | None:
+    """`(season, episode)` encoded in a candidate title, or None.
+
+    Archive.org carries public-domain series as one item per episode, and the
+    naming convention the rips settled on is `Show Name S01E02`, sometimes with
+    a dot, a dash or a space between the two numbers. Reading the token out of
+    the title is the only way to tell "the file for S01E02" from "the file for
+    some other episode of the same show", because the catalog index has no
+    season/episode columns of its own.
+    """
+    match = _EPISODE_TOKEN.search(title or "")
+    if not match:
+        return None
+    season = int(match.group("season"))
+    episode = int(match.group("episode"))
+    if season < 1 or episode < 1:
+        return None
+    return season, episode
+
+
+def episode_query(title: str, season: int, episode: int) -> str:
+    """The title to search the catalog with when a specific episode is wanted."""
+    return f"{title} S{int(season):02d}E{int(episode):02d}"
+
+
+def accept_episode(candidate_title: str, season: int, episode: int) -> bool:
+    """A candidate title names exactly the episode that was asked for.
+
+    This is the guard that makes it safe to look up a series at all. Searching
+    `The Twilight Zone S01E07` returns, among other things, the item for
+    S01E01 -- `match_title` scores that a confident 0.7, because every word of
+    the shorter title appears in the longer one. Accepting it would serve the
+    wrong episode under the right title, which is worse than the embed this
+    change is trying to avoid: the viewer cannot see the mistake until the
+    episode plays.
+
+    A candidate with no token at all is rejected too. A whole-season file is not
+    the episode that was requested, and it cannot be seeked to the right one
+    from here.
+    """
+    token = parse_episode_token(candidate_title)
+    return token == (int(season), int(episode))
+
+
 def match_title(requested: str, candidate_title: str) -> float:
     """Confidence the requested title refers to the candidate film.
 

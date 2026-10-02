@@ -12,8 +12,8 @@ still breaks in production:
 * Probing embeds before the direct catalog turned every request into a walk of
   the whole chain, so a single dead provider cost a viewer several seconds even
   when a perfectly good MP4 was sitting in the catalog.
-* Sequential probes with no total budget meant a fully-down chain of seven
-  providers blocked the worker for ~35s -- past the client's own 30s resolve
+* Sequential probes with no total budget meant a fully-down chain blocked the
+  worker past the client's own resolve timeout -- past the client's own 30s resolve
   timeout, so the request died before the chain had finished and the viewer was
   told "unavailable" when the answer was merely "slow".
 * A benched provider that never got benched, or one that never recovered, is
@@ -27,6 +27,8 @@ no Flask, no framework -- same harness style as test_hardening.py.
 """
 
 import os
+import pathlib
+import re
 import sys
 import time
 import traceback
@@ -127,7 +129,7 @@ def test_manifest_hostnames_are_unique():
 
 
 def test_env_order_reorders_without_dropping_providers():
-    os.environ["STREAM_PROVIDER_ORDER"] = "multiembed, vidsrc"
+    os.environ["STREAM_PROVIDER_ORDER"] = "autoembed, vidsrc-pro"
     try:
         ids = [p.id for p in stream_providers.active_embed_providers()]
     finally:
@@ -135,27 +137,27 @@ def test_env_order_reorders_without_dropping_providers():
     assert set(ids) == {p.id for p in stream_providers.EMBED_PROVIDERS}, (
         "a partial STREAM_PROVIDER_ORDER must not remove the providers it omits"
     )
-    assert ids[:2] == ["multiembed", "vidsrc"], f"configured order not honoured: {ids}"
+    assert ids[:2] == ["autoembed", "vidsrc-pro"], f"configured order not honoured: {ids}"
 
 
 def test_env_disable_removes_a_provider():
-    os.environ["STREAM_PROVIDER_DISABLED"] = "vidsrc, autoembed"
+    os.environ["STREAM_PROVIDER_DISABLED"] = "vidsrc-pro, autoembed"
     try:
         ids = {p.id for p in stream_providers.active_embed_providers()}
     finally:
         del os.environ["STREAM_PROVIDER_DISABLED"]
-    assert "vidsrc" not in ids and "autoembed" not in ids
-    assert "vidsrc_to" in ids
+    assert "vidsrc-pro" not in ids and "autoembed" not in ids
+    assert "embed-su" in ids
 
 
 def test_unknown_ids_in_env_order_degrade_to_the_default_chain():
     # A typo in a dashboard variable must not take playback down.
-    os.environ["STREAM_PROVIDER_ORDER"] = "vidsrc,definitely_not_a_provider"
+    os.environ["STREAM_PROVIDER_ORDER"] = "vidsrc-pro,definitely_not_a_provider"
     try:
         ids = [p.id for p in stream_providers.active_embed_providers()]
     finally:
         del os.environ["STREAM_PROVIDER_ORDER"]
-    assert ids[0] == "vidsrc"
+    assert ids[0] == "vidsrc-pro"
     assert set(ids) == {p.id for p in stream_providers.EMBED_PROVIDERS}
 
 
@@ -175,20 +177,74 @@ def test_build_addresses_movie_and_tv_for_every_provider():
         assert provider.build(603, "movie", 1, 1), f"{provider.id} has no movie url"
         tv = provider.build(603, "tv", 2, 5)
         assert tv, f"{provider.id} has no tv url"
-        if provider.id == "autoembed":
-            assert "season=2" in tv and "episode=5" in tv
-        elif provider.id == "multiembed":
-            assert "season=2" in tv and "episode=5" in tv
-        else:
-            assert tv.endswith("/2/5"), f"{provider.id} tv url lost the episode: {tv}"
+        assert tv.endswith("/2/5"), f"{provider.id} tv url lost the episode: {tv}"
+
+
+def test_build_produces_the_exact_urls_the_client_selector_offers():
+    """The URL shapes both sides depend on, pinned on both sides.
+
+    These strings are duplicated in `client/src/lib/streamProviders.ts` and
+    asserted there in `embedSources.test.ts`. If the two ever disagree the title
+    is playable to the server and unaddressable for the viewer -- the selector
+    shows a source whose frame 404s and nothing says why -- so the expectation
+    lives here as well as there.
+    """
+    expected = {
+        ("vidsrc-pro", "movie"): "https://vidsrc.pro/embed/movie/603",
+        ("vidsrc-pro", "tv"): "https://vidsrc.pro/embed/tv/603/2/5",
+        ("embed-su", "movie"): "https://embed.su/embed/movie/603",
+        ("embed-su", "tv"): "https://embed.su/embed/tv/603/2/5",
+        ("vidsrc-cc", "movie"): "https://vidsrc.cc/v2/embed/movie/603",
+        ("vidsrc-cc", "tv"): "https://vidsrc.cc/v2/embed/tv/603/2/5",
+        ("mycima-api", "movie"): "https://mycima.vidsrc.pm/embed/movie/603",
+        ("mycima-api", "tv"): "https://mycima.vidsrc.pm/embed/tv/603/2/5",
+        ("autoembed", "movie"): "https://player.autoembed.cc/embed/movie/603",
+        ("autoembed", "tv"): "https://player.autoembed.cc/embed/tv/603/2/5",
+    }
+    for provider in stream_providers.EMBED_PROVIDERS:
+        for media_type in ("movie", "tv"):
+            assert provider.build(603, media_type, 2, 5) == expected[(provider.id, media_type)], (
+                f"{provider.id} {media_type} url drifted from the client manifest"
+            )
+
+
+def test_manifest_matches_the_client_manifest_entry_for_entry():
+    """Same providers, same order, same labels and hosts as the client's copy.
+
+    The client builds its source selector from this manifest, so a provider added
+    on only one side is a title the viewer is offered a dead source for, or a
+    source the server never tries. The parity assertion lives in
+    `embedSources.test.ts`; this is the same contract seen from Python.
+    """
+    client_manifest = (
+        pathlib.Path(__file__).resolve().parents[1]
+        / "client"
+        / "src"
+        / "lib"
+        / "streamProviders.ts"
+    ).read_text(encoding="utf-8")
+    # Quote-agnostic on purpose: the manifest is a TypeScript file that Prettier
+    # reformats, and a regex pinned to one quote style would fail the build over
+    # a formatting change rather than over a provider change.
+    entries = re.findall(
+        r'id:\s*["\']([^"\']+)["\'],\s*name:\s*["\']([^"\']+)["\']',
+        client_manifest,
+    )
+    assert entries, "no providers parsed out of the client manifest"
+    assert [(p.id, p.label) for p in stream_providers.EMBED_PROVIDERS] == entries
+    # The movie URL of each provider, one per entry, is what names its host.
+    # (TV URLs repeat the same host, so matching on them would double every one
+    # and make the comparison vacuous.)
+    hosts = re.findall(r"https://([^/`]+)/(?:v2/)?embed/movie/", client_manifest)
+    assert [p.host for p in stream_providers.EMBED_PROVIDERS] == hosts
 
 
 def test_is_embed_host_matches_subdomains_but_not_lookalikes():
-    assert stream_providers.is_embed_host("vidsrc.me")
-    assert stream_providers.is_embed_host("www.vidsrc.me")
-    assert stream_providers.is_embed_host("VIDSRC.ME")
-    assert not stream_providers.is_embed_host("notvidsrc.me")
-    assert not stream_providers.is_embed_host("vidsrc.me.evil.com")
+    assert stream_providers.is_embed_host("vidsrc.pro")
+    assert stream_providers.is_embed_host("www.vidsrc.pro")
+    assert stream_providers.is_embed_host("VIDSRC.PRO")
+    assert not stream_providers.is_embed_host("notvidsrc.pro")
+    assert not stream_providers.is_embed_host("vidsrc.pro.evil.com")
     assert not stream_providers.is_embed_host("")
 
 
@@ -221,6 +277,145 @@ def test_direct_hit_still_returns_a_fallback_chain_for_mid_play_death():
     assert all(c.verified is False for c in resolution.candidates[1:]), (
         "unprobed embeds must not be presented as verified candidates"
     )
+
+
+# ---------------------------------------------------------------------------
+# Series: episode-addressable direct sources
+# ---------------------------------------------------------------------------
+#
+# Series used to skip the direct phase entirely, so every episode resolved to a
+# third-party embed. An embed is a cross-origin iframe that reports no playback
+# events, so an episode played that way never produced a progress record -- which
+# is what made Continue Watching unusable for series rather than merely sparse.
+# These cover the fix and, more importantly, the guard that keeps it from serving
+# the wrong episode under the right title.
+
+
+def test_episode_direct_hit_answers_without_probing_an_embed():
+    _reset()
+    chain = _Chain()
+    resolution = _resolve(
+        chain,
+        direct=_direct(title="The Twilight Zone S01E07"),
+        media_type="tv",
+        title="The Twilight Zone",
+        year=None,
+        season=1,
+        episode=7,
+    )
+
+    assert resolution.ok
+    assert resolution.winner.id == stream_providers.DIRECT_PROVIDER_ID
+    assert not resolution.is_embed
+    assert chain.probed == [], f"embed probes ran despite a direct episode hit: {chain.probed_ids}"
+
+
+def test_a_series_lookup_asks_the_catalog_for_that_episode():
+    # The query is what makes the catalog answerable at all: a show name is
+    # ambiguous across episodes, so the season/episode has to be part of it.
+    _reset()
+    resolution = _resolve(
+        _Chain(),
+        direct=_direct(title="The Twilight Zone S01E07"),
+        media_type="tv",
+        title="The Twilight Zone",
+        year=None,
+        season=1,
+        episode=7,
+    )
+
+    queried = [title for title, _year, _refresh in resolution.lookup_calls]
+    assert queried == ["The Twilight Zone S01E07"], f"unexpected catalog query: {queried}"
+
+
+def test_a_movie_is_still_queried_by_title_alone():
+    # The episode suffix must not leak into the movie path.
+    _reset()
+    resolution = _resolve(_Chain(), direct=_direct(title="The Matrix"))
+
+    queried = [title for title, _year, _refresh in resolution.lookup_calls]
+    assert queried == ["The Matrix"], f"unexpected catalog query: {queried}"
+
+
+def test_a_candidate_naming_another_episode_is_refused():
+    # The failure this guards: the search for S01E07 returns the S01E01 item,
+    # `match_title` scores that a confident 0.7 because every word of the
+    # shorter title appears in the longer one, and the viewer is handed the
+    # wrong episode. It must fall through to the embed instead.
+    _reset()
+    chain = _Chain()
+    resolution = _resolve(
+        chain,
+        direct=_direct(title="The Twilight Zone S01E01"),
+        media_type="tv",
+        title="The Twilight Zone",
+        year=None,
+        season=1,
+        episode=7,
+    )
+
+    assert resolution.ok
+    assert resolution.is_embed, "a wrong-episode candidate must not win"
+    assert chain.probed_ids, "the embed chain should have been walked instead"
+    outcomes = [a["outcome"] for a in resolution.attempts if a["id"] == stream_providers.DIRECT_PROVIDER_ID]
+    assert "rejected" in outcomes, f"expected a recorded rejection, got {outcomes}"
+
+
+def test_a_whole_season_file_is_refused_for_one_episode():
+    # No token at all is not "close enough": a season file cannot be seeked to
+    # the requested episode from here.
+    _reset()
+    resolution = _resolve(
+        _Chain(),
+        direct=_direct(title="The Twilight Zone Season 1"),
+        media_type="tv",
+        title="The Twilight Zone",
+        year=None,
+        season=1,
+        episode=7,
+    )
+
+    assert resolution.is_embed, "a season file must not be served for an episode"
+
+
+def test_a_refused_episode_does_not_bench_the_direct_catalog():
+    # A rejection proves the catalog can answer for this show. Benching it
+    # would take the direct catalog off the table for the whole cooldown and
+    # send every later episode of that series to an embed.
+    _reset()
+    _resolve(
+        _Chain(),
+        direct=_direct(title="The Twilight Zone S01E01"),
+        media_type="tv",
+        title="The Twilight Zone",
+        year=None,
+        season=1,
+        episode=7,
+    )
+
+    record = stream_providers.HEALTH.get(stream_providers.DIRECT_PROVIDER_ID)
+    assert record.available(time.time()), (
+        "a wrong-episode rejection must not count as a direct-catalog failure"
+    )
+
+
+def test_an_episode_miss_still_benches_the_direct_catalog():
+    # The mirror of the test above: a genuine absence is still expensive to
+    # recompute and must keep its longer cooldown.
+    _reset()
+    for _ in range(stream_providers.FAILURE_THRESHOLD):
+        _resolve(
+            _Chain(),
+            direct=None,
+            media_type="tv",
+            title="The Twilight Zone",
+            year=None,
+            season=1,
+            episode=7,
+        )
+
+    record = stream_providers.HEALTH.get(stream_providers.DIRECT_PROVIDER_ID)
+    assert not record.available(time.time()), "a real miss should bench the direct catalog"
 
 
 def test_embed_is_attempted_when_the_direct_catalog_misses():
@@ -261,15 +456,18 @@ def test_direct_lookup_raising_does_not_take_playback_down():
     assert outcomes[stream_providers.DIRECT_PROVIDER_ID] == "error"
 
 
-def test_tv_skips_the_direct_catalog_entirely():
-    # Archive.org entries are scraped per movie title; asking it for a tv
-    # episode can only return the wrong thing.
+def test_a_tv_entry_naming_no_episode_is_not_played():
+    # This used to be skipped as a phase ("tv never queries the direct
+    # catalog"). Episodes are addressable now, but only when the entry says
+    # which episode it is -- so a catalog entry with no episode token is still
+    # refused rather than handed to a viewer as if it were the episode they
+    # asked for.
     _reset()
-    resolution = _resolve(_Chain(), direct=_direct(), media_type="tv")
+    resolution = _resolve(_Chain(), direct=_direct(title="The Twilight Zone"), media_type="tv")
 
-    assert resolution.lookup_calls == [], f"direct catalog queried for tv: {resolution.lookup_calls}"
+    assert resolution.is_embed
     outcomes = {a["id"]: a["outcome"] for a in resolution.attempts}
-    assert outcomes[stream_providers.DIRECT_PROVIDER_ID] == "skipped"
+    assert outcomes[stream_providers.DIRECT_PROVIDER_ID] == "rejected"
 
 
 # ---------------------------------------------------------------------------
@@ -279,20 +477,20 @@ def test_tv_skips_the_direct_catalog_entirely():
 
 def test_dead_provider_is_skipped_and_benched_after_repeated_failures():
     _reset()
-    dead = {"vidsrc": False}
+    dead = {"vidsrc-pro": False}
 
     for _ in range(stream_providers.FAILURE_THRESHOLD):
         _resolve(_Chain(dead), direct=None)
 
-    record = stream_providers.HEALTH.get("vidsrc")
+    record = stream_providers.HEALTH.get("vidsrc-pro")
     assert record.consecutive_failures >= stream_providers.FAILURE_THRESHOLD
     assert not record.available(time.time()), "a repeatedly dead provider was never benched"
 
     chain = _Chain(dead)
     resolution = _resolve(chain, direct=None)
-    assert "vidsrc" not in chain.probed_ids, "a benched provider was re-probed immediately"
+    assert "vidsrc-pro" not in chain.probed_ids, "a benched provider was re-probed immediately"
     outcomes = {a["id"]: a["outcome"] for a in resolution.attempts}
-    assert outcomes["vidsrc"] == "benched"
+    assert outcomes["vidsrc-pro"] == "benched"
 
 
 def test_a_provider_that_recovers_is_probed_again_and_clears_its_record():
@@ -302,24 +500,24 @@ def test_a_provider_that_recovers_is_probed_again_and_clears_its_record():
     # re-admit a provider is a permanent outage caused by one bad minute.
     _reset()
     for _ in range(stream_providers.FAILURE_THRESHOLD):
-        _resolve(_Chain({"vidsrc": False}), direct=None)
+        _resolve(_Chain({"vidsrc-pro": False}), direct=None)
 
-    record = stream_providers.HEALTH.get("vidsrc")
+    record = stream_providers.HEALTH.get("vidsrc-pro")
     assert not record.available(time.time()), "the provider was never benched"
 
     # Let the whole cooldown elapse: both the circuit and the cached negative
     # are on the same clock, so a real expiry re-probes.
     record.open_until = 0.0
     with stream_providers._probe_lock:
-        stamp, ok = stream_providers._probe_cache["vidsrc"]
-        stream_providers._probe_cache["vidsrc"] = (
+        stamp, ok = stream_providers._probe_cache["vidsrc-pro"]
+        stream_providers._probe_cache["vidsrc-pro"] = (
             stamp - stream_providers.COOLDOWN_SECONDS - 1.0,
             ok,
         )
-    resolution = _resolve(_Chain({"vidsrc": True}), direct=None)
+    resolution = _resolve(_Chain({"vidsrc-pro": True}), direct=None)
 
     assert resolution.ok
-    recovered = stream_providers.HEALTH.get("vidsrc")
+    recovered = stream_providers.HEALTH.get("vidsrc-pro")
     assert recovered.consecutive_failures == 0
     assert recovered.available(time.time())
     assert recovered.last_ok_at > 0.0
@@ -330,16 +528,16 @@ def test_a_benched_provider_is_not_probed_again_during_its_cooldown():
     # moment costs every request in the window a full probe timeout.
     _reset()
     for _ in range(stream_providers.FAILURE_THRESHOLD):
-        _resolve(_Chain({"vidsrc": False}), direct=None)
+        _resolve(_Chain({"vidsrc-pro": False}), direct=None)
 
-    chain = _Chain({"vidsrc": True})
+    chain = _Chain({"vidsrc-pro": True})
     _resolve(chain, direct=None)
-    assert "vidsrc" not in chain.probed_ids, "a benched provider was probed inside its cooldown"
+    assert "vidsrc-pro" not in chain.probed_ids, "a benched provider was probed inside its cooldown"
 
 
 def test_health_resets_cooldown_on_success():
     _reset()
-    record = stream_providers.HEALTH.get("vidsrc")
+    record = stream_providers.HEALTH.get("vidsrc-pro")
     record.record_failure(time.time(), "boom", stream_providers.COOLDOWN_SECONDS, 1)
     assert not record.available(time.time())
 

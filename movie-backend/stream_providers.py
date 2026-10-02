@@ -51,6 +51,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Iterable
 
+import catalog_lib
 from runtime_config import load_env_file, ssl_context
 
 load_env_file()
@@ -58,8 +59,8 @@ load_env_file()
 UA = "Mozilla/5.0 (FreeStream-movie-backend; +http://localhost:5000)"
 
 #: Character class a TMDB id (or manifest-supplied id) must match before it is
-#: allowed anywhere in a provider URL. Mirrors `safeId` in
-#: `client/src/lib/embedSources.ts`; the two must stay identical.
+#: allowed anywhere in a provider URL. Mirrors `safeStreamId` in
+#: `client/src/lib/streamProviders.ts`; the two must stay identical.
 _SAFE_ID_PATTERN = re.compile(r"[A-Za-z0-9-]+")
 
 # ---------------------------------------------------------------------------
@@ -80,10 +81,17 @@ class EmbedProvider:
     host: str
     priority: int
 
+    #: Path segment for a series. The default is the overwhelmingly common
+    #: `/embed/...` shape; vidsrc.cc is the one provider served under `/v2`,
+    #: which is exactly the kind of per-host exception that made the old
+    #: convention-based builder drift, so it is declared here instead of
+    #: inferred from the provider id.
+    path_prefix: str = "/embed"
+
     def build(self, tmdb_id: int | str, media_type: str, season: int, episode: int) -> str:
         """Addressable URL for this provider, or "" if the target cannot be keyed.
 
-        URL shapes are duplicated verbatim in `client/src/lib/embedSources.ts`.
+        URL shapes are duplicated verbatim in `client/src/lib/streamProviders.ts`.
         That duplication is deliberate but fragile, so the two are asserted
         against each other in `embedSources.test.ts`: a provider whose builder
         drifts here is a title the backend will hand to the player and the
@@ -93,25 +101,9 @@ class EmbedProvider:
         if not safe:
             return ""
 
-        if self.id == "autoembed":
-            if media_type == "tv":
-                return f"https://{self.host}/embed/tv/{safe}?season={season}&episode={episode}"
-            return f"https://{self.host}/embed/movie/tmdb/{safe}"
-
-        if self.id == "multiembed":
-            if media_type == "tv":
-                return (
-                    f"https://{self.host}/directstream.php"
-                    f"?video_id={safe}&tmdb=1&season={season}&episode={episode}"
-                )
-            return f"https://{self.host}/directstream.php?video_id={safe}&tmdb=1"
-
-        # vidsrc.cc is served under /v2 while the other vidsrc hosts are not.
-        # Building these by convention is how the two drifted in the first place.
-        prefix = "/v2/embed" if self.id == "vidsrc_alt" else "/embed"
         if media_type == "tv":
-            return f"https://{self.host}{prefix}/tv/{safe}/{season}/{episode}"
-        return f"https://{self.host}{prefix}/movie/{safe}"
+            return f"https://{self.host}{self.path_prefix}/tv/{safe}/{season}/{episode}"
+        return f"https://{self.host}{self.path_prefix}/movie/{safe}"
 
 
 def _safe_id(value: object) -> str:
@@ -119,8 +111,8 @@ def _safe_id(value: object) -> str:
 
     `/api/get-stream` validates with `_parse_tmdb_id`, but this registry is
     also driven by manifest data and must not be the weaker link. The character
-    class matches the TypeScript `safeId` exactly so a value accepted by one
-    side is never rejected by the other.
+    class matches the TypeScript `safeStreamId` exactly so a value accepted by
+    one side is never rejected by the other.
     """
     if value is None:
         return ""
@@ -128,14 +120,21 @@ def _safe_id(value: object) -> str:
     return text if text and _SAFE_ID_PATTERN.fullmatch(text) else ""
 
 
+#: Ordered chain. Priority is the failover order and is asserted against
+#: `client/src/lib/streamProviders.ts` in `embedSources.test.ts` -- the client
+#: selector is generated from this same order, so the two cannot disagree about
+#: which source a viewer is offered first.
+#:
+#: Labels say what a source *is* rather than counting it. "Server 3" told a
+#: viewer nothing about the four hosts behind it and gave them no reason to try
+#: the next one when the frame went blank; the label now carries the quality
+#: tier and the language/subtitle audience that actually differs between them.
 EMBED_PROVIDERS: tuple[EmbedProvider, ...] = (
-    EmbedProvider("vidsrc", "Server 1", "vidsrc.me", 10),
-    EmbedProvider("vidsrc_alt", "Server 2", "vidsrc.cc", 20),
-    EmbedProvider("vidsrc_to", "Server 3", "vidsrc.to", 30),
-    EmbedProvider("autoembed", "Server 4", "autoembed.to", 40),
-    EmbedProvider("mycima", "Server 5", "mycima.tv", 50),
-    EmbedProvider("2embed", "Server 6", "2embed.org", 60),
-    EmbedProvider("multiembed", "Server 7", "multiembed.mov", 70),
+    EmbedProvider("vidsrc-pro", "Primary HD (Auto-Quality & Subs)", "vidsrc.pro", 10),
+    EmbedProvider("embed-su", "Server Alpha (Fast HLS)", "embed.su", 20),
+    EmbedProvider("vidsrc-cc", "Server Beta (Multi-Subtitles)", "vidsrc.cc", 30, "/v2/embed"),
+    EmbedProvider("mycima-api", "Mycima / ArabEmbed", "mycima.vidsrc.pm", 40),
+    EmbedProvider("autoembed", "Server Gamma (Backup)", "player.autoembed.cc", 50),
 )
 
 DIRECT_PROVIDER_ID = "archive_direct"
@@ -217,11 +216,12 @@ EMBED_PROBE_TIMEOUT_SECONDS = 5.0
 #: every request.
 EMBED_PROBE_TTL_SECONDS = 300.0
 #: Ceiling on the embed phase of a single resolution. Probes are sequential, so
-#: without this a fully-down chain of seven providers would block the worker for
-#: `7 * EMBED_PROBE_TIMEOUT_SECONDS` -- past the client-side resolve timeout, so
+#: without this a fully-down chain of five providers would block the worker for
+#: `5 * EMBED_PROBE_TIMEOUT_SECONDS` -- past the client-side resolve timeout, so
 #: the request would die before the chain had even finished. The budget is spent
 #: in priority order: providers earlier in the chain are guaranteed a probe,
-#: and only the tail is ever cut short.
+#: and only the tail is ever cut short. Sized for the five-provider manifest --
+#: probing three of five inside 12s beats returning nothing at all.
 EMBED_PHASE_BUDGET_SECONDS = 12.0
 
 
@@ -444,7 +444,7 @@ def resolve_direct(
     touching the network.
 
     The embed phase is bounded by `EMBED_PHASE_BUDGET_SECONDS`. Probes are
-    sequential, so an unbounded walk of seven dead providers would exceed the
+    sequential, so an unbounded walk of dead providers would exceed the
     client's resolve timeout and return nothing at all -- worse than a shorter
     chain that answers. Priority order is preserved under the budget: the head
     of the chain is always probed, only the tail can be cut.
@@ -454,21 +454,54 @@ def resolve_direct(
     deadline = time.monotonic() + EMBED_PHASE_BUDGET_SECONDS
 
     # ---- Phase 1: direct catalog -----------------------------------------
-    # Only reachable for movies the catalog can actually be keyed by. A title
-    # with extra requirements (subtitles, a specific quality tier) is not the
-    # one Archive.org was scraped for.
-    if media_type != "tv" and title and not tuple(extra_requirements):
+    # A title with extra requirements (subtitles, a specific quality tier) is not
+    # the one Archive.org was scraped for.
+    #
+    # Series used to be excluded outright (`media_type != "tv"`), because the
+    # catalog is keyed by title and a show name does not identify one episode.
+    # That made every episode embed-only, and an embed reports no playback
+    # events, so no progress was ever recorded for a series -- Continue Watching
+    # could only ever fill from films. Archive.org indexes public-domain series
+    # one item per episode, titled `Show S01E02`, so an episode is addressable
+    # after all: ask for that exact query, then refuse anything whose title does
+    # not name the same episode.
+    if title and not tuple(extra_requirements):
+        wants_episode = media_type == "tv"
+        lookup_title = (
+            catalog_lib.episode_query(title, season, episode) if wants_episode else title
+        )
         record = HEALTH.get(DIRECT_PROVIDER_ID)
         if record.available(now):
             direct_entry = None
             try:
-                direct_entry = direct_lookup(title, year, refresh=refresh)
+                direct_entry = direct_lookup(lookup_title, year, refresh=refresh)
             except Exception as error:  # noqa: BLE001 - one provider failing is not fatal
                 attempts.append(
                     {"id": DIRECT_PROVIDER_ID, "kind": "direct", "outcome": "error", "detail": type(error).__name__}
                 )
             else:
-                if direct_entry and direct_entry.get("stream_url"):
+                wrong_episode = bool(
+                    direct_entry
+                    and direct_entry.get("stream_url")
+                    and wants_episode
+                    and not catalog_lib.accept_episode(
+                        direct_entry.get("title") or "", season, episode
+                    )
+                )
+                if wrong_episode:
+                    # A confident title match on the wrong episode. Left to the
+                    # generic "empty" path this would look like a catalog miss
+                    # and bench the provider, hiding a title that does have a
+                    # direct file under its correct name.
+                    attempts.append(
+                        {
+                            "id": DIRECT_PROVIDER_ID,
+                            "kind": "direct",
+                            "outcome": "rejected",
+                            "detail": "candidate does not name the requested episode",
+                        }
+                    )
+                elif direct_entry and direct_entry.get("stream_url"):
                     record.record_success(now)
                     winner = ResolvedProvider(
                         DIRECT_PROVIDER_ID,
@@ -479,12 +512,18 @@ def resolve_direct(
                     )
                     attempts.append({"id": DIRECT_PROVIDER_ID, "kind": "direct", "outcome": "ok"})
                     return Resolution(winner, [winner] + _unprobed_embeds(tmdb_id, media_type, season, episode), attempts)
-                attempts.append(
-                    {"id": DIRECT_PROVIDER_ID, "kind": "direct", "outcome": "empty", "detail": "no direct source"}
-                )
-                # A miss is expensive to recompute (a full scrape), so it is
-                # benched for longer than a transport blip.
-                record.record_failure(now, "no direct source", DIRECT_MISS_COOLDOWN_SECONDS, FAILURE_THRESHOLD)
+                else:
+                    attempts.append(
+                        {"id": DIRECT_PROVIDER_ID, "kind": "direct", "outcome": "empty", "detail": "no direct source"}
+                    )
+                    # A miss is expensive to recompute (a full scrape), so it is
+                    # benched for longer than a transport blip. Only a real miss
+                    # benches it: a wrong-episode rejection proves the catalog
+                    # answerable this show, and benching on that would take the
+                    # direct catalog off the table for the whole cooldown.
+                    record.record_failure(
+                        now, "no direct source", DIRECT_MISS_COOLDOWN_SECONDS, FAILURE_THRESHOLD
+                    )
         else:
             attempts.append({"id": DIRECT_PROVIDER_ID, "kind": "direct", "outcome": "benched", "detail": record.last_error})
     else:

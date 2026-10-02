@@ -5,6 +5,7 @@ import urllib.parse
 from typing import Optional, Dict, Any, List
 
 from runtime_config import ssl_context, tmdb_api_key
+import stream_providers
 # The genre id -> name map is owned by the recommender, which needs it to score
 # the list endpoints (those return ids only). Imported rather than duplicated so
 # the two copies cannot drift; the values are unchanged from the original literal.
@@ -423,11 +424,22 @@ def normalize_tmdb_item(item: Dict, media_type: str) -> Optional[Dict]:
     if media_type == "tv":
         seasons_count = item.get("number_of_seasons") or 1
         episodes_count = item.get("number_of_episodes") or 1
-        stream_url = f"https://vidsrc.me/embed/tv?tmdb={tmdb_id}&season=1&episode=1"
     else:
         seasons_count = 1
         episodes_count = 1
-        stream_url = f"https://vidsrc.me/embed/movie?tmdb={tmdb_id}"
+
+    # The catalogue hands out the first embed in the chain so a card has
+    # something to point at before anything is resolved. It used to hardcode
+    # `vidsrc.me`, a host that has been gone for months: every card carried a
+    # dead URL, which is what made a title look unavailable while the provider
+    # chain behind it was perfectly healthy. Built from the manifest instead, so
+    # the field cannot name a retired provider again.
+    stream_url = ""
+    for provider in stream_providers.active_embed_providers():
+        candidate = provider.build(tmdb_id, media_type, 1, 1)
+        if candidate:
+            stream_url = candidate
+            break
 
     genre_ids = item.get("genre_ids") or []
     genres = get_genre_names(genre_ids)

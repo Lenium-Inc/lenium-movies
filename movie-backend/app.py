@@ -118,6 +118,38 @@ def _direct_cache_get(key: str, refresh: bool) -> tuple[bool, dict | None]:
     return False, None
 
 
+# Season payloads, keyed by "id:season" (or "id:latest"). A season's episode list
+# is fixed once it has aired, so this is the one TMDB response on this path that
+# can be held for hours rather than seconds -- and the episode shelf asks for
+# several shows on every page load, so without it every viewer would pay for the
+# same handful of lookups. Misses are never cached, which matters most for the
+# "latest" key: a show with no aired season yet has to start resolving the
+# moment its season drops rather than at the end of a TTL.
+_SEASON_TTL_SECONDS = 6 * 3600
+_season_cache: dict[str, tuple[float, dict | None]] = {}
+
+
+def _image_url(path, size: str) -> str:
+    return f"https://image.tmdb.org/t/p/{size}{path}" if path else ""
+
+
+def _season_cache_get(key: str) -> tuple[dict | None, bool]:
+    record = _season_cache.get(key)
+    if record is None:
+        return None, False
+    stored_at, value = record
+    if (time.time() - stored_at) >= _SEASON_TTL_SECONDS:
+        return None, False
+    return value, True
+
+
+def _season_cache_put(key: str, value: dict | None) -> None:
+    if len(_season_cache) >= _CACHE_MAX_ENTRIES:
+        for stale in list(_season_cache)[: len(_season_cache) // 2]:
+            _season_cache.pop(stale, None)
+    _season_cache[key] = (time.time(), value)
+
+
 def _find_catalog_entry(title: str, year) -> dict | None:
     """Best local (movies.json) match for the requested title/year."""
     requested_year = None
@@ -655,14 +687,25 @@ def resolve_movie():
         if not year and details.get("release_date"):
             year = details["release_date"][:4]
 
-        title_for_direct = ""
-        year = year
+        # Series used to be excluded from the direct catalog outright, by
+        # handing the resolver an empty title. An episode is addressable now --
+        # Archive.org indexes public-domain shows one item per episode -- so the
+        # show's own name is passed instead.
+        title_for_direct = details.get("name") or details.get("original_name") or title
+        # ...but the year is not. `year` here is the show's first-air year, while
+        # the item carrying S01E07 is dated to that episode's own air year, and
+        # `accept_candidate` compares the two directly. Feeding it the show's
+        # start year would reject the correct file for every episode after the
+        # first, so the constraint is dropped for series and the episode token in
+        # the title carries the identity instead.
+        year_for_direct = None
     else:
         seasons_count = 1
         episodes_count = 1
         if not year and details.get("release_date"):
             year = details["release_date"][:4]
         title_for_direct = details.get("title") or title
+        year_for_direct = year
 
     # One provider chain, walked once, for both media types.
     #
@@ -677,7 +720,7 @@ def resolve_movie():
         tmdb_id=tmdb_id,
         media_type=media_type,
         title=title_for_direct,
-        year=year,
+        year=year_for_direct,
         season=season,
         episode=episode,
         refresh=False,
@@ -1047,6 +1090,114 @@ def get_episode_details():
     })
 
 
+@app.route("/api/season", methods=["GET", "OPTIONS"])
+def get_season_details():
+    """A whole season of a series, for the episode-level shelves.
+
+    `/api/episodes` answers "tell me about S01E07" because the watch page needs
+    one episode's title and still. Nothing could answer "what are the newest
+    episodes of the shows on air", which is what the "New episodes" shelf is
+    made of -- and that shelf fans out to several shows per page load, so
+    resolving each episode individually would be one TMDB round trip per card.
+
+    `season` is optional. Omitting it resolves the newest aired season, so the
+    caller does not have to know how many seasons a show has or which one is
+    current, and a show that airs a new season tomorrow is picked up without the
+    shelf having to be taught about it.
+    """
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    parsed = _parse_tmdb_id(request.args.get("tmdb_id"))
+    if parsed is None:
+        return _json_error("Invalid ID", 400)
+
+    raw_season = request.args.get("season")
+    season = None
+    if raw_season is not None:
+        season = request.args.get("season", type=int)
+        if season is None or season < 1:
+            return _json_error("Invalid season", 400)
+
+    cache_key = f"{parsed}:{'latest' if season is None else season}"
+    payload, hit = _season_cache_get(cache_key)
+    if not hit:
+        payload = _build_season_payload(parsed, season)
+        # Only a resolved season is pinned. A cached miss would freeze the
+        # "newest aired season" answer for the whole TTL, so a show that airs a
+        # new season keeps serving the old one for hours after it does -- which
+        # is the one thing this route is asked for.
+        if payload and not payload.get("error"):
+            _season_cache_put(cache_key, payload)
+
+    if payload is None:
+        return _json_error("Season not found", 404)
+    if payload.get("error"):
+        return _json_error(payload["error"], 404)
+    return jsonify({"success": True, **payload})
+
+
+def _build_season_payload(tmdb_id: int, season: int | None) -> dict | None:
+    """Resolve and shape a season, or return None when the show is unknown."""
+    show = tmdb.fetch_media_details(tmdb_id, "tv")
+    if not show:
+        return None
+
+    seasons = [s for s in (show.get("seasons") or []) if s.get("season_number", 0) > 0]
+    if season is None:
+        # Newest first, and an aired season only: TMDB pre-announces upcoming
+        # seasons with no episodes, and a shelf of empty seasons is worse than a
+        # shelf that is one season behind.
+        aired = [s for s in seasons if (s.get("air_date") or "") <= _today_iso()]
+        pool = aired or seasons
+        if not pool:
+            return {"error": "No aired seasons"}
+        season = max(s.get("season_number", 0) for s in pool)
+
+    details = tmdb.fetch_season_details(tmdb_id, season)
+    if not details:
+        return {"error": "Season not found"}
+
+    raw_episodes = details.get("episodes") or []
+    episodes = []
+    for item in raw_episodes:
+        still_path = item.get("still_path")
+        episodes.append(
+            {
+                "season": item.get("season_number", season),
+                "number": item.get("episode_number"),
+                "title": item.get("name") or f"Episode {item.get('episode_number')}",
+                "overview": item.get("overview", ""),
+                "still_path": still_path,
+                "still_url": f"https://image.tmdb.org/t/p/w500{still_path}" if still_path else "",
+                "air_date": item.get("air_date", ""),
+                "runtime": item.get("runtime"),
+                "vote_average": item.get("vote_average"),
+            }
+        )
+
+    return {
+        "show": {
+            "id": tmdb_id,
+            "name": show.get("name") or show.get("original_name") or "",
+            "overview": show.get("overview", ""),
+            "poster_url": _image_url(show.get("poster_path"), "w500"),
+            "backdrop_url": _image_url(show.get("backdrop_path"), "w1280"),
+        },
+        "season": {
+            "number": details.get("season_number", season),
+            "name": details.get("name") or "",
+            "episode_count": len(episodes),
+            "poster_url": _image_url(details.get("poster_path"), "w500"),
+        },
+        "episodes": episodes,
+    }
+
+
+def _today_iso() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
+
+
 @app.route("/api/movies/trending", methods=["GET", "OPTIONS"])
 def get_trending():
     """Fetch trending movies/TV from TMDB (week)."""
@@ -1326,21 +1477,20 @@ def get_media_by_id(id: str):
         result["number_of_episodes"] = details.get("number_of_episodes") or 0
         result["seasons"] = valid_seasons if valid_seasons else seasons
 
-    # Build embed URLs with multiple providers
-    if media_type == "tv":
-        result["embed_urls"] = {
-            "vidsrc": f"https://vidsrc.me/embed/tv?tmdb={tmdb_id}&season=1&episode=1",
-            "vidsrc_cc": f"https://vidsrc.cc/v2/embed/tv/{tmdb_id}/1/1",
-            "embed_su": f"https://embed.su/embed/tv/{tmdb_id}/1/1",
-        }
-        result["default_embed"] = result["embed_urls"]["vidsrc"]
-    else:
-        result["embed_urls"] = {
-            "vidsrc": f"https://vidsrc.me/embed/movie?tmdb={tmdb_id}",
-            "vidsrc_cc": f"https://vidsrc.cc/v2/embed/movie/{tmdb_id}",
-            "embed_su": f"https://embed.su/embed/movie/{tmdb_id}",
-        }
-        result["default_embed"] = result["embed_urls"]["vidsrc"]
+    # Embed URLs for every provider in the chain, keyed by provider id.
+    #
+    # This dict used to be a hand-written literal naming three hosts, one of
+    # which (`vidsrc.me`) no longer resolves, and the client's source selector
+    # was built from the manifest rather than from it -- so the two disagreed and
+    # the retired host still reached the player. It is generated from the
+    # manifest now, so a provider cannot exist on only one side.
+    embed_urls = {}
+    for provider in stream_providers.active_embed_providers():
+        url = provider.build(tmdb_id, media_type, 1, 1)
+        if url:
+            embed_urls[provider.id] = url
+    result["embed_urls"] = embed_urls
+    result["default_embed"] = next(iter(embed_urls.values()), "")
 
     return jsonify(result)
 
