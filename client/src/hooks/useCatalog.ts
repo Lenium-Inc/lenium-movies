@@ -13,6 +13,8 @@ import {
 import { savedListIds, subscribeList, toggleListSave } from "@/services/lists";
 import { useActiveProfile } from "@/context/ActiveProfileContext";
 import { useTasteFeed, useTasteRecorder } from "@/hooks/useTaste";
+import { useContinueWatching } from "@/hooks/useContinueWatching";
+import { toMovie } from "@/lib/media";
 import {
   affinityQueryParams,
   emptyAffinity,
@@ -55,14 +57,20 @@ export const DISCOVER_PAGE_SIZE = 24;
 export type CatalogSort = "trending" | "rating" | "year" | "popularity";
 export type MediaTypeFilter = "all" | "movie" | "tv";
 
-export const CATALOG_SORT_OPTIONS: readonly { value: CatalogSort; label: string }[] = [
+export const CATALOG_SORT_OPTIONS: readonly {
+  value: CatalogSort;
+  label: string;
+}[] = [
   { value: "trending", label: "Trending" },
   { value: "rating", label: "Top Rated" },
   { value: "year", label: "Release Year" },
   { value: "popularity", label: "Most Popular" },
 ];
 
-export const MEDIA_TYPE_OPTIONS: readonly { value: MediaTypeFilter; label: string }[] = [
+export const MEDIA_TYPE_OPTIONS: readonly {
+  value: MediaTypeFilter;
+  label: string;
+}[] = [
   { value: "all", label: "All" },
   { value: "movie", label: "Movie" },
   { value: "tv", label: "TV Show" },
@@ -97,9 +105,13 @@ function applyMediaType(items: Movie[], mediaType: MediaTypeFilter): Movie[] {
   return items.filter(movie => movie.mediaType === mediaType);
 }
 
+/** How a row presents itself. Presentation only -- never which items it holds. */
+export type RowKind = "default" | "score" | "top10";
+
 interface CatalogRows {
   title: string;
   items: Movie[];
+  kind?: RowKind;
 }
 
 interface UseCatalog {
@@ -136,6 +148,12 @@ interface UseCatalog {
    * personalised to show (signed out, or no history yet).
    */
   forYou: Movie[] | null;
+  /**
+   * The Continue Watching shelf, exposed so the episode shelf can read resume
+   * fractions off the same per-episode records instead of subscribing to watch
+   * history a second time.
+   */
+  continueWatching: Movie[];
   setView: (view: View) => void;
   setSection: (view: View) => void;
   setSearch: (value: string) => void;
@@ -155,97 +173,20 @@ const VIEWS_WITH_TV_FILTER: View[] = [
   "home",
 ];
 
-/** Stable numeric fallback for non-TMDB (archive.org) ids in the backend search. */
-function stableId(id: string): number {
-  const parsed = Number(id);
-  if (Number.isFinite(parsed)) return parsed;
-  let hash = 2166136261;
-  for (let i = 0; i < id.length; i += 1) {
-    hash ^= id.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return Math.abs(hash) || 1;
-}
-
-/** Map a backend `StreamMovie` (playable, embed-ready) to a catalog `Movie`. */
-function toCatalogMovie(item: StreamMovie): Movie {
-  const mediaType: "movie" | "tv" = item.media_type === "tv" ? "tv" : "movie";
-  const year =
-    typeof item.year === "number" ? item.year : Number(item.year) || null;
-  return {
-    id: stableId(item.id),
-    providerId: item.id,
-    title: item.title,
-    year: Number.isFinite(year) ? year : null,
-    runtime: null,
-    rating: null,
-    score: item.vote_average ?? null,
-    genre: item.genres?.length
-      ? item.genres
-      : [mediaType === "tv" ? "Series" : "Movie"],
-    poster: item.poster_url || null,
-    backdrop: item.backdrop_url || null,
-    synopsis:
-      item.overview || "Playable right now — pick it to start watching.",
-    director: null,
-    cast: [],
-    country: null,
-    language: null,
-    releaseDate: null,
-    source: "tmdb",
-    mediaType,
-    vote_average: item.vote_average,
-    genres: item.genres,
-    seasons: item.seasons,
-    episodes_per_season: item.episodes_per_season,
-    backdrop_url: item.backdrop_url,
-    overview: item.overview,
-    popularity: item.popularity,
-  };
-}
-
+/** Long enough that typing a title does not fire a request per keystroke. */
 const SEARCH_DEBOUNCE_MS = 300;
 
-/** Map a backend `CatalogItem` (unified, DB-cached card) to a catalog `Movie`. */
-function toDiscoverMovie(item: CatalogItem): Movie {
-  const mediaType: "movie" | "tv" = item.media_type === "tv" ? "tv" : "movie";
-  const year =
-    typeof item.year === "number" ? item.year : Number(item.year) || null;
-  // Cards carrying a TMDB id stay watchable; non-TMDB providers fall back to
-  // their own id (playback may not resolve for those exotic titles).
-  const rawId =
-    item.tmdb_id != null ? String(item.tmdb_id) : String(item.id ?? "");
-  const genres = item.genres?.length
-    ? item.genres
-    : [mediaType === "tv" ? "Series" : "Movie"];
-  return {
-    id: stableId(rawId),
-    providerId: rawId,
-    title: item.title,
-    year: Number.isFinite(year) ? year : null,
-    runtime: typeof item.runtime === "number" ? item.runtime : null,
-    rating: null,
-    score: typeof item.vote_average === "number" ? item.vote_average : null,
-    genre: genres,
-    poster: item.poster_url || null,
-    backdrop: item.backdrop_url || null,
-    synopsis:
-      item.overview ||
-      "Browse the catalogue — pick a title to see full details.",
-    director: item.director || null,
-    cast: item.cast || [],
-    country: item.country || null,
-    language: item.language || null,
-    releaseDate: item.release_date || null,
-    source: "tmdb",
-    mediaType,
-    vote_average: item.vote_average ?? undefined,
-    genres,
-    popularity: item.popularity ?? undefined,
-    overview: item.overview,
-    backdrop_url: item.backdrop_url,
-  };
-}
+/** How many titles a numbered shelf shows. Also its title. */
+const TOP_ROW_SIZE = 10;
+
+/**
+ * Popularity floor for the Top 10, on TMDB's 0-100+ scale.
+ *
+ * Low enough that a decent catalogue still fills the chart, high enough that a
+ * title rated 10.0 by a handful of people who found it first does not take
+ * rank one.
+ */
+const MIN_POPULARITY_FOR_RANKING = 20;
 
 /** Which media bucket an infinite-scroll view should request. */
 function mediaTypeFor(view: View): "movie" | "tv" | "all" {
@@ -293,6 +234,10 @@ export function useCatalog(): UseCatalog {
 
   useEffect(() => subscribeList(() => setSavedIds(savedListIds())), []);
 
+  // The one shelf that is not the catalog: what this viewer has already
+  // started. Kept out of `filtered` on purpose so it survives browse filters.
+  const { items: continueItems } = useContinueWatching();
+
   const [catalogItems, setCatalogItems] = useState<StreamMovie[]>([]);
   const [searchResults, setSearchResults] = useState<StreamMovie[]>([]);
   const [loading, setLoading] = useState(true);
@@ -309,7 +254,9 @@ export function useCatalog(): UseCatalog {
   const discoverInFlightRef = useRef(false);
   // Read through a ref so paging callbacks never need affinity in their deps
   // and therefore never re-create (and re-trigger the observer) on a new signal.
-  const affinityRef = useRef<Affinity>(typeof window === "undefined" ? emptyAffinity() : readAffinity());
+  const affinityRef = useRef<Affinity>(
+    typeof window === "undefined" ? emptyAffinity() : readAffinity()
+  );
 
   // Search cache and in-flight request tracking
   const searchCacheRef = useRef<Map<string, SearchCacheEntry>>(new Map());
@@ -375,7 +322,11 @@ export function useCatalog(): UseCatalog {
       .then(res => {
         if (cancelled) return;
         setDiscoverItems(
-          rankByAffinity(res.items.map(toDiscoverMovie), affinityRef.current, signalsFrom),
+          rankByAffinity(
+            res.items.map(toMovie),
+            affinityRef.current,
+            signalsFrom
+          )
         );
         setDiscoverPage(res.page);
         setDiscoverHasMore(res.has_more);
@@ -472,7 +423,7 @@ export function useCatalog(): UseCatalog {
   const searching = search.trim().length > 0;
   const activeStreamMovies = searching ? searchResults : catalogItems;
   const movies = useMemo(
-    () => activeStreamMovies.map(toCatalogMovie),
+    () => activeStreamMovies.map(toMovie),
     [activeStreamMovies]
   );
 
@@ -506,14 +457,14 @@ export function useCatalog(): UseCatalog {
   }, [genre, movies, searching, view, sort, mediaType]);
 
   function dedupeMovies(movies: Movie[]): Movie[] {
-  const seen = new Set<string>();
-  return movies.filter((movie) => {
-    const key = String(movie.providerId ?? movie.id ?? "");
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
+    const seen = new Set<string>();
+    return movies.filter(movie => {
+      const key = String(movie.providerId ?? movie.id ?? "");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
 
   /**
    * Server-ranked picks, or `null` when there is nothing to show.
@@ -530,7 +481,7 @@ export function useCatalog(): UseCatalog {
     const seen = new Set(filtered.map(m => String(m.providerId ?? m.id ?? "")));
     const out: Movie[] = [];
     for (const item of raw) {
-      const movie = toDiscoverMovie(item);
+      const movie = toMovie(item);
       const key = String(movie.providerId ?? movie.id ?? "");
       if (seen.has(key)) continue;
       seen.add(key);
@@ -564,19 +515,77 @@ export function useCatalog(): UseCatalog {
           },
         ];
       default: {
-        const trendingItems = filtered.slice(0, cap);
-        const trendingIds = new Set(trendingItems.map(m => String(m.providerId ?? m.id ?? "")));
-        const recentItems = byYearDesc.filter(m => !trendingIds.has(String(m.providerId ?? m.id ?? ""))).slice(0, cap);
+        /*
+         * The home page is artwork, in this order and nothing in front of it:
+         * pick up where you left off, then something to start tonight, then
+         * something to commit to a series of. "Recently Added" used to sit
+         * between the last two, which is the one shelf nobody browses by.
+         */
+        const cap2 = cap;
+        // Every catalog item is typed on the way in, so this partition is
+        // exhaustive: a title lands on exactly one of the two shelves.
+        const movies = filtered.filter(movie => movie.mediaType !== "tv");
+        const series = filtered.filter(movie => movie.mediaType === "tv");
         const out: CatalogRows[] = [];
-        // First, and only when the server actually ranked it. An empty "For You"
+        if (continueItems.length) {
+          out.push({ title: "Continue Watching", items: continueItems });
+        }
+        out.push({
+          title: "Trending Movies",
+          items: movies.slice(0, cap),
+          // Rated-first cards, because this shelf is ordered by what people are
+          // watching and the rating is the only quality signal on a tile.
+          kind: "score",
+        });
+
+        /*
+         * Top 10, ranked rather than sliced.
+         *
+         * The obvious implementation -- `movies.slice(0, 10)` -- is the same ten
+         * posters as the shelf above it wearing a number, which is worse than no
+         * shelf: it looks like a ranking and ranks nothing. So this ranks on
+         * `vote_average`, with popularity as the tiebreak, behind a floor that
+         * keeps titles nobody has seen out of a chart of what is good.
+         *
+         * `vote_count` is not carried by the catalogue, so the floor is
+         * popularity rather than a real vote count. That is the honest limit of
+         * this data: it can rank by reception, and it cannot claim to rank by
+         * significance.
+         */
+        const onOtherShelves = new Set(
+          out.flatMap(row => row.items.map(movie => movie.providerId))
+        );
+        const ranked = movies
+          .filter(
+            movie =>
+              typeof movie.score === "number" &&
+              movie.score > 0 &&
+              (movie.popularity ?? 0) >= MIN_POPULARITY_FOR_RANKING
+          )
+          .sort(
+            (a, b) =>
+              (b.score ?? 0) - (a.score ?? 0) ||
+              (b.popularity ?? 0) - (a.popularity ?? 0)
+          )
+          .filter(movie => !onOtherShelves.has(movie.providerId))
+          .slice(0, TOP_ROW_SIZE);
+        // A chart with three entries is a broken chart, so the row is omitted
+        // rather than topped up with titles that did not qualify.
+        if (ranked.length >= Math.min(6, movies.length)) {
+          out.push({ title: "Top 10 Rated", items: ranked, kind: "top10" });
+        }
+
+        // No cross-shelf dedupe is needed below this point: the rows are
+        // partitioned by media type, so they cannot name the same title.
+        out.push({ title: "Popular Series", items: series.slice(0, cap) });
+        // Last, and only when the server actually ranked it. An empty "For You"
         // row reads as a broken feature, so it is omitted rather than padded.
-        if (forYou) out.push({ title: "For You", items: forYou.slice(0, cap) });
-        out.push({ title: "Trending Now", items: trendingItems });
-        out.push({ title: "Recently Added", items: recentItems });
+        if (forYou)
+          out.push({ title: "For You", items: forYou.slice(0, cap2) });
         return out;
       }
     }
-  }, [view, filtered, savedIds, forYou]);
+  }, [view, filtered, savedIds, forYou, continueItems]);
 
   const setSection = useCallback((next: View) => {
     setView(next);
@@ -586,7 +595,11 @@ export function useCatalog(): UseCatalog {
 
   /** Fetch the next page of the aggregated catalog for the active browse view. */
   const loadMoreDiscover = useCallback(() => {
-    if (discoverInFlightRef.current || discoverLoadingMore || !discoverHasMore) {
+    if (
+      discoverInFlightRef.current ||
+      discoverLoadingMore ||
+      !discoverHasMore
+    ) {
       return;
     }
     discoverInFlightRef.current = true;
@@ -606,9 +619,12 @@ export function useCatalog(): UseCatalog {
         setDiscoverItems(prev => {
           const seen = new Set(prev.map(movie => movie.providerId));
           const fresh = res.items
-            .map(toDiscoverMovie)
+            .map(toMovie)
             .filter(movie => !seen.has(movie.providerId));
-          return [...prev, ...rankByAffinity(fresh, affinityRef.current, signalsFrom)];
+          return [
+            ...prev,
+            ...rankByAffinity(fresh, affinityRef.current, signalsFrom),
+          ];
         });
       })
       .catch(err => {
@@ -633,7 +649,11 @@ export function useCatalog(): UseCatalog {
   const recordAffinity = useCallback(
     (movie: Movie, weight = 1) => {
       // Session cache first so the grid re-ranks on the same tick...
-      const next = recordInteraction(affinityRef.current, signalsFrom(movie), weight);
+      const next = recordInteraction(
+        affinityRef.current,
+        signalsFrom(movie),
+        weight
+      );
       affinityRef.current = next;
       writeAffinity(next);
       // ...then the durable copy. The recorder is a no-op when signed out and
@@ -670,6 +690,7 @@ export function useCatalog(): UseCatalog {
     searchLoading,
     filtered,
     rows,
+    continueWatching: continueItems,
     setView,
     setSection,
     setSearch,
@@ -680,10 +701,7 @@ export function useCatalog(): UseCatalog {
     // Sort and media type are applied here as well as to `filtered`, so the
     // paged browse grid honours them. Previously the filter panel looked
     // identical on every view but only moved anything on the shelf views.
-    discoverItems: applySort(
-      applyMediaType(discoverItems, mediaType),
-      sort
-    ),
+    discoverItems: applySort(applyMediaType(discoverItems, mediaType), sort),
     discoverPage,
     discoverHasMore,
     discoverLoading,

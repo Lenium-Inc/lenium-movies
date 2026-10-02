@@ -54,7 +54,7 @@ export default function SharedList() {
   }, [ownerId]);
 
   const shell = (children: React.ReactNode) => (
-    <div className="min-h-screen bg-[#050505] text-[#FFFFFF]">
+    <div className="min-h-screen text-[#FFFFFF]">
       <div className="mx-auto max-w-3xl px-4 py-12 sm:px-6 lg:px-8">
         {children}
       </div>

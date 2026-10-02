@@ -54,6 +54,21 @@ export type Movie = {
   overview?: string;
   /** Popularity score from TMDB */
   popularity?: number;
+  /**
+   * How far through this title the viewer already is, 0-1.
+   *
+   * Only set on the Continue Watching shelf, and only because a shelf of
+   * part-watched titles that does not say how far in they are is indistinguishable
+   * from a shelf of unstarted ones. A card draws a resume bar when it is present.
+   */
+  resume?: number;
+  /**
+   * The episode this resume point refers to. A series records progress against
+   * the show, so without these two the card could only ever re-open the first
+   * episode. Absent for films, which have no episode to restore.
+   */
+  resumeSeason?: number;
+  resumeEpisode?: number;
 };
 
 /** A verified direct quality variant from the backend */

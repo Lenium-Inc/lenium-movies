@@ -49,7 +49,10 @@ export function sanitizeSubtitles(value: unknown): StreamSubtitle[] {
     tracks.push({
       url,
       lang,
-      label: typeof record.label === "string" && record.label.trim() ? record.label.trim() : lang,
+      label:
+        typeof record.label === "string" && record.label.trim()
+          ? record.label.trim()
+          : lang,
     });
   }
   return tracks;
@@ -230,7 +233,9 @@ export function subtitleTrackUrl(url: string): string {
  * setting it to "/" to deliberately ship same-origin behind a proxy.
  */
 const CONFIGURED_BACKEND_ORIGIN = (
-  import.meta.env.VITE_MOVIE_API_BASE_URL || import.meta.env.VITE_API_URL || ""
+  import.meta.env.VITE_MOVIE_API_BASE_URL ||
+  import.meta.env.VITE_API_URL ||
+  ""
 ).trim();
 
 const FALLBACK_BACKEND_ORIGIN = "https://vy-e721.onrender.com";
@@ -440,7 +445,7 @@ function normalizeResolvedMovie(value: unknown): StreamMovie | null {
               const label =
                 typeof record.quality === "string" ? record.quality : "";
               const quality =
-                STREAM_QUALITY_ORDER.find((q) => label.includes(q)) ??
+                STREAM_QUALITY_ORDER.find(q => label.includes(q)) ??
                 qualityFromHeight(height);
               return {
                 url: record.url,
@@ -458,8 +463,8 @@ function normalizeResolvedMovie(value: unknown): StreamMovie | null {
           mirrors: value.mirrors.filter((mirror): mirror is StreamMirror =>
             Boolean(
               mirror &&
-              typeof (mirror as StreamMirror).name === "string" &&
-              typeof (mirror as StreamMirror).url === "string"
+                typeof (mirror as StreamMirror).name === "string" &&
+                typeof (mirror as StreamMirror).url === "string"
             )
           ),
         }
@@ -718,9 +723,13 @@ export async function getStreamSource(
   const rawSources =
     Array.isArray(payload.sources) && payload.sources.length > 0
       ? payload.sources
-      : [payload.activeSource, ...mirrors.map((m) => m.url)];
+      : [payload.activeSource, ...mirrors.map(m => m.url)];
   const sources = Array.from(
-    new Set(rawSources.filter((url): url is string => typeof url === "string" && url.length > 0))
+    new Set(
+      rawSources.filter(
+        (url): url is string => typeof url === "string" && url.length > 0
+      )
+    )
   );
   const subtitles = sanitizeSubtitles(payload.subtitles);
   return {
@@ -735,7 +744,8 @@ export async function getStreamSource(
      */
     isEmbed: payload.is_embed === true,
     /** Id of the provider that served this source, for diagnostics. */
-    provider: typeof payload.provider === "string" ? payload.provider : undefined,
+    provider:
+      typeof payload.provider === "string" ? payload.provider : undefined,
     // Only meaningful for a direct source; an embed payload carries none.
     ...(subtitles.length > 0 ? { subtitles } : {}),
   };
@@ -828,7 +838,10 @@ export async function fetchTrailerByTmdbId(
   tmdbId: string | number,
   mediaType: "movie" | "tv" = "movie"
 ): Promise<TrailerInfo | null> {
-  const params = new URLSearchParams({ id: String(tmdbId), media_type: mediaType });
+  const params = new URLSearchParams({
+    id: String(tmdbId),
+    media_type: mediaType,
+  });
   const response = await fetch(
     `${MOVIE_API_BASE_URL}/api/catalog/movieTrailer?${params.toString()}`
   );
@@ -942,6 +955,113 @@ function getCached<T>(key: string): T | null {
 
 function setCache<T>(key: string, data: T): void {
   apiCache.set(key, { data, timestamp: Date.now() });
+}
+
+/** One episode as `/api/season` returns it. */
+export interface SeasonEpisode {
+  season: number;
+  number: number | null;
+  title: string;
+  overview: string;
+  still_path: string;
+  still_url: string;
+  air_date: string;
+  runtime: number | null;
+  vote_average: number | null;
+}
+
+export interface SeasonPayload {
+  show: {
+    id: number;
+    name: string;
+    overview: string;
+    poster_url: string;
+    backdrop_url: string;
+  };
+  season: {
+    number: number;
+    name: string;
+    episode_count: number;
+    poster_url: string;
+  };
+  episodes: SeasonEpisode[];
+}
+
+/**
+ * Shape check, not a schema check.
+ *
+ * The backend is the only writer of this payload and it is validated in Python
+ * already; what is being caught here is the case where the response is not that
+ * payload at all -- an HTML error page from a proxy, or a JSON body from a
+ * different route. Rendering a shelf from `null` fields is worse than rendering
+ * none, so this returns null and the shelf stays empty.
+ */
+function isSeasonPayload(value: unknown): value is {
+  success: true;
+  show: SeasonPayload["show"];
+  season: SeasonPayload["season"];
+  episodes: SeasonEpisode[];
+} {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  if (record.success !== true) return false;
+  if (typeof record.show !== "object" || record.show === null) return false;
+  if (typeof record.season !== "object" || record.season === null) return false;
+  if (!Array.isArray(record.episodes)) return false;
+  const show = record.show as Record<string, unknown>;
+  const season = record.season as Record<string, unknown>;
+  return (
+    typeof show.id === "number" &&
+    typeof show.name === "string" &&
+    typeof season.number === "number"
+  );
+}
+
+/**
+ * Fetch a show's newest aired season, or one specific season.
+ *
+ * Cached client-side for the same five minutes as the other catalogue calls.
+ * The server holds a six-hour cache underneath keyed by the resolved season, so
+ * a five-minute client cache costs one cheap request per season per five minutes
+ * at worst and saves a round trip every time Home is revisited.
+ *
+ * A 404 is swallowed and reported as `null`: a show whose newest season cannot
+ * be resolved should leave the shelf empty, not put an error toast in front of
+ * someone who was only scrolling.
+ */
+export async function fetchSeasonDetails(
+  tmdbId: number | string,
+  season?: number
+): Promise<SeasonPayload | null> {
+  const cacheKey = `season:${tmdbId}:${season ?? "latest"}`;
+  const cached = getCached<SeasonPayload>(cacheKey);
+  if (cached) return cached;
+
+  const query = new URLSearchParams({ tmdb_id: String(tmdbId) });
+  if (season != null) query.set("season", String(season));
+
+  let response: Response;
+  try {
+    response = await fetch(
+      `${MOVIE_API_BASE_URL}/api/season?${query.toString()}`
+    );
+  } catch {
+    // Offline or an aborted request. Not an error worth surfacing.
+    return null;
+  }
+  if (response.status === 404) return null;
+  if (!response.ok) throw new ApiError(response.status, "Season");
+
+  const data: unknown = await response.json();
+  if (!isSeasonPayload(data)) return null;
+
+  const payload: SeasonPayload = {
+    show: data.show,
+    season: data.season,
+    episodes: data.episodes,
+  };
+  setCache(cacheKey, payload);
+  return payload;
 }
 
 /**
@@ -1123,8 +1243,10 @@ export async function fetchDiscover(
     query.set("per_page", String(params.per_page));
   }
   if (params.genre) query.set("genre", params.genre);
-  if (params.affinity_genres) query.set("affinity_genres", params.affinity_genres);
-  if (params.affinity_people) query.set("affinity_people", params.affinity_people);
+  if (params.affinity_genres)
+    query.set("affinity_genres", params.affinity_genres);
+  if (params.affinity_people)
+    query.set("affinity_people", params.affinity_people);
   const response = await fetch(
     `${MOVIE_API_BASE_URL}/api/catalog/discover?${query.toString()}`
   );

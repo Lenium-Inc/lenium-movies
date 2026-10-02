@@ -96,7 +96,7 @@ export default function ShareInvite() {
   };
 
   const shell = (children: React.ReactNode) => (
-    <div className="min-h-screen bg-[#050505] text-[#FFFFFF]">
+    <div className="min-h-screen text-[#FFFFFF]">
       <div className="mx-auto flex max-w-xl flex-col items-center px-4 py-24 text-center sm:px-6">
         {children}
       </div>

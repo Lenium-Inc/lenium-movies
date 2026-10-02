@@ -140,7 +140,7 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
   // Tear the background embed down if it is unplayable, so this dialog falls
   // back to the backdrop instead of showing the player's error card.
   const { failed: trailerFailed, frameRef: trailerFrameRef } = useEmbedFailure(
-    trailer ? `${trailer.provider}:${trailer.id}` : null,
+    trailer ? `${trailer.provider}:${trailer.id}` : null
   );
 
   /**
@@ -280,7 +280,9 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
           source = {
             ...source,
             stream_url: episodeSource.url,
-            ...(episodeSource.sources ? { sources: episodeSource.sources } : {}),
+            ...(episodeSource.sources
+              ? { sources: episodeSource.sources }
+              : {}),
           };
         } catch (error) {
           console.warn(
@@ -411,9 +413,9 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
     >
       <div
         onClick={event => event.stopPropagation()}
-        className="max-h-[94vh] w-full max-w-2xl overflow-y-auto rounded-t-xl border border-white/10 bg-[#151519] shadow-2xl sm:rounded-xl"
+        className="sv-surface-strong max-h-[94vh] w-full max-w-2xl overflow-y-auto rounded-t-xl shadow-2xl sm:rounded-xl"
       >
-        <div className="relative aspect-video w-full bg-[#0a0a0c]">
+        <div className="relative aspect-video w-full bg-[var(--sv-base-deep)]">
           {/*
             Backdrop first, trailer over it. Previously these were exclusive
             branches, so an embed that failed to play left YouTube's error card
@@ -479,9 +481,14 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
                   </span>
                 )}
               </div>
-              <p className="mt-4 text-sm leading-6 text-[#c5c5c1]">
-                {movie.synopsis}
-              </p>
+              {/* The mapper no longer invents synopsis copy, so the fallback
+                  lives here: a title the catalog has no overview for shows
+                  nothing here instead of a paragraph of marketing. */}
+              {movie.synopsis ? (
+                <p className="mt-4 text-sm leading-6 text-[#c5c5c1]">
+                  {movie.synopsis}
+                </p>
+              ) : null}
             </>
           ) : (
             <SkeletonMetadata />

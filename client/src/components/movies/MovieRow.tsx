@@ -1,7 +1,9 @@
 import { useState } from "react";
+import type { MovieCardVariant } from "./MovieCard";
 import type { Movie } from "./types";
 import { MovieCard } from "./MovieCard";
 import { MovieGrid } from "./MovieGrid";
+import { RowScroller } from "./RowScroller";
 import { SkeletonMovieCard } from "./SkeletonMovieCard";
 import { useInView } from "@/hooks/useInView";
 import { ErrorBoundary, ErrorFallback } from "@/components/ErrorBoundary";
@@ -17,6 +19,11 @@ interface MovieRowProps {
   grid?: boolean;
   /** Row index for staggered loading */
   rowIndex?: number;
+  /**
+   * Card presentation. `poster` is the default shelf card; `score` leads with the
+   * rating, which is what a trending shelf is actually about.
+   */
+  variant?: MovieCardVariant;
 }
 
 function MovieCardWrapper({
@@ -24,11 +31,13 @@ function MovieCardWrapper({
   saved,
   onPlay,
   onSave,
+  variant,
 }: {
   movie: Movie;
   saved: boolean;
   onPlay: () => void;
   onSave: () => void;
+  variant?: MovieCardVariant;
 }) {
   const [retryKey, setRetryKey] = useState(0);
 
@@ -37,7 +46,13 @@ function MovieCardWrapper({
       key={retryKey}
       fallback={<ErrorFallback retry={() => setRetryKey(k => k + 1)} />}
     >
-      <MovieCard movie={movie} saved={saved} onPlay={onPlay} onSave={onSave} />
+      <MovieCard
+        movie={movie}
+        saved={saved}
+        onPlay={onPlay}
+        onSave={onSave}
+        variant={variant}
+      />
     </ErrorBoundary>
   );
 }
@@ -56,6 +71,7 @@ export function MovieRow({
   eyebrow,
   grid = false,
   rowIndex = 0,
+  variant = "poster",
 }: MovieRowProps) {
   if (!items?.length) return null;
 
@@ -84,7 +100,7 @@ export function MovieRow({
     }
 
     return (
-      <div className="catalog-row">
+      <RowScroller label={title}>
         {items.map((movie, index) => (
           <MovieCardWrapper
             key={`${title}-${movie.id}-${index}`}
@@ -92,9 +108,10 @@ export function MovieRow({
             saved={savedIds?.includes(movie.id) ?? false}
             onPlay={() => onSelect(movie)}
             onSave={() => onSave(movie)}
+            variant={variant}
           />
         ))}
-      </div>
+      </RowScroller>
     );
   };
 
@@ -131,7 +148,7 @@ export function MovieRow({
             {title}
           </h2>
         </div>
-        </div>
+      </div>
       {isInView ? renderContent() : renderSkeleton()}
     </section>
   );

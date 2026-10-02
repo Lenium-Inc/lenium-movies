@@ -3,7 +3,10 @@ import { LogOut, PenLine, X } from "lucide-react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/context/AuthContext";
 import { useActiveProfile } from "@/context/ActiveProfileContext";
-import { AddProfileForm, AddProfileTile } from "@/components/profile/AddProfileForm";
+import {
+  AddProfileForm,
+  AddProfileTile,
+} from "@/components/profile/AddProfileForm";
 import { EditProfileModal } from "@/components/profile/EditProfileModal";
 import { ProfileAvatar } from "@/components/profile/ProfileAvatar";
 import type { ProfileData } from "@/services/profiles";
@@ -19,10 +22,12 @@ export default function ProfilesPage() {
   const [, navigate] = useLocation();
 
   const [adding, setAdding] = useState(false);
-  const [editingProfile, setEditingProfile] = useState<ProfileData | null>(null);
+  const [editingProfile, setEditingProfile] = useState<ProfileData | null>(
+    null
+  );
 
   const handleSelect = (profileId: string) => {
-    const profile = profiles.find((p) => p.id === profileId);
+    const profile = profiles.find(p => p.id === profileId);
     if (!profile || profile.isLocked) return;
     selectProfile(profile);
     navigate("/");
@@ -40,7 +45,7 @@ export default function ProfilesPage() {
   };
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#050505] text-white">
+    <div className="relative min-h-screen overflow-hidden text-white">
       {/* Ambient backdrop glow */}
       <div
         aria-hidden
@@ -70,7 +75,7 @@ export default function ProfilesPage() {
           </h1>
 
           <div className="mt-10 grid grid-cols-2 gap-6 sm:grid-cols-3 lg:grid-cols-5">
-            {profiles.map((profile) => (
+            {profiles.map(profile => (
               <div key={profile.id} className="group w-28 sm:w-32">
                 <button
                   type="button"

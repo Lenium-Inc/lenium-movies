@@ -20,7 +20,9 @@ export default function MyList() {
     signInDemo,
   } = useLocalSession();
   const { user: authUser } = useAuth();
-  const [listFilter, setListFilter] = useState<"all" | "plan" | "favorites" | "watched">("all");
+  const [listFilter, setListFilter] = useState<
+    "all" | "plan" | "favorites" | "watched"
+  >("all");
   const [, setRev] = useState(0);
   const [shareOpen, setShareOpen] = useState(false);
   const [sharedWithMe, setSharedWithMe] = useState<SharedProfile[]>([]);
@@ -72,7 +74,7 @@ export default function MyList() {
 
   if (!hydrated) {
     return (
-      <div className="min-h-screen bg-[#050505] text-[#FFFFFF] flex items-center justify-center">
+      <div className="min-h-screen text-[#FFFFFF] flex items-center justify-center">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
       </div>
     );
@@ -80,7 +82,7 @@ export default function MyList() {
 
   if (!signedIn) {
     return (
-      <div className="min-h-screen bg-[#050505] text-[#FFFFFF]">
+      <div className="min-h-screen text-[#FFFFFF]">
         <div className="mx-auto max-w-2xl px-4 py-16 sm:px-6 lg:px-8">
           <div className="text-center">
             <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-full bg-white/5">
@@ -126,7 +128,7 @@ export default function MyList() {
   }
 
   return (
-    <div className="min-h-screen bg-[#050505] text-[#FFFFFF]">
+    <div className="min-h-screen text-[#FFFFFF]">
       <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
         <header className="mb-8">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -150,8 +152,12 @@ export default function MyList() {
                       : "border border-white/10 text-white/60 hover:bg-white/5 hover:text-white"
                   }`}
                 >
-                {tag === "plan" ? "Plan to Watch" : tag === "favorites" ? "Favorites" : "Watched"}
-              </button>
+                  {tag === "plan"
+                    ? "Plan to Watch"
+                    : tag === "favorites"
+                      ? "Favorites"
+                      : "Watched"}
+                </button>
               ))}
               <button
                 type="button"
@@ -261,9 +267,11 @@ export default function MyList() {
                     </div>
                     <p className="mt-1 text-sm text-white/50">
                       {(entry as any).tag &&
-                        (["plan", "favorites", "watched"] as const).find(t => t === (entry as any).tag)
-                          ? (entry as any).tag
-                          : "Plan to Watch"}
+                      (["plan", "favorites", "watched"] as const).find(
+                        t => t === (entry as any).tag
+                      )
+                        ? (entry as any).tag
+                        : "Plan to Watch"}
                     </p>
                   </div>
                   <div className="mt-4 flex items-center gap-2">
@@ -271,12 +279,28 @@ export default function MyList() {
                       type="button"
                       onClick={() => {
                         removeFromMyList(entry.id);
-                        void pushRemoveToRemote(Number(entry.id ?? entry.providerId ?? 0));
+                        void pushRemoveToRemote(
+                          Number(entry.id ?? entry.providerId ?? 0)
+                        );
                       }}
                       aria-label={`Remove ${entry.title} from My List`}
                       className="grid h-7 w-7 place-items-center rounded-full text-zinc-500 transition hover:bg-white/10 hover:text-zinc-200"
                     >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="24"
+                        height="24"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        className="h-3.5 w-3.5"
+                      >
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                      </svg>
                     </button>
                   </div>
                 </div>

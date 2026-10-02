@@ -3,7 +3,6 @@ import NotFound from "@/pages/NotFound";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
-import { CookieBanner } from "./components/CookieBanner";
 import Home from "./pages/Home";
 import Profile from "./pages/Profile";
 import { WatchPage } from "./pages/Watch";
@@ -52,17 +51,15 @@ export default function App() {
       <ThemeProvider defaultTheme="dark">
         <Toaster />
         {/*
-          One daily limit, and it is the server's.
-          The global "mindful cinematic" modal is gone: it was a localStorage
-          counter of 8 that ran in front of the real 10-per-profile allowance,
-          opened on every route including the signed-out home page, and offered
-          a "Reset limit" button -- so the product advertised a limit the viewer
-          could switch off, next to a real one they could not. The remaining
-          limit is enforced by /api/allowance/claim and explained once, on the
-          watch page.
+          `sv-shell` is the page's lighting, not decoration: it owns the base
+          colour and a pair of violet/cyan auroras behind everything, pinned to
+          the viewport so the glow stays put while the shelves scroll over it.
+          Applied once here rather than per page, so no route can end up on a
+          flat black background.
         */}
-        <Router />
-        <CookieBanner />
+        <div className="sv-shell min-h-screen">
+          <Router />
+        </div>
       </ThemeProvider>
     </ErrorBoundary>
   );

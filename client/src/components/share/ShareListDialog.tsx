@@ -16,15 +16,17 @@ import {
   type ShareMember,
 } from "@/services/auth";
 import { sharePath } from "@/lib/shareLinks";
+import { absoluteUrl } from "@/lib/siteUrl";
 
 /**
- * Built from `window.location.origin` rather than a configured host so the link
- * always points back at the deployment the owner is actually using; a
- * server-side base URL would have to be kept in sync per environment and would
- * hand out links to the wrong host the first time it drifted.
+ * Built from the live origin rather than a configured host so the link always
+ * points back at the deployment the owner is actually using; a server-side base
+ * URL would have to be kept in sync per environment and would hand out links to
+ * the wrong host the first time it drifted. `absoluteUrl` is the single place
+ * that knows how to resolve that origin.
  */
 function shareUrl(token: string): string {
-  return `${window.location.origin}${sharePath(token)}`;
+  return absoluteUrl(sharePath(token));
 }
 
 function expiresIn(iso: string | null): string {

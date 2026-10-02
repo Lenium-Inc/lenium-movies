@@ -6,6 +6,7 @@ import {
   POSTER_SRCSET_SIZES,
   tmdbSrcSet,
 } from "@/lib/tmdbImages";
+import { buildWatchPath } from "@/lib/watchRoute";
 import type { Movie } from "./types";
 
 interface MovieCardProps {
@@ -13,7 +14,18 @@ interface MovieCardProps {
   saved?: boolean;
   onPlay?: (movie: Movie) => void;
   onSave?: (movie: Movie) => void;
+  /**
+   * Card presentation.
+   *
+   * `poster` is the wall-of-artwork shelf tile. `score` moves the rating out of
+   * the hover caption and into a permanent block beside the artwork, because a
+   * trending shelf is ranked by reception and a number that only appears on
+   * hover is not doing that job.
+   */
+  variant?: MovieCardVariant;
 }
+
+export type MovieCardVariant = "poster" | "score";
 
 function formatRating(score: number | null | undefined): string {
   if (score === null || score === undefined) return "";
@@ -42,6 +54,7 @@ export const MovieCard: React.FC<MovieCardProps> = ({
   saved,
   onPlay,
   onSave,
+  variant = "poster",
 }) => {
   const [, navigate] = useLocation();
   const [posterFailed, setPosterFailed] = useState(false);
@@ -66,15 +79,48 @@ export const MovieCard: React.FC<MovieCardProps> = ({
       console.warn("[MovieCard] Invalid TMDB ID:", movie.providerId);
       return;
     }
-    navigate(`/watch/${tmdbId}`);
+    // `buildWatchPath` is the single place that knows a series needs `type=tv`
+    // and an episode, and a film must carry neither. Hand-writing the path here
+    // is what previously sent series to a route with no episode to play.
+    navigate(
+      buildWatchPath(tmdbId, {
+        mediaType,
+        season: movie.resumeSeason,
+        episode: movie.resumeEpisode,
+      })
+    );
   };
 
   return (
-    <article className="movie-card group relative overflow-hidden rounded-xl border border-white/5 bg-zinc-900/50 transition-[border-color,box-shadow] duration-300 hover:border-white/20 hover:shadow-[0_16px_48px_rgba(0,0,0,0.55)]">
+    <article
+      className={
+        "movie-card group relative overflow-hidden rounded-xl border border-white/5 bg-zinc-900/50 transition-[border-color,box-shadow] duration-300 hover:border-white/20 hover:shadow-[0_16px_48px_rgba(0,0,0,0.55)]" +
+        // The score variant sits beside the artwork rather than under it, so the
+        // tile becomes a row. `items-stretch` keeps the score column the full
+        // height of the poster instead of collapsing to the text.
+        (variant === "score" ? " flex items-stretch" : "")
+      }
+    >
+      {variant === "score" && voteAverage ? (
+        /* Permanent, and beside the artwork rather than on top of it: a badge
+           laid over the poster competes with the poster's own composition, and
+           this number is meant to be read while scanning the shelf, not on hover. */
+        <div className="flex w-11 shrink-0 flex-col items-center justify-center gap-0.5 pr-2.5">
+          <span className="font-display text-2xl font-black leading-none text-white">
+            {voteAverage}
+          </span>
+          <span className="text-[9px] font-semibold uppercase tracking-wider text-zinc-500">
+            IMDb
+          </span>
+        </div>
+      ) : null}
       <button
         type="button"
         onClick={handlePlayClick}
-        className="block w-full cursor-pointer text-left"
+        className={
+          "block w-full cursor-pointer text-left" +
+          (variant === "score" ? " min-w-0 flex-1" : "")
+        }
         aria-label={`Play ${movie.title}`}
       >
         <div className="relative aspect-[2/3] w-full overflow-hidden bg-zinc-800">
@@ -121,26 +167,53 @@ export const MovieCard: React.FC<MovieCardProps> = ({
               </div>
             ) : null}
           </div>
+
+          {/* Resume bar, drawn at the foot of the poster and always visible:
+              it is the one piece of information on this card that has to be
+              readable without hovering, because it is the reason the card is
+              on this particular shelf. */}
+          {typeof movie.resume === "number" && movie.resume > 0 ? (
+            <div
+              className="absolute inset-x-0 bottom-0 h-1 bg-white/15"
+              role="progressbar"
+              aria-valuenow={Math.round(movie.resume * 100)}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-label={`${Math.round(movie.resume * 100)}% watched`}
+            >
+              <div
+                className="h-full bg-gradient-to-r from-violet-500 to-cyan-400"
+                style={{
+                  width: `${Math.min(100, Math.round(movie.resume * 100))}%`,
+                }}
+              />
+            </div>
+          ) : null}
         </div>
       </button>
 
-      {/* Media type badge - top left */}
-      <span className="movie-card-reveal absolute left-2 top-2 flex items-center gap-1 rounded border border-white/10 bg-black/70 px-2 py-1 text-[10px] font-semibold uppercase text-white backdrop-blur-sm">
-        {mediaType === "tv" ? (
-          <>
-            <Tv className="h-3 w-3" />
-            Series
-          </>
-        ) : (
-          <>
-            <Film className="h-3 w-3" />
-            Movie
-          </>
-        )}
-      </span>
+      {/* Media type badge - top left. Suppressed in the score variant, where the
+          rating block already carries the card's metadata and the top-left corner
+          is better left to the artwork. */}
+      {variant === "poster" ? (
+        <span className="movie-card-reveal absolute left-2 top-2 flex items-center gap-1 rounded border border-white/10 bg-black/70 px-2 py-1 text-[10px] font-semibold uppercase text-white backdrop-blur-sm">
+          {mediaType === "tv" ? (
+            <>
+              <Tv className="h-3 w-3" />
+              Series
+            </>
+          ) : (
+            <>
+              <Film className="h-3 w-3" />
+              Movie
+            </>
+          )}
+        </span>
+      ) : null}
 
-      {/* Rating badge - top right */}
-      {voteAverage ? (
+      {/* Rating badge - top right. Only in the poster variant; the score variant
+          shows the same number permanently beside the poster. */}
+      {voteAverage && variant === "poster" ? (
         <span className="movie-card-reveal absolute right-2 top-2 flex items-center gap-1 rounded-full bg-amber-400/90 px-2 py-1 text-[11px] font-black text-black shadow-lg">
           <Star className="h-3 w-3 fill-current" />
           {voteAverage}

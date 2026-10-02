@@ -29,7 +29,9 @@ function formatTimestamp(epochMs: number): string {
 
 function formatProgress(item: RemoteHistoryItem): string {
   if (item.duration_seconds && item.progress_seconds) {
-    const pct = Math.round((item.progress_seconds / item.duration_seconds) * 100);
+    const pct = Math.round(
+      (item.progress_seconds / item.duration_seconds) * 100
+    );
     return `${pct}% watched`;
   }
   return "Watched";
@@ -46,7 +48,9 @@ export default function ProfilePage() {
   const [location, navigate] = useLocation();
 
   const [showAddProfile, setShowAddProfile] = useState(false);
-  const [editingProfile, setEditingProfile] = useState<ProfileData | null>(null);
+  const [editingProfile, setEditingProfile] = useState<ProfileData | null>(
+    null
+  );
 
   const [history, setHistory] = useState<RemoteHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -94,7 +98,7 @@ export default function ProfilePage() {
   const handleRemoveHistory = async (movieKey: string) => {
     try {
       await apiHistoryRemove(movieKey);
-      setHistory((h) => h.filter((item) => item.movie_key !== movieKey));
+      setHistory(h => h.filter(item => item.movie_key !== movieKey));
     } catch {
       /* ignore */
     }
@@ -121,7 +125,10 @@ export default function ProfilePage() {
     setDeleteBusy(true);
     setDeleteError(null);
     try {
-      await apiDeleteAccount({ email: deleteEmail.trim(), password: deletePassword });
+      await apiDeleteAccount({
+        email: deleteEmail.trim(),
+        password: deletePassword,
+      });
       // On success every session is already revoked server-side, so there is
       // nothing to clean up but this page's state.
       closeDeleteAccount();
@@ -142,7 +149,7 @@ export default function ProfilePage() {
 
   if (authLoading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#050505]">
+      <div className="flex min-h-screen items-center justify-center">
         <div className="h-12 w-12 animate-spin rounded-full border-4 border-white/20 border-t-white" />
       </div>
     );
@@ -153,7 +160,7 @@ export default function ProfilePage() {
   }
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#050505] text-white">
+    <div className="relative min-h-screen overflow-hidden text-white">
       {/* Ambient backdrop glow */}
       <div
         aria-hidden
@@ -164,9 +171,13 @@ export default function ProfilePage() {
         className="pointer-events-none absolute bottom-0 right-0 h-80 w-80 rounded-full bg-[radial-gradient(closest-side,rgba(217,70,239,0.10),transparent)] blur-3xl"
       />
 
-      <header className="sticky top-0 z-40 border-b border-white/10 bg-[#050505]/70 backdrop-blur-[16px]">
+      <header className="sv-chrome sticky top-0 z-40 border-b">
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4 sm:px-6 lg:px-8">
-          <Link href="/" className="shrink-0 rounded-md text-white" aria-label="Stream Vy home">
+          <Link
+            href="/"
+            className="shrink-0 rounded-md text-white"
+            aria-label="Stream Vy home"
+          >
             <BrandLockup size="sm" />
           </Link>
           {/* Same single avatar + dropdown as the app navbar, so profile
@@ -203,7 +214,9 @@ export default function ProfilePage() {
               <button
                 type="button"
                 onClick={() =>
-                  showDeleteAccount ? closeDeleteAccount() : setShowDeleteAccount(true)
+                  showDeleteAccount
+                    ? closeDeleteAccount()
+                    : setShowDeleteAccount(true)
                 }
                 aria-expanded={showDeleteAccount}
                 className="inline-flex items-center gap-2 rounded-lg border border-white/15 px-3 py-1.5 text-xs font-semibold text-white/50 transition hover:border-red-500/50 hover:text-red-400"
@@ -258,7 +271,10 @@ export default function ProfilePage() {
                 </label>
               </div>
               {deleteError ? (
-                <p role="alert" className="mt-3 text-xs font-medium text-red-400">
+                <p
+                  role="alert"
+                  className="mt-3 text-xs font-medium text-red-400"
+                >
                   {deleteError}
                 </p>
               ) : null}
@@ -298,7 +314,7 @@ export default function ProfilePage() {
             </div>
           ) : (
             <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-              {profiles.map((profile) => {
+              {profiles.map(profile => {
                 const isActive = profile.id === activeProfile?.id;
                 return (
                   <div key={profile.id} className="group relative">
@@ -313,7 +329,11 @@ export default function ProfilePage() {
                           ? "ring-white/60"
                           : "ring-white/10 group-hover:ring-white/40"
                       } ${profile.isLocked ? "cursor-not-allowed opacity-50" : ""}`}
-                      aria-label={isActive ? `${profile.name} — active profile` : `Switch to ${profile.name}`}
+                      aria-label={
+                        isActive
+                          ? `${profile.name} — active profile`
+                          : `Switch to ${profile.name}`
+                      }
                     >
                       <div className="relative aspect-square w-full">
                         <ProfileAvatar
@@ -407,7 +427,7 @@ export default function ProfilePage() {
               </div>
             ) : (
               <div className="grid gap-3 sm:grid-cols-2">
-                {history.map((item) => (
+                {history.map(item => (
                   <div
                     key={item.movie_key}
                     className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.04] p-3 backdrop-blur-xl"
@@ -430,7 +450,9 @@ export default function ProfilePage() {
                         {item.title}
                       </p>
                       {item.year ? (
-                        <p className="mt-0.5 text-xs text-white/40">{item.year}</p>
+                        <p className="mt-0.5 text-xs text-white/40">
+                          {item.year}
+                        </p>
                       ) : null}
                       <div className="mt-1 flex items-center gap-2 text-xs text-white/40">
                         <span>{formatProgress(item)}</span>

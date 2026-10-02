@@ -37,7 +37,7 @@ export class ErrorBoundary extends Component<Props, State> {
         return this.props.fallback;
       }
       return (
-        <div className="flex items-center justify-center min-h-[200px] p-8 bg-[#050505]">
+        <div className="flex min-h-[200px] items-center justify-center p-8">
           <div className="flex flex-col items-center w-full max-w-md p-6 text-center">
             <AlertTriangle
               size={48}
@@ -65,11 +65,25 @@ export class ErrorBoundary extends Component<Props, State> {
 }
 
 /**
- * Inline error fallback for list items - shows a placeholder card
+ * Inline error fallback for list items - shows a placeholder card.
+ *
+ * `aspect` exists because the fallback has to occupy the same box as the item it
+ * replaces. It defaulted to a 2:3 poster, which is right for a film card and
+ * wrong for an episode still: a 16:9 row containing one 2:3 placeholder shows a
+ * card that is half again as tall as its neighbours, and the shelf stops reading
+ * as a shelf.
  */
-export function ErrorFallback({ retry }: { retry: () => void }) {
+export function ErrorFallback({
+  retry,
+  aspect = "aspect-[2/3]",
+}: {
+  retry: () => void;
+  aspect?: string;
+}) {
   return (
-    <div className="group relative bg-zinc-900 rounded-xl overflow-hidden shadow-lg border border-white/5 aspect-[2/3] w-full">
+    <div
+      className={`group relative bg-zinc-900 rounded-xl overflow-hidden shadow-lg border border-white/5 ${aspect} w-full`}
+    >
       <div className="absolute inset-0 flex items-center justify-center bg-zinc-800">
         <div className="text-center p-4">
           <AlertTriangle size={32} className="text-violet-500 mx-auto mb-2" />

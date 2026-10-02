@@ -84,7 +84,7 @@ export function Navbar({ view, onNavigate }: NavbarProps) {
     <header
       className={`sticky top-0 z-40 transition-all duration-300 ${
         scrolled
-          ? "border-b border-white/10 bg-[#050505]/85 shadow-[0_8px_30px_rgba(0,0,0,0.45)] backdrop-blur-[18px]"
+          ? "sv-chrome border-b shadow-[0_8px_30px_rgba(0,0,0,0.45)]"
           : "border-b border-transparent bg-gradient-to-b from-black/70 to-transparent"
       }`}
     >
@@ -149,7 +149,7 @@ export function Navbar({ view, onNavigate }: NavbarProps) {
 
       {/* Mobile menu panel */}
       {menuOpen && (
-        <div className="border-t border-white/10 bg-[#050505]/85 backdrop-blur-[18px] lg:hidden">
+        <div className="sv-chrome border-t lg:hidden">
           <nav className="flex items-center gap-6 px-4 py-3">
             {NAV_LINKS.map(link => (
               <button

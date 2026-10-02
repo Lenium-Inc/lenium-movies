@@ -1,25 +1,19 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-  Bookmark,
   Check,
   ChevronLeft,
   ChevronRight,
+  Link2,
   Play,
-  Star,
-  Clock,
-  Volume2,
-  VolumeX,
-  type LucideIcon,
+  Plus,
 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
-import { fetchTrailerByTmdbId, type TrailerInfo } from "@/services/api";
-import { useEmbedFailure } from "@/hooks/useEmbedFailure";
 import type { Movie } from "./types";
 import { formatRuntime } from "@/lib/format";
-import { glowBackground, glowPalette } from "@/lib/glow";
 import { tmdbImage } from "@/lib/tmdbImages";
+import { absoluteUrl } from "@/lib/siteUrl";
 
 interface SpotlightProps {
   items: readonly Movie[];
@@ -32,87 +26,50 @@ interface SpotlightProps {
 
 const EASE = [0.32, 0.72, 0, 1] as const;
 
-function getBackdropUrl(backdrop: string | null | undefined): string | null {
+/**
+ * The hero's artwork, and nothing else.
+ *
+ * This used to be a YouTube `<iframe>` playing the title's trailer, muted, with
+ * the player's own chrome hidden behind `controls=0`. It leaked anyway: the
+ * channel watermark, the title card and the "watch on YouTube" link all render
+ * inside the frame and no query parameter removes them, and when a video
+ * refused to embed, YouTube's own error card sat behind the title and ratings
+ * reading "Video unavailable". A third-party frame as the *background* of the
+ * landing page also put a foreign player, its ad scripts and its error states
+ * in the path of every first impression.
+ *
+ * A TMDB backdrop is the right material for a hero: one high-resolution image,
+ * no scripts, no third-party origin, and the gradient overlays below do the
+ * work the frame was standing in for. The trailer is still one click away, on
+ * the title's own page.
+ */
+function backdropUrl(backdrop: string | null | undefined): string | null {
   if (!backdrop) return null;
   // `tmdbImage` re-points the size segment rather than trusting the url it was
-  // handed. The backend bakes w1280 into the stored string, and the previous
-  // `startsWith("http")` bail-out therefore matched every real value and
-  // returned it unchanged -- the hero was showing the stored 1280px rendition
-  // no matter what this function intended to ask for.
-  const url = tmdbImage(backdrop, "original");
-  return url || null;
+  // handed. The backend bakes w1280 into the stored string, so a
+  // `startsWith("http")` bail-out would return the 1280px rendition and the
+  // hero would upscale a small image across the full viewport width.
+  return tmdbImage(backdrop, "original") || null;
 }
 
-function embedUrl(trailer: TrailerInfo, muted: boolean): string {
-  const base =
-    trailer.provider === "dailymotion"
-      ? `https://www.dailymotion.com/embed/video/${trailer.id}?autoplay=1&loop=1&controls=0&muted=${muted ? 1 : 0}&enablejsapi=1`
-      // `enablejsapi=1` is what makes an unplayable video *reportable*. The
-      // player posts an `onError` message when a video is removed, private, or
-      // has embedding disabled; without it the failure is silent and the hero
-      // ends up rendering YouTube's error card behind the title and ratings.
-      : `https://www.youtube-nocookie.com/embed/${trailer.id}?autoplay=1&controls=0&loop=1&playlist=${trailer.id}&playsinline=1&iv_load_policy=3&modestbranding=1&rel=0&enablejsapi=1${muted ? "&mute=1" : ""}`;
-  return base;
-}
-
-function formatRating(score: number | null): string {
+function formatRating(score: number | null | undefined): string {
   if (score === null || score === undefined) return "";
   return score.toFixed(1);
 }
 
-const PrimaryActionButton = ({
-  icon: Icon,
-  label,
-  className,
-  onClick,
-  disabled = false,
-}: {
-  icon: LucideIcon;
-  label: string;
-  className: string;
-  onClick?: () => void;
-  disabled?: boolean;
-}) => (
-  <button
-    type="button"
-    onClick={onClick}
-    disabled={disabled}
-    className={`inline-flex items-center gap-2 rounded-full px-7 py-3.5 text-sm font-semibold transition-all duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-500 disabled:opacity-50 disabled:cursor-not-allowed ${className}`}
-  >
-    <Icon className="h-5 w-5 fill-current" />
-    {label}
-  </button>
-);
-
-const SecondaryActionButton = ({
-  icon: Icon,
-  label,
-  className,
-  onClick,
-  disabled = false,
-}: {
-  icon: LucideIcon;
-  label: string;
-  className: string;
-  onClick?: () => void;
-  disabled?: boolean;
-}) => (
-  <button
-    type="button"
-    onClick={onClick}
-    disabled={disabled}
-    className={`inline-flex items-center gap-2 rounded-full px-7 py-3.5 text-sm font-semibold transition-all duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-500 disabled:opacity-50 disabled:cursor-not-allowed ${className}`}
-  >
-    <Icon className="h-5 w-5" />
-    {label}
-  </button>
-);
+/** Shareable watch link for a title, built the same way the watch page builds it. */
+function watchLink(movie: Movie): string {
+  const id = movie.providerId || movie.id;
+  const isTv = movie.mediaType === "tv";
+  const suffix = isTv ? "?type=tv&season=1&episode=1" : "";
+  return absoluteUrl(`/watch/${id}${suffix}`);
+}
 
 /**
- * Dynamic featured "Movie-of-the-Day" / Spotlight. Full-bleed hero with the
- * active title's official trailer auto-playing (muted by default, toggled via
- * the volume control), dissolvable into the void-black `#050505` gradient
- * architecture when no trailer exists.
+ * Featured "Movie-of-the-Day" hero: full-bleed TMDB backdrop for the active
+ * title, the title's own metadata over it, and the three things a viewer can do
+ * with it (play, keep, share). Rotates through the shelf, and pauses on hover
+ * so a title is not swapped out from under someone who is reading it.
  */
 export function Spotlight({
   items,
@@ -125,10 +82,6 @@ export function Spotlight({
   const count = items.length;
   const [index, setIndex] = useState(0);
   const [paused, setPaused] = useState(false);
-  const [muted, setMuted] = useState(true);
-  const [trailer, setTrailer] = useState<TrailerInfo | null>(null);
-  const trailerCache = useRef(new Map<string, TrailerInfo | null>());
-  const loaderSeq = useRef(0);
 
   useEffect(() => {
     if (count === 0) return;
@@ -138,52 +91,21 @@ export function Spotlight({
   useEffect(() => {
     if (count < 2 || paused || rotateSeconds <= 0) return;
     const timer = window.setInterval(() => {
-      setIndex((i) => (i + 1) % count);
+      setIndex(i => (i + 1) % count);
     }, rotateSeconds * 1000);
     return () => window.clearInterval(timer);
   }, [count, paused, rotateSeconds]);
 
   const current: Movie | undefined = count > 0 ? items[index] : undefined;
   const saved = current ? savedIds.includes(current.id) : false;
+  const art = backdropUrl(current?.backdrop ?? current?.backdrop_url);
 
-  const backdropUrl = getBackdropUrl(current?.backdrop);
-
-  // Watch the background embed and tear it down if it turns out to be
-  // unplayable. Keyed on the trailer itself so the verdict resets per title.
-  const { failed: trailerFailed, frameRef: trailerFrameRef } = useEmbedFailure(
-    trailer ? `${trailer.provider}:${trailer.id}` : null,
-  );
-  const showTrailer = Boolean(trailer) && !trailerFailed;
-
-  // Fetch the active title's trailer once (cached per title).
-  useEffect(() => {
-    if (!current?.providerId) {
-      setTrailer(null);
-      return;
-    }
-    // Movie and TV id spaces are independent in TMDB, so the same number can
-    // name a film and a series. The media type is part of the cache key for the
-    // same reason it is part of the request.
-    const key = `${current.mediaType}:${current.providerId}`;
-    const cached = trailerCache.current.get(key);
-    if (cached !== undefined) {
-      setTrailer(cached);
-      return;
-    }
-    const seq = ++loaderSeq.current;
-    setTrailer(null);
-    fetchTrailerByTmdbId(current.providerId, current.mediaType)
-      .then((info) => {
-        if (seq !== loaderSeq.current) return;
-        trailerCache.current.set(key, info ?? null);
-        setTrailer(info);
-      })
-      .catch(() => {
-        if (seq !== loaderSeq.current) return;
-        trailerCache.current.set(key, null);
-        setTrailer(null);
-      });
-  }, [current?.providerId, current?.mediaType]);
+  const genres = useMemo(() => {
+    if (!current) return "";
+    return (current.genres?.length ? current.genres : current.genre)
+      ?.slice(0, 3)
+      .join(" · ");
+  }, [current]);
 
   // Report the active title so the page can drive its ambient glow.
   useEffect(() => {
@@ -192,16 +114,27 @@ export function Spotlight({
   }, [current?.id]);
 
   const handlePlay = (movie: Movie) => {
-    if (!movie.providerId) {
-      console.warn("[Spotlight] No providerId for movie:", movie.title);
-      return;
-    }
     const tmdbId = parseInt(movie.providerId, 10);
     if (isNaN(tmdbId)) {
-      console.warn("[Spotlight] Invalid TMDB ID:", movie.providerId);
+      console.warn("[Spotlight] No TMDB id for title:", movie.title);
       return;
     }
     navigate(`/watch/${tmdbId}`);
+  };
+
+  const handleShare = async (movie: Movie) => {
+    const url = watchLink(movie);
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: movie.title, url });
+        return;
+      }
+      await navigator.clipboard.writeText(url);
+      toast.success("Link copied");
+    } catch {
+      // A cancelled share sheet throws, and so does a clipboard write on an
+      // insecure origin. Neither is worth a second error toast.
+    }
   };
 
   return (
@@ -209,207 +142,159 @@ export function Spotlight({
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
       aria-label="Featured spotlight"
-      // Sits inside the framed featured card on Home, so it fills its parent
-      // rather than breaking out with negative margins. The page owns the
-      // rounded corners and the border.
-      className="relative isolate h-[560px] w-full overflow-hidden bg-[#050505] sm:h-[600px] lg:h-[660px]"
+      // Full-bleed: edge to edge, no rounded frame. The bottom edge stops short
+      // of the viewport bottom rather than butting against it, so the first shelf
+      // has somewhere to sit.
+      className="relative isolate h-[540px] w-full overflow-hidden sm:h-[600px] lg:h-[76vh] lg:min-h-[560px] lg:max-h-[720px]"
     >
-      {/* Cross-fading media layer — trailer when available, backdrop otherwise */}
+      {/* Artwork. `original` is a real 1920px-wide file, so it covers a 70vh
+          hero at 2x without the browser upscaling a 780px rendition. */}
       <div className="absolute inset-0">
         <AnimatePresence initial={false}>
           {current ? (
             <motion.div
               key={current.id}
               className="absolute inset-0"
-              style={{ filter: "brightness(1.08) saturate(1.06)" }}
-              initial={{ opacity: 0, scale: 1.06 }}
+              initial={{ opacity: 0, scale: 1.04 }}
               animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 1.02 }}
+              exit={{ opacity: 0, scale: 1.01 }}
               transition={{ duration: 0.7, ease: EASE }}
             >
-              {/*
-                The backdrop is painted unconditionally rather than as the
-                `else` branch of a trailer check. It costs one already-preloaded
-                image and it means an embed that fails, is slow, or is still
-                booting always has artwork underneath it -- so falling back is
-                a single removed layer with no gap and no second request.
-              */}
-              {backdropUrl ? (
+              {art ? (
                 <img
-                  src={backdropUrl}
-                  alt=""
+                  src={art}
+                  alt={current.title}
                   loading="eager"
                   fetchPriority="high"
-                  className="spotlight-kenburns h-full w-full object-cover object-[center_22%]"
+                  className="h-full w-full object-cover object-[center_25%] opacity-60"
                 />
               ) : (
-                <div className="h-full w-full bg-[linear-gradient(160deg,#1B1B20_0%,#0A0A0A_55%,#050505_100%)]" />
+                <div
+                  aria-hidden
+                  className="h-full w-full bg-[linear-gradient(140deg,#151824_0%,#0B0C10_60%,#09090B_100%)]"
+                />
               )}
-
-              {showTrailer && trailer ? (
-                <div className="pointer-events-none absolute inset-0 overflow-hidden">
-                  <iframe
-                    key={`${trailer.id}-${muted ? "m" : "u"}`}
-                    ref={trailerFrameRef}
-                    src={embedUrl(trailer, muted)}
-                    title={`${current.title} trailer`}
-                    allow="autoplay; encrypted-media"
-                    sandbox="allow-scripts allow-same-origin allow-forms"
-                    // NOT "no-referrer". YouTube answers an embed with no
-                    // referrer with error 153 ("embedding disabled for this
-                    // video") for exactly the videos that would otherwise play,
-                    // so a strict origin still satisfies it while withholding the
-                    // full page URL, which is all the player needs.
-                    referrerPolicy="strict-origin-when-cross-origin"
-                    tabIndex={-1}
-                    aria-hidden
-                    className="absolute left-1/2 top-1/2 min-h-full min-w-full -translate-x-1/2 -translate-y-1/2"
-                    style={{ aspectRatio: "16 / 9", width: "max(100%, 177.78vh)" }}
-                  />
-                </div>
-              ) : null}
             </motion.div>
           ) : (
-            <div className="absolute inset-0 bg-[linear-gradient(160deg,#1B1B20_0%,#0A0A0A_55%,#050505_100%)]" />
+            <div
+              aria-hidden
+              className="h-full w-full bg-[linear-gradient(140deg,#151824_0%,#0B0C10_60%,#09090B_100%)]"
+            />
           )}
         </AnimatePresence>
       </div>
 
-      {/* Genre-driven aura. This lives inside the hero rather than behind it:
-          the hero paints its own opaque #050505, so an aura rendered outside
-          this subtree is covered and never seen. */}
-      <AnimatePresence initial={false}>
-        {current ? (
-          <motion.div
-            key={`aura-${current.id}`}
-            aria-hidden
-            className="pointer-events-none absolute inset-x-0 -top-24 h-[130%] opacity-90 blur-3xl"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 0.9 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.9, ease: EASE }}
-            style={{
-              background: glowBackground(glowPalette(current.genres, current.id)),
-            }}
-          />
-        ) : null}
-      </AnimatePresence>
-
-      {/* Warm ambient wash behind the sticky header. */}
+      {/* Two scrims, doing two different jobs: the vertical one dissolves the
+          bottom of the image into the page, the horizontal one darkens only
+          where the copy is docked so the left half stays readable without
+          dimming the artwork the viewer came for. */}
       <div
         aria-hidden
-        className="absolute inset-x-0 top-0 h-40 bg-gradient-to-b from-white/[0.07] to-transparent"
+        className="absolute inset-0 bg-gradient-to-t from-[#0B0C10] via-[#0B0C10]/40 to-transparent"
       />
-      {/* Localised left vignette — darkens only where the copy is docked
-          instead of dimming the whole frame. */}
       <div
         aria-hidden
-        className="absolute inset-y-0 left-0 w-[62%] bg-gradient-to-r from-zinc-950/95 via-zinc-950/55 to-transparent"
+        className="absolute inset-0 bg-gradient-to-r from-[#0B0C10] via-[#0B0C10]/60 to-transparent"
       />
-      {/* Short bottom fade blending into the catalogue below. */}
+      {/* Cyan counter-light on the right edge, so the frame is not lit by one
+          colour alone. */}
       <div
         aria-hidden
-        className="absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-zinc-950 via-zinc-950/40 to-transparent"
+        className="absolute inset-0 bg-[radial-gradient(ellipse_60%_50%_at_85%_20%,rgba(6,182,212,0.14),transparent_65%)]"
       />
 
-      {/* Cross-fading content block - left-aligned and docked toward the bottom */}
-      <div className="absolute inset-0 z-10 flex items-end justify-start px-5 pb-20 sm:px-8 lg:px-16">
-        <div className="w-full max-w-3xl text-left">
-          {current ? (
+      {/* Content overlay. Pinned to the same 1480px column and horizontal
+          gutter that <main> uses on Home, so the title sits in line with the
+          shelves below it. Before the hero became full-bleed this was
+          `left-4 sm:left-8`, which lined the title up with nothing. */}
+      <div className="absolute inset-x-0 bottom-12 z-10 px-4 sm:px-6 lg:px-8">
+        <div className="mx-auto max-w-[1480px]">
+          <div className="max-w-2xl space-y-4">
             <AnimatePresence initial={false} mode="popLayout">
-              <motion.div
-                key={current.id}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -12 }}
-                transition={{ duration: 0.5, ease: EASE }}
-              >
-                {/* Title */}
-                <h1 className="text-5xl font-black leading-[0.95] tracking-[-0.03em] text-[#FFFFFF] drop-shadow-[0_4px_24px_rgba(0,0,0,0.8)] md:text-7xl">
-                  {current.title}
-                </h1>
+              {current ? (
+                <motion.div
+                  key={current.id}
+                  className="space-y-4"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -12 }}
+                  transition={{ duration: 0.5, ease: EASE }}
+                >
+                  <h1 className="text-4xl font-black leading-[0.95] tracking-tight text-white drop-shadow-md sm:text-5xl lg:text-6xl">
+                    {current.title}
+                  </h1>
 
-                {/* Consolidated Inline Metadata Row */}
-                <div className="mt-4 flex flex-wrap items-center justify-start gap-2.5">
-                  {current.year ? (
-                    <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/5 px-3 py-1 text-xs font-semibold text-white backdrop-blur-sm">
-                      {current.year}
-                    </span>
-                  ) : null}
-                  {current.runtime && (
-                    <>
-                      <span className="text-[10px] text-white/40">·</span>
-                      <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/5 px-3 py-1 text-xs font-semibold text-zinc-300 backdrop-blur-sm">
-                        <Clock className="h-3 w-3" />
+                  <div className="flex flex-wrap items-center gap-3">
+                    {current.year ? (
+                      <span className="px-2.5 py-1 rounded-md text-xs font-semibold bg-violet-500/20 text-violet-300 border border-violet-500/30">
+                        {current.year}
+                      </span>
+                    ) : null}
+                    {formatRating(current.vote_average ?? current.score) ? (
+                      <span className="px-2.5 py-1 rounded-md text-xs font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                        ★ {formatRating(current.vote_average ?? current.score)}
+                      </span>
+                    ) : null}
+                    {current.runtime ? (
+                      <span className="px-2.5 py-1 rounded-md text-xs font-semibold bg-white/10 text-gray-200 border border-white/10">
                         {formatRuntime(current.runtime)}
                       </span>
-                    </>
-                  )}
-                  {current.vote_average && current.vote_average > 0 && (
-                    <>
-                      <span className="text-[10px] text-white/40">·</span>
-                      <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-400/10 px-2.5 py-1 text-xs font-bold text-amber-400 backdrop-blur-sm">
-                        <Star className="h-3 w-3 fill-current" />
-                        {formatRating(current.vote_average)}
-                      </span>
-                    </>
-                  )}
-                  {current.genres?.length && (
-                    <>
-                      <span className="text-[10px] text-white/40">·</span>
-                      <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/5 px-3 py-1 text-xs font-semibold text-zinc-300 backdrop-blur-sm">
-                        {current.genres.slice(0, 3).join(", ")}
-                      </span>
-                    </>
-                  )}
-                </div>
+                    ) : null}
+                    {genres ? (
+                      <span className="text-sm text-gray-300">{genres}</span>
+                    ) : null}
+                  </div>
 
-                {/* Plot Overview / Synopsis */}
-                {current.synopsis ? (
-                  <p className="mt-4 line-clamp-3 max-w-2xl text-base leading-7 text-zinc-300 text-left">
-                    {current.synopsis}
-                  </p>
-                ) : null}
+                  {current.synopsis ? (
+                    <p className="text-sm text-gray-300 line-clamp-3 leading-relaxed max-w-xl">
+                      {current.synopsis}
+                    </p>
+                  ) : null}
 
-                {/* Action Buttons - Only Play and My List */}
-                <div className="mt-8 flex flex-wrap items-center justify-start gap-4">
-                  <PrimaryActionButton
-                    icon={Play}
-                    label="Play"
-                    onClick={() => handlePlay(current)}
-                    className="bg-violet-600 font-black text-white ring-1 ring-inset ring-violet-400/40 shadow-[0_16px_40px_rgba(124,58,237,0.35)] hover:bg-violet-500 hover:shadow-[0_20px_48px_rgba(124,58,237,0.45)] active:scale-[0.97] active:bg-violet-700"
-                  />
-                  <SecondaryActionButton
-                    icon={saved ? Check : Bookmark}
-                    label={saved ? "In My List" : "My List"}
-                    onClick={() => {
-                    toast.success(
-                      saved ? "Removed from your list" : "Added to your list!"
-                    );
-                    onSave?.(current);
-                  }}
-                    className="border-2 border-white/20 bg-black/30 text-white backdrop-blur-md hover:border-white/40 hover:bg-white/10 hover:text-white active:scale-[0.97] active:border-white/50"
-                  />
-                </div>
-              </motion.div>
+                  <div className="flex flex-wrap items-center gap-3 pt-2 sm:gap-4">
+                    <button
+                      type="button"
+                      onClick={() => handlePlay(current)}
+                      className="sv-btn-primary text-sm"
+                    >
+                      <Play className="h-4 w-4 fill-current" />
+                      Play
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        toast.success(
+                          saved
+                            ? "Removed from your list"
+                            : "Added to your list!"
+                        );
+                        onSave?.(current);
+                      }}
+                      aria-pressed={saved}
+                      className="sv-btn-glass text-sm"
+                    >
+                      {saved ? (
+                        <Check className="h-4 w-4" />
+                      ) : (
+                        <Plus className="h-4 w-4" />
+                      )}
+                      {saved ? "In My List" : "My List"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleShare(current)}
+                      className="sv-btn-glass px-4 text-sm"
+                    >
+                      <Link2 className="h-4 w-4" />
+                      <span className="hidden sm:inline">Share</span>
+                    </button>
+                  </div>
+                </motion.div>
+              ) : null}
             </AnimatePresence>
-          ) : null}
+          </div>
         </div>
       </div>
-
-      {/* Trailer mute toggle (bottom-right control cluster). Hidden once the
-          embed has failed, so the control can't offer audio for a video that
-          isn't playing. */}
-      {current && showTrailer && (
-        <button
-          type="button"
-          onClick={() => setMuted((m) => !m)}
-          aria-label={muted ? "Unmute trailer" : "Mute trailer"}
-          className="absolute bottom-5 right-36 z-10 grid h-9 w-9 place-items-center rounded-full border border-white/15 bg-black/40 text-white/80 backdrop-blur-md transition hover:border-white/40 hover:bg-white/10 hover:text-white active:scale-95"
-        >
-          {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
-        </button>
-      )}
 
       {/* Rotation controls */}
       {count > 1 && (
@@ -417,16 +302,16 @@ export function Spotlight({
           <button
             type="button"
             aria-label="Previous featured title"
-            onClick={() => setIndex((i) => (i - 1 + count) % count)}
-            className="absolute bottom-5 right-20 z-10 grid h-8 w-8 place-items-center rounded-full border border-white/15 bg-black/40 text-white/70 backdrop-blur-md transition hover:border-white/40 hover:bg-white/10 hover:text-white active:scale-95"
+            onClick={() => setIndex(i => (i - 1 + count) % count)}
+            className="sv-btn-icon absolute bottom-6 right-20 z-10 hidden sm:grid"
           >
             <ChevronLeft className="h-4 w-4" />
           </button>
           <button
             type="button"
             aria-label="Next featured title"
-            onClick={() => setIndex((i) => (i + 1) % count)}
-            className="absolute bottom-5 right-12 z-10 grid h-8 w-8 place-items-center rounded-full border border-white/15 bg-black/40 text-white/70 backdrop-blur-md transition hover:border-white/40 hover:bg-white/10 hover:text-white active:scale-95"
+            onClick={() => setIndex(i => (i + 1) % count)}
+            className="sv-btn-icon absolute bottom-6 right-12 z-10 hidden sm:grid"
           >
             <ChevronRight className="h-4 w-4" />
           </button>
@@ -435,7 +320,7 @@ export function Spotlight({
 
       {/* Rotation indicators */}
       {count > 1 && (
-        <div className="absolute bottom-5 right-5 z-10 flex items-center gap-1.5">
+        <div className="absolute bottom-7 right-5 z-10 hidden items-center gap-1.5 sm:flex">
           {Array.from({ length: Math.min(count, 8) }, (_, dot) => {
             const active = count > 8 ? index % 8 === dot : index === dot;
             return (
@@ -444,13 +329,13 @@ export function Spotlight({
                 type="button"
                 aria-label={`Show slide ${dot + 1}`}
                 onClick={() =>
-                  setIndex((current) =>
+                  setIndex(current =>
                     count > 8 ? current - (current % 8) + dot : dot
                   )
                 }
                 className={`h-1 rounded-full transition-all duration-300 ${
                   active
-                    ? "w-6 bg-white"
+                    ? "w-6 bg-violet-400"
                     : "w-1.5 bg-white/30 hover:bg-white/60"
                 }`}
               />
@@ -467,7 +352,7 @@ export function Spotlight({
         >
           <div
             key={index}
-            className="fs-progress h-full bg-white"
+            className="fs-progress h-full bg-gradient-to-r from-violet-500 to-cyan-400"
             style={{
               animationDuration: `${rotateSeconds}s`,
               animationPlayState: paused ? "paused" : "running",
