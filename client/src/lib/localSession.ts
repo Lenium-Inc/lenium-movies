@@ -75,6 +75,18 @@ function writeStorage<T>(key: string, value: T): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(key, JSON.stringify(value));
+    /*
+     * Subscribers are notified here, once, by the single place that persists.
+     * Every public mutation below used to follow its write with its own
+     * `notify()`, and this event also fired, so one save produced two
+     * notifications -- which the My List page pays for twice over, since it
+     * subscribes *and* listens for this event.
+     *
+     * The DOM event is still dispatched: it is how anything outside this module
+     * (the My List page) hears about a change, and how a second copy of the
+     * store in another bundle would learn about one.
+     */
+    notify();
     window.dispatchEvent(
       new CustomEvent("freestream:state-change", {
         detail: { key },
@@ -143,7 +155,7 @@ type Listener = () => void;
 const listeners = new Set<Listener>();
 
 function notify(): void {
-  listeners.forEach((fn) => fn());
+  listeners.forEach(fn => fn());
 }
 
 function subscribe(listener: Listener): () => void {
@@ -152,14 +164,10 @@ function subscribe(listener: Listener): () => void {
 }
 
 if (typeof window !== "undefined") {
-  window.addEventListener("storage", (e) => {
+  window.addEventListener("storage", e => {
     if (e.key && Object.values(STORAGE_KEYS).includes(e.key as any)) {
       notify();
     }
-  });
-
-  window.addEventListener("freestream:state-change", () => {
-    notify();
   });
 }
 
@@ -206,7 +214,7 @@ function migrateLegacyKeys(): void {
       try {
         const parsed = JSON.parse(oldList) as Record<string, any>;
         const movies: Record<string, MovieSummary> = {};
-        Object.values(parsed).forEach((entry) => {
+        Object.values(parsed).forEach(entry => {
           const key = String(entry.id);
           movies[key] = {
             id: entry.id,
@@ -265,7 +273,6 @@ export function signInDemo(): void {
     isAuthenticated: true,
     hydrated: true,
   });
-  notify();
 }
 
 export function signOut(): void {
@@ -274,7 +281,6 @@ export function signOut(): void {
     isAuthenticated: false,
     hydrated: true,
   });
-  notify();
 }
 
 export function getSession(): SessionState {
@@ -293,7 +299,6 @@ export function addToMyList(movie: MovieSummary): void {
   if (key in list) return;
   list[key] = { ...movie, tag: "plan", addedAt: new Date().toISOString() };
   saveList(list);
-  notify();
 }
 
 export function removeFromMyList(movieId: string | number): void {
@@ -302,7 +307,6 @@ export function removeFromMyList(movieId: string | number): void {
   if (key in list) {
     delete list[key];
     saveList(list);
-    notify();
   }
 }
 
@@ -312,7 +316,6 @@ export function setEntryTag(movieId: string | number, tag: ListTag): void {
   if (key in list) {
     list[key] = { ...list[key], tag };
     saveList(list);
-    notify();
   }
 }
 
@@ -322,12 +325,10 @@ export function toggleMyList(movie: MovieSummary): boolean {
   if (key in list) {
     delete list[key];
     saveList(list);
-    notify();
     return false;
   }
   list[key] = { ...movie, tag: "plan", addedAt: new Date().toISOString() };
   saveList(list);
-  notify();
   return true;
 }
 
@@ -342,7 +343,6 @@ export function getMyList(): MovieSummary[] {
 
 export function clearMyList(): void {
   saveList({});
-  notify();
 }
 
 export function addToHistory(item: WatchHistoryItem): void {
@@ -350,22 +350,19 @@ export function addToHistory(item: WatchHistoryItem): void {
   const key = getMovieKey(item);
   const next = [
     { ...item, watchedAt: Date.now() },
-    ...history.filter((entry) => getMovieKey(entry) !== key),
+    ...history.filter(entry => getMovieKey(entry) !== key),
   ].slice(0, 100);
   saveHistory(next);
-  notify();
 }
 
 export function removeFromHistory(movieId: string | number): void {
   const history = loadHistory();
   const key = getMovieKey({ id: movieId, providerId: movieId });
-  saveHistory(history.filter((entry) => getMovieKey(entry) !== key));
-  notify();
+  saveHistory(history.filter(entry => getMovieKey(entry) !== key));
 }
 
 export function clearHistory(): void {
   saveHistory([]);
-  notify();
 }
 
 export function getHistory(): WatchHistoryItem[] {

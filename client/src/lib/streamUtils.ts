@@ -5,24 +5,30 @@ import { EMBED_HOSTS } from "@/lib/embedSources";
  *
  * Derived from the provider registry so it cannot drift: the previous
  * hand-maintained list was missing three of the five hosts the registry itself
- * emitted (`vidsrc.to`, `autoembed.to`, `mycima.tv`, `2embed.org`), which meant
- * `isExternalEmbedUrl` returned false for them. Such a URL was then admitted
- * into the native player's candidate list and handed to `<video>`/hls.js as if
- * it were an MP4, where it cannot play -- costing a full stall-detection cycle
- * and a mirror rotation per occurrence.
+ * emitted, which meant `isExternalEmbedUrl` returned false for them. Such a
+ * URL was then admitted into the native player's candidate list and handed to
+ * `<video>`/hls.js as if it were an MP4, where it cannot play -- costing a full
+ * stall-detection cycle and a mirror rotation per occurrence.
  *
  * The historical entries that no longer appear in the registry are kept below:
- * the backend's own hardcoded embeds, and providers a cached/older resolve
- * payload can still carry.
+ * providers the current manifest dropped, and hosts a cached or older resolve
+ * payload can still carry. Dropping one from the manifest does not un-frame it,
+ * and a URL that is no longer recognised as an embed is a URL handed to the
+ * native player as though it were a media file.
  */
 const LEGACY_EMBED_HOSTS = [
+  "vidsrc.me",
+  "vidsrc.to",
   "vidsrc.sh",
-  "embed.su",
+  "autoembed.to",
+  "autoembed.cc",
+  "mycima.tv",
+  "2embed.org",
+  "2embed.cc",
+  "multiembed.mov",
   "goojara.to",
   "vidlink.org",
   "vidstream.pro",
-  "autoembed.cc",
-  "2embed.cc",
 ] as const;
 
 export const EXTERNAL_EMBED_HOSTS: readonly string[] = Object.freeze([
@@ -34,7 +40,7 @@ export function isExternalEmbedUrl(url: string | null | undefined): boolean {
   try {
     const hostname = new URL(url).hostname.toLowerCase();
     return EXTERNAL_EMBED_HOSTS.some(
-      (host) => hostname === host || hostname.endsWith(`.${host}`)
+      host => hostname === host || hostname.endsWith(`.${host}`)
     );
   } catch {
     return false;
@@ -82,5 +88,7 @@ export function directStreamRank(url: string): number {
 
 /** `urls` stably re-ordered so backend HLS plays before anything else. */
 export function orderDirectStreams(urls: Iterable<string>): string[] {
-  return Array.from(urls).sort((a, b) => directStreamRank(a) - directStreamRank(b));
+  return Array.from(urls).sort(
+    (a, b) => directStreamRank(a) - directStreamRank(b)
+  );
 }

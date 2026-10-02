@@ -143,51 +143,21 @@ export function hasRemoteSession(): boolean {
 // ---------------------------------------------------------------------------
 // Embed consent
 //
-// The CookieBanner offers a real "essential only" choice, and this is where
-// that choice has to actually take effect -- otherwise the banner is just
-// text. When consent is not "accepted", no third-party embed frame may load.
+// There is deliberately no consent record here any more, and there is no
+// banner either.
 //
-// Undecided is treated as "not yet accepted" (consent by opt-in), which is the
-// correct default for a third-party frame that can set its own cookies. The
-// direct-source path is untouched, so declining costs the viewer embed
-// playback and nothing else.
+// The banner sat over the home page on a signed-out first visit, described what
+// cookies a third-party player frame might set, and offered "essential only" --
+// a choice that, because the helper that read it had already been reduced to a
+// no-op, changed nothing at all. The viewer paid for that banner in the only
+// currency that matters on a first impression: the film they came to watch was
+// hidden behind it.
+//
+// A third-party frame is how these titles are served. Either that is acceptable
+// and the banner is theatre, or it is not and the frames should not be in the
+// product. It is not something to ask about halfway through a session, so the
+// record of the answer is gone with the question.
 // ---------------------------------------------------------------------------
-
-const EMBED_CONSENT_KEY = "freestream-consent-v1";
-
-export type EmbedConsent = "accepted" | "essential" | "undecided";
-
-/**
- * Tri-state on purpose: the banner has to distinguish "declined" (stay hidden)
- * from "never asked" (show it). A boolean cannot do both, and collapsing them
- * would either nag forever or silently grant consent on first visit.
- */
-export function readEmbedConsent(): EmbedConsent {
-  try {
-    const raw = window.localStorage.getItem(EMBED_CONSENT_KEY);
-    return raw === "accepted" || raw === "essential" ? raw : "undecided";
-  } catch {
-    // Storage blocked. Treat as undecided so the banner still appears and the
-    // viewer gets the essential-only path.
-    return "undecided";
-  }
-}
-
-// There is deliberately no `hasEmbedConsent()` boolean. It used to gate
-// third-party embeds, so a viewer who picked "essential only" got
-// "Backup playback is blocked because third-party embeds were declined" and a
-// dead stream. An embed is a normal way to play a title, not an optional
-// extra, so gating it was never the right call -- and a helper whose only job
-// was to withhold playback was a footgun. If a consent check is ever needed
-// again, it has to gate optional analytics or marketing, never the video.
-
-export function setEmbedConsent(choice: "accepted" | "essential"): void {
-  try {
-    window.localStorage.setItem(EMBED_CONSENT_KEY, choice);
-  } catch {
-    /* choice still applies in memory for this page view */
-  }
-}
 
 /** Pull the account's `saved_media` and merge it into the local list. */
 export async function syncSavedFromRemote(): Promise<void> {

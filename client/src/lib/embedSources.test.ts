@@ -35,14 +35,20 @@ function parsePythonManifest(): Array<{
   const tuple = pythonSource.match(
     /EMBED_PROVIDERS: tuple\[EmbedProvider, \.\.\.\] = \(([\s\S]*?)\n\)/
   );
-  if (!tuple) throw new Error("EMBED_PROVIDERS tuple not found in stream_providers.py");
+  if (!tuple)
+    throw new Error("EMBED_PROVIDERS tuple not found in stream_providers.py");
   const out: Array<{
     id: string;
     label: string;
     host: string;
     priority: number;
   }> = [];
-  const pattern = /EmbedProvider\(\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*(\d+)\s*\)/g;
+  // The optional fifth argument is the provider's path prefix (only vidsrc.cc
+  // needs `/v2/embed` instead of `/embed`), so it is captured but the parity
+  // assertions below check id/label/host -- which is what the two sides have to
+  // agree on for a frame to be recognised as an embed.
+  const pattern =
+    /EmbedProvider\(\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*(\d+)/g;
   for (let i = 0; i < tuple[1].length; i += 1) {
     const match = pattern.exec(tuple[1]);
     if (!match) break;
@@ -66,24 +72,26 @@ describe("embed provider manifest parity with the backend", () => {
   });
 
   it("declares the same providers, in the same order, with the same hosts", () => {
-    expect(EMBED_SOURCES.map((s) => ({ id: s.id, host: s.host }))).toEqual(
-      manifest.map((p) => ({ id: p.id, host: p.host }))
+    expect(EMBED_SOURCES.map(s => ({ id: s.id, host: s.host }))).toEqual(
+      manifest.map(p => ({ id: p.id, host: p.host }))
     );
   });
 
   it("uses the same labels, so a switcher tab reads identically on both sides", () => {
-    expect(EMBED_SOURCES.map((s) => s.label)).toEqual(manifest.map((p) => p.label));
+    expect(EMBED_SOURCES.map(s => s.label)).toEqual(manifest.map(p => p.label));
   });
 
   it("gives every provider a strictly increasing backend priority", () => {
     // The resolver walks the chain in priority order, so a duplicate priority
     // would make the sort order between two providers arbitrary.
-    const priorities = manifest.map((p) => p.priority);
+    const priorities = manifest.map(p => p.priority);
     expect([...priorities].sort((a, b) => a - b)).toEqual(priorities);
   });
 
   it("derives EMBED_HOSTS from the manifest with no duplicates", () => {
-    expect(EMBED_HOSTS).toEqual(Array.from(new Set(EMBED_SOURCES.map((s) => s.host))));
+    expect(EMBED_HOSTS).toEqual(
+      Array.from(new Set(EMBED_SOURCES.map(s => s.host)))
+    );
   });
 
   it("accepts and rejects exactly the characters the backend's safeId accepts", () => {
@@ -91,7 +99,7 @@ describe("embed provider manifest parity with the backend", () => {
     // diverge, a title can be addressable on one side and silently dropped on
     // the other, which reads as "provider down" rather than as a bug.
     const pythonClass = pythonSource.match(
-      /_SAFE_ID_PATTERN = re\.compile\(r"\[([^\]]+)\]/,
+      /_SAFE_ID_PATTERN = re\.compile\(r"\[([^\]]+)\]/
     )?.[1];
     expect(pythonClass).toBeTruthy();
     // The class uses range syntax (`A-Za-z0-9-`), so it has to be expanded
@@ -99,7 +107,11 @@ describe("embed provider manifest parity with the backend", () => {
     const allowed = new Set<string>();
     for (let i = 0; i < pythonClass!.length; i += 1) {
       if (pythonClass![i + 1] === "-" && i + 2 < pythonClass!.length) {
-        for (let code = pythonClass!.charCodeAt(i); code <= pythonClass!.charCodeAt(i + 2); code += 1) {
+        for (
+          let code = pythonClass!.charCodeAt(i);
+          code <= pythonClass!.charCodeAt(i + 2);
+          code += 1
+        ) {
           allowed.add(String.fromCharCode(code));
         }
         i += 2;
@@ -110,11 +122,14 @@ describe("embed provider manifest parity with the backend", () => {
     expect(allowed.has("-")).toBe(true);
     "abcXYZ0189-".split("").forEach(char => {
       expect(
-        resolveEmbedSources({ tmdbId: `12${char}3`, mediaType: "movie" }).length > 0
+        resolveEmbedSources({ tmdbId: `12${char}3`, mediaType: "movie" })
+          .length > 0
       ).toBe(allowed.has(char));
     });
     [" ", "/", "?", "#", "&", ".", "_", "'", "\n"].forEach(char => {
-      expect(resolveEmbedSources({ tmdbId: `12${char}3`, mediaType: "movie" }).length).toBe(0);
+      expect(
+        resolveEmbedSources({ tmdbId: `12${char}3`, mediaType: "movie" }).length
+      ).toBe(0);
     });
   });
 });
@@ -122,35 +137,23 @@ describe("embed provider manifest parity with the backend", () => {
 describe("embed URL shapes", () => {
   const urlFor = (id: string, mediaType: "movie" | "tv") =>
     resolveEmbedSources({ tmdbId: 603, mediaType, season: 2, episode: 5 }).find(
-      (s) => s.id === id
+      s => s.id === id
     )?.url ?? null;
 
   // The backend's EmbedProvider.build() must produce these same strings. A
   // mismatch means the client's fallback chain addresses providers differently
   // from the one the server vetted.
   it.each([
-    ["vidsrc", "movie", "https://vidsrc.me/embed/movie/603"],
-    ["vidsrc", "tv", "https://vidsrc.me/embed/tv/603/2/5"],
-    ["vidsrc_alt", "movie", "https://vidsrc.cc/v2/embed/movie/603"],
-    ["vidsrc_alt", "tv", "https://vidsrc.cc/v2/embed/tv/603/2/5"],
-    ["vidsrc_to", "movie", "https://vidsrc.to/embed/movie/603"],
-    ["vidsrc_to", "tv", "https://vidsrc.to/embed/tv/603/2/5"],
-    ["autoembed", "movie", "https://autoembed.to/embed/movie/tmdb/603"],
-    ["autoembed", "tv", "https://autoembed.to/embed/tv/603?season=2&episode=5"],
-    ["mycima", "movie", "https://mycima.tv/embed/movie/603"],
-    ["mycima", "tv", "https://mycima.tv/embed/tv/603/2/5"],
-    ["2embed", "movie", "https://2embed.org/embed/movie/603"],
-    ["2embed", "tv", "https://2embed.org/embed/tv/603/2/5"],
-    [
-      "multiembed",
-      "movie",
-      "https://multiembed.mov/directstream.php?video_id=603&tmdb=1",
-    ],
-    [
-      "multiembed",
-      "tv",
-      "https://multiembed.mov/directstream.php?video_id=603&tmdb=1&season=2&episode=5",
-    ],
+    ["vidsrc-pro", "movie", "https://vidsrc.pro/embed/movie/603"],
+    ["vidsrc-pro", "tv", "https://vidsrc.pro/embed/tv/603/2/5"],
+    ["embed-su", "movie", "https://embed.su/embed/movie/603"],
+    ["embed-su", "tv", "https://embed.su/embed/tv/603/2/5"],
+    ["vidsrc-cc", "movie", "https://vidsrc.cc/v2/embed/movie/603"],
+    ["vidsrc-cc", "tv", "https://vidsrc.cc/v2/embed/tv/603/2/5"],
+    ["mycima-api", "movie", "https://mycima.vidsrc.pm/embed/movie/603"],
+    ["mycima-api", "tv", "https://mycima.vidsrc.pm/embed/tv/603/2/5"],
+    ["autoembed", "movie", "https://player.autoembed.cc/embed/movie/603"],
+    ["autoembed", "tv", "https://player.autoembed.cc/embed/tv/603/2/5"],
   ])("%s builds the %s url the backend expects", (id, mediaType, expected) => {
     expect(urlFor(id, mediaType as "movie" | "tv")).toBe(expected);
   });

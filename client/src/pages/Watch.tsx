@@ -40,23 +40,36 @@ import {
   type StreamMovie,
   type TrailerInfo,
 } from "@/services/api";
-import { VideoPlayer, type StreamVariant } from "@/components/stream/VideoPlayer";
+import {
+  VideoPlayer,
+  type StreamVariant,
+} from "@/components/stream/VideoPlayer";
 import { EmbedPlayer } from "@/components/stream/EmbedPlayer";
+import { ServerSelector } from "@/components/stream/ServerSelector";
 import { StreamLoader } from "@/components/stream/StreamLoader";
-import { AllowanceMeter, DailyLimitNotice } from "@/components/stream/DailyLimitNotice";
 import { formatRuntime } from "@/lib/format";
 import { titleUnavailable } from "@/lib/playbackCopy";
-import { WatchTVControls, type SeasonInfo } from "@/components/stream/WatchTVControls";
+import {
+  WatchTVControls,
+  type SeasonInfo,
+} from "@/components/stream/WatchTVControls";
 import { cancelInFlightPrefetch, prefetchForOpen } from "@/services/prefetch";
 import { useLocalSession } from "@/context/LocalSessionContext";
 import {
   getProgress,
   progressForTitle,
+  recordWatch,
   subscribeStats,
 } from "@/services/stats";
-import type { Movie, ResolvedStream as ResolvedStreamType, StreamVariant as StreamVariantType } from "@/components/movies/types";
+import type {
+  Movie,
+  ResolvedStream as ResolvedStreamType,
+  StreamVariant as StreamVariantType,
+} from "@/components/movies/types";
 import type { StreamEpisode } from "@/services/api";
 import { buildWatchPath, resolveMediaType } from "@/lib/watchRoute";
+import { progressKey } from "@/lib/progressKey";
+import { absoluteUrl } from "@/lib/siteUrl";
 import { useTasteRecorder } from "@/hooks/useTaste";
 import { TrailerEmbed } from "@/components/movies/MediaCard";
 import {
@@ -73,13 +86,9 @@ import { isExternalEmbedUrl, orderDirectStreams } from "@/lib/streamUtils";
 import { resolveEmbedSources } from "@/lib/embedSources";
 import { tmdbImage, type TmdbImageSize } from "@/lib/tmdbImages";
 import { useAuth } from "@/context/AuthContext";
-import { useAllowance } from "@/hooks/useProfiles";
 import { useActiveProfile } from "@/context/ActiveProfileContext";
 import { apiHistoryAdd } from "@/services/auth";
-import {
-  pushRemoveToRemote,
-  pushToggleToRemote,
-} from "@/services/lists";
+import { pushRemoveToRemote, pushToggleToRemote } from "@/services/lists";
 import { toast } from "sonner";
 
 const TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p";
@@ -93,6 +102,12 @@ function getImageUrl(path: string, size: TmdbImageSize): string {
 }
 
 const RATE_AFTER_SECONDS = 15 * 60;
+
+/**
+ * Floor on how often watch position is written to the account's history.
+ * The player samples locally every few seconds; this is the network half.
+ */
+const REMOTE_PROGRESS_MS = 30_000;
 const MAX_RETRY_ATTEMPTS = 3;
 
 /**
@@ -185,7 +200,8 @@ function classifyError(error: unknown) {
   ) {
     return {
       type: "provider_unavailable",
-      message: "The streaming provider is currently unavailable. Trying alternative sources...",
+      message:
+        "The streaming provider is currently unavailable. Trying alternative sources...",
       recoverable: true,
       retryCount: 0,
     };
@@ -301,7 +317,9 @@ export function WatchPage() {
   const [movieLoading, setMovieLoading] = useState(true);
   const [resolved, setResolved] = useState<ResolvedStream | null>(null);
   const [resolving, setResolving] = useState(false);
-  const [playError, setPlayError] = useState<ReturnType<typeof classifyError> | null>(null);
+  const [playError, setPlayError] = useState<ReturnType<
+    typeof classifyError
+  > | null>(null);
   const [season, setSeason] = useState(urlSeason);
   const [episode, setEpisode] = useState(urlEpisode);
 
@@ -328,14 +346,18 @@ export function WatchPage() {
         resolverMediaType: resolved?.stream?.media_type,
         urlType,
       }) === "tv",
-    [movie, resolved?.stream?.media_type, urlType],
+    [movie, resolved?.stream?.media_type, urlType]
   );
 
   // A film must never carry season/episode. Once local metadata says "movie",
   // force them to 1 so a stale, shared or hand-edited ?type=tv URL cannot make
   // the resolver look for an episode that does not exist.
   useEffect(() => {
-    if (movie && movie.mediaType === "movie" && (season !== 1 || episode !== 1)) {
+    if (
+      movie &&
+      movie.mediaType === "movie" &&
+      (season !== 1 || episode !== 1)
+    ) {
       setSeason(1);
       setEpisode(1);
     }
@@ -363,18 +385,13 @@ export function WatchPage() {
   const { isInMyList, toggleMyList, addToHistory } = useLocalSession();
 
   const { user: authUser } = useAuth();
-  // Server-backed profile, so history and the daily allowance follow the
-  // viewer rather than the account.
+  // Server-backed profile, so history and recommendations follow the viewer
+  // rather than the account.
   // From the shared context, so the profile selected here is the same one the
   // home feed and the switcher are using -- a second `useProfiles()` instance
   // held its own copy of the list and drifted out of sync with this one.
   const { activeProfile } = useActiveProfile();
   const activeProfileId = activeProfile ? String(activeProfile.id) : null;
-  const {
-    claim: claimAllowance,
-    limited: allowanceLimited,
-    allowance: allowanceState,
-  } = useAllowance(activeProfileId);
   const recordTaste = useTasteRecorder(activeProfileId);
 
   // Fetch movie details on mount
@@ -399,19 +416,41 @@ export function WatchPage() {
   }, [movie?.id]);
 
   // Subscribe to watch progress
+  //
+  // Three sources, because progress has been written under three keys over the
+  // life of this feature: the catalog id, the resolver's own id, and the title.
+  // The first is read episode-qualified for series, because that is the key
+  // `handleProgress` writes; a per-show read here would report the position in
+  // S01E01 while the viewer is opening S01E02.
   useEffect(() => {
     if (!movie) return;
+    const mediaType = isSeries ? "tv" : "movie";
+    const key = progressKey(
+      movie.providerId ?? movie.id,
+      mediaType,
+      season,
+      episode
+    );
     const refresh = () =>
       setWatchedSeconds(
         Math.max(
           getProgress(String(movie.id)),
+          getProgress(key),
           resolved ? getProgress(resolved.stream.id) : 0,
           progressForTitle(movie.title)
         )
       );
     refresh();
     return subscribeStats(refresh);
-  }, [movie?.id, movie?.title, resolved]);
+  }, [
+    movie?.id,
+    movie?.providerId,
+    movie?.title,
+    resolved,
+    isSeries,
+    season,
+    episode,
+  ]);
 
   const canRate = watchedSeconds >= RATE_AFTER_SECONDS;
 
@@ -438,7 +477,9 @@ export function WatchPage() {
       if (!resolved?.stream.id || !/^\d+$/.test(resolved.stream.id)) return;
       try {
         const details = await fetch(
-          apiUrl(`/api/episodes?tmdb_id=${resolved.stream.id}&season=${s}&episode=${e}`)
+          apiUrl(
+            `/api/episodes?tmdb_id=${resolved.stream.id}&season=${s}&episode=${e}`
+          )
         );
         if (details.ok) {
           const data = await details.json();
@@ -503,20 +544,21 @@ export function WatchPage() {
   const resolveAndPlay = useCallback(
     async (targetSeason: number, targetEpisode: number) => {
       if (resolving || !movie) return;
-      // Claim the day's allowance before spending a resolve on playback. This
-      // is the only gate on playback: it is the server's decision, it is
-      // idempotent per title so a retry or a second tab does not burn a slot,
-      // and it is what the limit notice is built from. A second, local
-      // "mindful" counter used to run in front of this one and open a
-      // self-resetting modal -- two competing daily limits, one of which the
-      // viewer could clear with a button. Signed-out viewers and profiles with
-      // no server profile resolve to `true` and play unthrottled.
-      const key = `${movie.providerId}:${targetSeason}:${targetEpisode}`;
-      const allowed = await claimAllowance(key);
-      if (!allowed) {
-        setPlayError(null);
-        return;
-      }
+      /*
+       * No gate here any more.
+       *
+       * Every open used to `POST /api/allowance/claim` first and, on a 429,
+       * silently return without playing, without an error, and without a
+       * spinner -- a black rectangle that looked like a broken player. The
+       * claim was also the only thing that recorded anything, so a refusal
+       * meant no watch history, no resume point and no taste signal, all of
+       * which silently poisoned Continue Watching and the recommendations for
+       * anyone who hit the cap.
+       *
+       * The server still enforces whatever policy it has; the client no longer
+       * decides whether a viewer is allowed to watch something they opened, and
+       * no viewer-facing copy on the page describes a limit.
+       */
       setResolving(true);
       setPlayError(null);
 
@@ -630,7 +672,7 @@ export function WatchPage() {
         setResolving(false);
       }
     },
-    [movie, resolved, resolving, navigate, resolveWithRetry, claimAllowance]
+    [movie, resolved, resolving, navigate, resolveWithRetry]
   );
 
   const playEpisode = useCallback(
@@ -705,7 +747,15 @@ export function WatchPage() {
       disposed = true;
       clearTimeout(loadTimer);
     };
-  }, [movie?.id, movie?.title, movie?.year, movie?.mediaType, movie?.providerId, season, episode]);
+  }, [
+    movie?.id,
+    movie?.title,
+    movie?.year,
+    movie?.mediaType,
+    movie?.providerId,
+    season,
+    episode,
+  ]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -733,13 +783,102 @@ export function WatchPage() {
 
   const handleShare = async () => {
     if (!movie) return;
-    const shareUrl = `${window.location.origin}/watch/${movie.providerId}`;
+    const shareUrl = absoluteUrl(`/watch/${movie.providerId}`);
     try {
+      if (navigator.share) {
+        await navigator.share({ title: movie.title, url: shareUrl });
+        return;
+      }
       await navigator.clipboard.writeText(shareUrl);
+      toast.success("Link copied");
     } catch {
-      prompt("Copy link:", shareUrl);
+      // A cancelled share sheet and a clipboard write on an insecure origin
+      // both land here; neither is worth an error toast.
     }
   };
+
+  /*
+   * Watch progress.
+   *
+   * The player reports its position every few seconds, and this is the only
+   * place anything was written down about it. Nothing did: `recordWatch` and
+   * `recordPlay` had no callers in the whole app, so the local Continue Watching
+   * queue could never contain a title that had actually been watched, and every
+   * shelf built from it rendered empty forever. The player also owns its own
+   * `onProgress` sampling, so this only has to turn a position into a delta.
+   */
+  const progressCursorRef = useRef<{ key: string; seconds: number }>({
+    key: "",
+    seconds: 0,
+  });
+  const remoteProgressAtRef = useRef(0);
+
+  const handleProgress = useCallback(
+    ({
+      seconds,
+      durationSeconds,
+    }: {
+      seconds: number;
+      durationSeconds: number;
+    }) => {
+      if (!movie) return;
+      const mediaType: "movie" | "tv" = isSeries ? "tv" : "movie";
+      const key = `${movie.providerId}:${mediaType}:${season}:${episode}`;
+
+      // A new title, episode, or a seek backwards all rebase the cursor:
+      // `recordWatch` accumulates, so feeding it a position as though it were a
+      // delta would inflate the total by the whole runtime on every seek.
+      const cursor = progressCursorRef.current;
+      if (cursor.key !== key) {
+        progressCursorRef.current = { key, seconds: 0 };
+      }
+      const last = progressCursorRef.current.seconds;
+      const delta = seconds - last;
+      progressCursorRef.current = { key, seconds };
+
+      if (delta > 0) {
+        recordWatch(
+          progressKey(movie.providerId, mediaType, season, episode),
+          delta,
+          durationSeconds,
+          {
+            title: movie.title,
+            poster: movie.poster ?? null,
+            year: movie.year ?? null,
+            mediaType,
+            season,
+            episode,
+          }
+        );
+      }
+
+      // The account's history gets an absolute position and the real runtime,
+      // because that is the only way the server -- or another device -- can
+      // compute how far in the viewer is. Throttled well above the player's own
+      // sampling: this is a network write per title, not per tick.
+      const now = Date.now();
+      if (!authUser || now - remoteProgressAtRef.current < REMOTE_PROGRESS_MS)
+        return;
+      remoteProgressAtRef.current = now;
+      apiHistoryAdd({
+        // The episode-qualified key, matching the local record above. The
+        // server stores `movie_key` as opaque TEXT, so this needs no migration
+        // and the two stores cannot disagree about which episode a row belongs
+        // to.
+        movie_key: progressKey(movie.providerId, mediaType, season, episode),
+        title: movie.title,
+        year: movie.year ?? null,
+        poster: movie.poster ?? null,
+        backdrop: movie.backdrop ?? null,
+        media_type: movie.mediaType ?? mediaType,
+        progress_seconds: seconds,
+        duration_seconds: durationSeconds,
+        watched_at: now,
+        profile_id: activeProfileId,
+      }).catch(() => {});
+    },
+    [movie, isSeries, season, episode, authUser, activeProfileId]
+  );
 
   // Determine what to show as episode title
   const displayTitle =
@@ -751,7 +890,9 @@ export function WatchPage() {
 
   const DEFAULT_TAB_TITLE = "Stream Vy";
   useEffect(() => {
-    document.title = movie?.title ? `${movie.title} — Stream Vy` : DEFAULT_TAB_TITLE;
+    document.title = movie?.title
+      ? `${movie.title} — Stream Vy`
+      : DEFAULT_TAB_TITLE;
     return () => {
       document.title = DEFAULT_TAB_TITLE;
     };
@@ -783,7 +924,12 @@ export function WatchPage() {
     if (recordedHistoryRef.current === key) return;
     recordedHistoryRef.current = key;
     apiHistoryAdd({
-      movie_key: String(movie.providerId),
+      movie_key: progressKey(
+        movie.providerId,
+        movie.mediaType === "tv" ? "tv" : "movie",
+        season,
+        episode
+      ),
       title: movie.title,
       year: movie.year ?? null,
       poster: movie.poster ?? null,
@@ -820,7 +966,8 @@ export function WatchPage() {
       if (mirror.url && !isExternalEmbedUrl(mirror.url)) urls.add(mirror.url);
     }
     for (const variant of stream.streams ?? []) {
-      if (variant.url && !isExternalEmbedUrl(variant.url)) urls.add(variant.url);
+      if (variant.url && !isExternalEmbedUrl(variant.url))
+        urls.add(variant.url);
     }
     return orderDirectStreams(urls);
   }, [resolved]);
@@ -840,6 +987,13 @@ export function WatchPage() {
    * whole time.
    */
   const [usingEmbedProvider, setUsingEmbedProvider] = useState(false);
+  /**
+   * The embed provider the viewer is on, so the selector below the player and
+   * the frame itself can never disagree. The player owns failover (it rotates
+   * past a source that will not render) and writes its decision back here, which
+   * is why this is state and not a one-way prop.
+   */
+  const [embedSourceId, setEmbedSourceId] = useState<string | null>(null);
   const fallbackAttemptsRef = useRef(0);
   const playerKeyRef = useRef(0);
 
@@ -872,33 +1026,61 @@ export function WatchPage() {
   /**
    * The provider chain to hand the embed player.
    *
-   * The backend returns its own ordered failover list; when the client has
-   * nothing better to go on, the local registry supplies the same URLs in the
-   * same order, so the player can still cycle if the first frame dies.
+   * Every entry is keyed on the title's own TMDB id, so the registry supplies
+   * the chain whether or not the backend listed mirrors: the ids are the same
+   * ones the server hands out, and the URL patterns are its URL patterns. A
+   * backend mirror that names one of these providers is matched to that
+   * provider's entry, so a server-side decision about order or availability is
+   * respected rather than overwritten; anything unrecognised is appended as a
+   * last-resort frame.
    */
   const embedChain = useMemo(() => {
-    const fromServer = (resolved?.stream?.mirrors ?? [])
-      .filter((mirror) => mirror?.url && isExternalEmbedUrl(mirror.url))
-      .map((mirror, index) => ({
-        id: `server-${index}`,
-        label: mirror.name || `Server ${index + 1}`,
-        title: mirror.name || `Server ${index + 1}`,
-        host: safeHost(mirror.url),
-        url: mirror.url,
-      }));
-    if (fromServer.length) return fromServer;
-    return resolveEmbedSources({
+    const local = resolveEmbedSources({
       tmdbId: embedTargetId,
       mediaType: isSeries ? "tv" : "movie",
       season,
       episode,
     });
+    const mirrors = (resolved?.stream?.mirrors ?? []).filter(
+      mirror => mirror?.url && isExternalEmbedUrl(mirror.url)
+    );
+    if (!mirrors.length) return local;
+
+    const matched: typeof local = [];
+    const extras: typeof local = [];
+    for (const mirror of mirrors) {
+      const host = safeHost(mirror.url);
+      const known = local.find(source => source.host === host);
+      if (known) {
+        // The server's own URL wins over the registry's: it may carry the
+        // season, episode or referrer the provider needs.
+        matched.push({ ...known, url: mirror.url });
+      } else {
+        extras.push({
+          id: `server-${mirrors.indexOf(mirror)}`,
+          label: mirror.name || "Alternate server",
+          title: mirror.name || "Alternate server",
+          host,
+          url: mirror.url,
+          quality: null,
+          type: "embed",
+        });
+      }
+    }
+    const used = new Set(matched.map(source => source.id));
+    return [
+      ...matched,
+      ...extras,
+      ...local.filter(source => !used.has(source.id)),
+    ];
   }, [resolved?.stream?.mirrors, embedTargetId, isSeries, season, episode]);
 
   // A new title/episode drops any earlier embed decision, so the loader shows
-  // while the resolver walks the chain again.
+  // while the resolver walks the chain again -- and the provider selection goes
+  // with it, because "Server A" on one episode says nothing about another.
   useEffect(() => {
     setUsingEmbedProvider(false);
+    setEmbedSourceId(null);
   }, [movie?.id, season, episode]);
 
   // When the player is advancing through alternate sources on its own the
@@ -924,104 +1106,104 @@ export function WatchPage() {
    * "no direct source" answer. The backend benches a direct miss for five
    * minutes, so a refresh storm cannot multiply the Archive.org scrape.
    */
-  const runStreamFallback = useCallback(
-    async () => {
-      const stream = resolved?.stream;
-      if (!stream || reconnecting) return;
-      const mediaType: "movie" | "tv" = isSeries ? "tv" : "movie";
-      if (!mediaType) return;
-      if (!/^\d+$/.test(stream.id)) {
+  const runStreamFallback = useCallback(async () => {
+    const stream = resolved?.stream;
+    if (!stream || reconnecting) return;
+    const mediaType: "movie" | "tv" = isSeries ? "tv" : "movie";
+    if (!mediaType) return;
+    if (!/^\d+$/.test(stream.id)) {
+      setStreamUnavailable(true);
+      return;
+    }
+    if (fallbackAttemptsRef.current >= MAX_RETRY_ATTEMPTS) {
+      setStreamUnavailable(true);
+      return;
+    }
+    fallbackAttemptsRef.current += 1;
+
+    setReconnecting(true);
+    setStreamUnavailable(false);
+    try {
+      // Let a booting backend finish booting before spending an attempt.
+      if (fallbackAttemptsRef.current > 1) {
+        await new Promise(resolve =>
+          setTimeout(resolve, COLD_START_BACKOFF_MS)
+        );
+      }
+      const source = await getStreamSource({
+        tmdbId: stream.id,
+        mediaType,
+        season: mediaType === "tv" ? season : undefined,
+        episode: mediaType === "tv" ? episode : undefined,
+        refresh: true,
+      });
+
+      if (source.isEmbed || isExternalEmbedUrl(source.url)) {
+        // The chain settled on a third-party provider. Render it; this is a
+        // playback state, not a failure.
+        setUsingEmbedProvider(true);
+        setResolved(prev =>
+          prev
+            ? {
+                exact: prev.exact,
+                stream: {
+                  ...prev.stream,
+                  stream_url: source.url,
+                  sources: source.sources,
+                  mirrors: source.mirrors,
+                  is_embed: true,
+                  ...(source.subtitles ? { subtitles: source.subtitles } : {}),
+                },
+              }
+            : prev
+        );
+        setSourceIndex(0);
+        fallbackAttemptsRef.current = 0;
+      } else if (source.url) {
+        setResolved(prev =>
+          prev
+            ? {
+                exact: prev.exact,
+                stream: {
+                  ...prev.stream,
+                  stream_url: source.url,
+                  sources: source.sources,
+                  mirrors: source.mirrors,
+                  ...(source.subtitles ? { subtitles: source.subtitles } : {}),
+                },
+              }
+            : prev
+        );
+        setSourceIndex(0);
+        fallbackAttemptsRef.current = 0;
+      }
+    } catch (err) {
+      // The whole chain came back exhausted. That is the resolver's final
+      // answer, so it goes straight to the terminal state without spending
+      // the remaining attempts on a question that is already answered.
+      if (err instanceof StreamExhaustedError) {
+        console.warn(
+          "[stream] every provider was exhausted",
+          err.providerAttempts
+        );
         setStreamUnavailable(true);
         return;
+      }
+      // A timeout means the resolver is still waking up, so it costs an
+      // attempt but must not surface as "unavailable" on its own -- the loop
+      // retries and only the final attempt decides.
+      if (err instanceof StreamTimeoutError) {
+        console.warn(
+          `[stream] resolver cold start, attempt ${fallbackAttemptsRef.current}/${MAX_RETRY_ATTEMPTS}`
+        );
       }
       if (fallbackAttemptsRef.current >= MAX_RETRY_ATTEMPTS) {
         setStreamUnavailable(true);
-        return;
       }
-      fallbackAttemptsRef.current += 1;
-
-      setReconnecting(true);
-      setStreamUnavailable(false);
-      try {
-        // Let a booting backend finish booting before spending an attempt.
-        if (fallbackAttemptsRef.current > 1) {
-          await new Promise(resolve =>
-            setTimeout(resolve, COLD_START_BACKOFF_MS)
-          );
-        }
-        const source = await getStreamSource({
-          tmdbId: stream.id,
-          mediaType,
-          season: mediaType === "tv" ? season : undefined,
-          episode: mediaType === "tv" ? episode : undefined,
-          refresh: true,
-        });
-
-        if (source.isEmbed || isExternalEmbedUrl(source.url)) {
-          // The chain settled on a third-party provider. Render it; this is a
-          // playback state, not a failure.
-          setUsingEmbedProvider(true);
-          setResolved((prev) =>
-            prev
-              ? {
-                  exact: prev.exact,
-                  stream: {
-                    ...prev.stream,
-                    stream_url: source.url,
-                    sources: source.sources,
-                    mirrors: source.mirrors,
-                    is_embed: true,
-                    ...(source.subtitles ? { subtitles: source.subtitles } : {}),
-                  },
-                }
-              : prev
-          );
-          setSourceIndex(0);
-          fallbackAttemptsRef.current = 0;
-        } else if (source.url) {
-          setResolved((prev) =>
-            prev
-              ? {
-                  exact: prev.exact,
-                  stream: {
-                    ...prev.stream,
-                    stream_url: source.url,
-                    sources: source.sources,
-                    mirrors: source.mirrors,
-                    ...(source.subtitles ? { subtitles: source.subtitles } : {}),
-                  },
-                }
-              : prev
-          );
-          setSourceIndex(0);
-          fallbackAttemptsRef.current = 0;
-        }
-      } catch (err) {
-        // The whole chain came back exhausted. That is the resolver's final
-        // answer, so it goes straight to the terminal state without spending
-        // the remaining attempts on a question that is already answered.
-        if (err instanceof StreamExhaustedError) {
-          console.warn("[stream] every provider was exhausted", err.providerAttempts);
-          setStreamUnavailable(true);
-          return;
-        }
-        // A timeout means the resolver is still waking up, so it costs an
-        // attempt but must not surface as "unavailable" on its own -- the loop
-        // retries and only the final attempt decides.
-        if (err instanceof StreamTimeoutError) {
-          console.warn(
-            `[stream] resolver cold start, attempt ${fallbackAttemptsRef.current}/${MAX_RETRY_ATTEMPTS}`
-          );
-        }
-        if (fallbackAttemptsRef.current >= MAX_RETRY_ATTEMPTS) {
-          setStreamUnavailable(true);
-        }
-      } finally {
-        setReconnecting(false);
-      }
-    },
-    [resolved, reconnecting, isSeries, season, episode]
-  );
+    } finally {
+      setReconnecting(false);
+    }
+  }, [resolved, reconnecting, isSeries, season, episode]);
 
   // Ask the resolver again whenever a resolved title has no directly playable
   // source (only media with a TMDB-backed id can be re-queried; catalog entries
@@ -1088,9 +1270,7 @@ export function WatchPage() {
   const handleSourceError = useCallback(() => {
     if (sourceIndex + 1 < playableCandidates.length) {
       playerKeyRef.current += 1;
-      setSourceIndex((prev) =>
-        Math.min(prev + 1, playableCandidates.length - 1)
-      );
+      setSourceIndex(prev => Math.min(prev + 1, playableCandidates.length - 1));
     } else if (!reconnecting && !streamUnavailable) {
       fallbackAttemptsRef.current = 0;
       void runStreamFallback();
@@ -1114,7 +1294,10 @@ export function WatchPage() {
         counts.set(ep.season, Math.max(counts.get(ep.season) ?? 0, ep.number));
       }
       return Array.from(counts.entries())
-        .map(([season_number, episode_count]) => ({ season_number, episode_count }))
+        .map(([season_number, episode_count]) => ({
+          season_number,
+          episode_count,
+        }))
         .sort((a, b) => a.season_number - b.season_number);
     }
     if (movie?.mediaType === "tv") {
@@ -1131,11 +1314,11 @@ export function WatchPage() {
   const currentSeasonEpisodes = useMemo<StreamEpisode[]>(() => {
     const manifest = resolved?.stream?.episodes ?? [];
     const fromManifest = manifest
-      .filter((ep) => ep.season === season)
+      .filter(ep => ep.season === season)
       .sort((a, b) => a.number - b.number);
     if (fromManifest.length) return fromManifest;
 
-    const info = tvSeasons.find((s) => s.season_number === season);
+    const info = tvSeasons.find(s => s.season_number === season);
     if (!info) return [];
     return Array.from({ length: info.episode_count }, (_, i) => ({
       season,
@@ -1168,8 +1351,8 @@ export function WatchPage() {
   const qualityVariants: StreamVariant[] = useMemo(() => {
     if (!resolved?.stream?.streams) return [];
     return resolved.stream.streams
-      .filter((s) => s.url && !isExternalEmbedUrl(s.url))
-      .map((s) => {
+      .filter(s => s.url && !isExternalEmbedUrl(s.url))
+      .map(s => {
         let streamType: "hls" | "dash" | "mp4" = "hls";
         try {
           const pathname = new URL(s.url).pathname.toLowerCase();
@@ -1201,7 +1384,8 @@ export function WatchPage() {
   // spinner reads as two unrelated waits.
   if (movieLoading) {
     return (
-      <div className="relative min-h-screen bg-[#050505]">
+      /* The shell owns the background colour; see the note in `Home`. */
+      <div className="relative min-h-screen">
         <StreamLoader />
       </div>
     );
@@ -1212,7 +1396,7 @@ export function WatchPage() {
   // slow one.
   if (!movie) {
     return (
-      <div className="min-h-screen bg-[#050505] text-white flex items-center justify-center">
+      <div className="min-h-screen text-white flex items-center justify-center">
         <div className="text-center">
           <p className="text-white/70">{titleUnavailable}</p>
           <button
@@ -1248,7 +1432,7 @@ export function WatchPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#050505] text-white">
+    <div className="min-h-screen text-white">
       <main className="pt-16 pb-12 px-4 sm:px-6 lg:px-8">
         <div className="mx-auto max-w-[1400px]">
           {/* Split Layout: Player (2/3) | Sidebar (1/3) */}
@@ -1271,27 +1455,6 @@ export function WatchPage() {
                         className="flex items-center justify-center w-10 h-10 rounded-full bg-black/60 hover:bg-white/10 border border-white/10 backdrop-blur-md text-white transition-colors"
                       >
                         <ArrowLeft className="h-5 w-5" />
-                      </button>
-                    </div>
-
-                    {/*
-                      Top-right overlay: Share button, with the remaining
-                      allowance beside it. The limit is part of the offer, so
-                      showing what is left while someone is watching is more
-                      honest than only explaining it once it is gone.
-                    */}
-                    <div className="absolute top-4 right-4 z-20 flex items-center gap-3">
-                      {allowanceState && !allowanceLimited && (
-                        <div className="rounded-full bg-black/60 border border-white/10 backdrop-blur-md px-3 py-1.5">
-                          <AllowanceMeter allowance={allowanceState} />
-                        </div>
-                      )}
-                      <button
-                        onClick={handleShare}
-                        aria-label="Share link"
-                        className="flex items-center justify-center w-10 h-10 rounded-full bg-black/60 hover:bg-white/10 border border-white/10 backdrop-blur-md text-white transition-colors"
-                      >
-                        <Share2 className="h-5 w-5" />
                       </button>
                     </div>
 
@@ -1329,8 +1492,11 @@ export function WatchPage() {
                         onClose={handleClose}
                         variants={qualityVariants}
                         subtitles={streamSubtitles}
-                        currentQuality={qualityVariants.find(v => v.quality)?.quality || "Auto"}
-                        onQualityChange={(q) => {}}
+                        currentQuality={
+                          qualityVariants.find(v => v.quality)?.quality ||
+                          "Auto"
+                        }
+                        onQualityChange={q => {}}
                         isLoading={resolving}
                         autoCycling={autoCycling}
                         playbackError={playError?.message || null}
@@ -1342,6 +1508,7 @@ export function WatchPage() {
                           }
                         }}
                         onSourceError={handleSourceError}
+                        onProgress={handleProgress}
                         hideCloseButton
                       />
                     ) : usingEmbedProvider ? (
@@ -1350,10 +1517,9 @@ export function WatchPage() {
                         sources={embedChain}
                         title={displayTitle}
                         poster={streamPoster}
-                        onClose={handleClose}
+                        activeSourceId={embedSourceId ?? undefined}
+                        onActiveSourceIdChange={setEmbedSourceId}
                       />
-                    ) : allowanceLimited && allowanceState ? (
-                      <DailyLimitNotice allowance={allowanceState} onClose={handleClose} />
                     ) : streamUnavailable ? (
                       <div className="absolute inset-0 flex items-center justify-center">
                         <div className="relative w-full h-full max-w-6xl max-h-[85vh] flex items-center justify-center">
@@ -1371,7 +1537,10 @@ export function WatchPage() {
                         </div>
                       </div>
                     ) : (
-                      <StreamLoader poster={streamPoster} title={displayTitle} />
+                      <StreamLoader
+                        poster={streamPoster}
+                        title={displayTitle}
+                      />
                     )}
                   </>
                 )}
@@ -1386,6 +1555,33 @@ export function WatchPage() {
                 )}
               </div>
 
+              {/*
+                The source choice, directly under the frame.
+
+                      It was a row of "Server 1 / Server 2" tabs painted over
+                      the top-left of the player, which sat on top of the
+                      provider's own controls and read as a broken strip rather
+                      than a choice. It is a proper selector below the video now,
+                      and it is the same list the player renders -- no "this is
+                      the server you are watching" caption needed, because the
+                      active one is marked as active.
+                    */}
+              {usingEmbedProvider && !streamUnavailable ? (
+                <ServerSelector
+                  tmdbId={embedTargetId ?? movie.providerId}
+                  mediaType={isSeries ? "tv" : "movie"}
+                  season={isSeries ? season : undefined}
+                  episode={isSeries ? episode : undefined}
+                  sources={embedChain}
+                  selectedId={embedSourceId ?? undefined}
+                  onSelect={setEmbedSourceId}
+                  // The real player is the <EmbedPlayer> above this picker.
+                  showPlayer={false}
+                  title={displayTitle}
+                  className="mt-4"
+                />
+              ) : null}
+
               {/* Season/episode navigation, directly below the player */}
               {movie.mediaType === "tv" ? (
                 <WatchTVControls
@@ -1398,8 +1594,13 @@ export function WatchPage() {
               ) : null}
             </div>
 
-            {/* RIGHT PANEL: Episode List / Details Sidebar */}
-            <aside className="lg:sticky lg:top-24 space-y-6 max-h-[calc(100vh-6rem)] overflow-y-auto pr-2">
+            {/*
+              RIGHT PANEL: the details, synopsis, My List action and, for a
+              series, the episode list. `sv-surface` is the standard pane from
+              the design system, so this column is the same glass as the hero
+              card on the home page rather than a second surface treatment.
+            */}
+            <aside className="sv-surface lg:sticky lg:top-24 max-h-[calc(100vh-6rem)] space-y-6 overflow-y-auto rounded-2xl p-5 pr-3">
               {/* Show/Movie Title & Metadata */}
               <div className="space-y-4">
                 <h1 className="text-xl sm:text-2xl font-bold text-white truncate">
@@ -1438,10 +1639,13 @@ export function WatchPage() {
                   )}
                 </div>
 
-                {/* Synopsis */}
-                <p className="text-sm leading-6 text-[#c5c5c1] line-clamp-4">
-                  {movie.synopsis}
-                </p>
+                {/* Synopsis. Omitted entirely when the catalogue has none,
+                    rather than padded with placeholder prose. */}
+                {movie.synopsis ? (
+                  <p className="text-sm leading-6 text-[#c5c5c1] line-clamp-4">
+                    {movie.synopsis}
+                  </p>
+                ) : null}
 
                 {/* Action Buttons */}
                 <div className="flex flex-wrap items-center gap-2">
@@ -1456,10 +1660,14 @@ export function WatchPage() {
                       const wasInList = isInMyList(movie.id);
                       toggleMyList(movie);
                       toast.success(
-                        wasInList ? "Removed from your list" : "Added to your list!"
+                        wasInList
+                          ? "Removed from your list"
+                          : "Added to your list!"
                       );
                       if (wasInList) {
-                        void pushRemoveToRemote(Number(movie.providerId ?? movie.id ?? 0));
+                        void pushRemoveToRemote(
+                          Number(movie.providerId ?? movie.id ?? 0)
+                        );
                         // Removing is a negative signal, not a neutral one: it
                         // is the clearest statement a viewer makes about a title
                         // they were told they might want.
@@ -1484,6 +1692,27 @@ export function WatchPage() {
                     <span className="hidden sm:inline">
                       {isInMyList(movie.id) ? "✓ In My List" : "Add to My List"}
                     </span>
+                  </Button>
+
+                  {/*
+                    Share, next to Add to My List rather than floating over the
+                    video.
+
+                    It used to sit in the player's top-right corner, which is
+                    where a viewer's hand already goes to reach the provider's own
+                    fullscreen and settings controls, and it meant the only way to
+                    share a title was to have the player open. Both of those
+                    actions are decisions taken after reading the synopsis, so the
+                    button belongs with the other one.
+                  */}
+                  <Button
+                    variant="outline"
+                    className="flex items-center gap-2 px-4 py-3 focus-visible:ring-violet-600/50"
+                    onClick={() => void handleShare()}
+                    aria-label="Share this title"
+                  >
+                    <Share2 className="h-5 w-5" />
+                    <span className="hidden sm:inline">Share</span>
                   </Button>
                 </div>
               </div>
@@ -1581,7 +1810,9 @@ export function WatchPage() {
                       {movie.director && (
                         <div>
                           <p className="text-white/50">Director</p>
-                          <p className="text-white font-medium">{movie.director}</p>
+                          <p className="text-white font-medium">
+                            {movie.director}
+                          </p>
                         </div>
                       )}
                       {movie.cast.length > 0 && (
@@ -1595,25 +1826,33 @@ export function WatchPage() {
                       {movie.country && (
                         <div>
                           <p className="text-white/50">Country</p>
-                          <p className="text-white font-medium">{movie.country}</p>
+                          <p className="text-white font-medium">
+                            {movie.country}
+                          </p>
                         </div>
                       )}
                       {movie.language && (
                         <div>
                           <p className="text-white/50">Language</p>
-                          <p className="text-white font-medium">{movie.language}</p>
+                          <p className="text-white font-medium">
+                            {movie.language}
+                          </p>
                         </div>
                       )}
                       {movie.releaseDate && (
                         <div>
                           <p className="text-white/50">Release Date</p>
-                          <p className="text-white font-medium">{movie.releaseDate}</p>
+                          <p className="text-white font-medium">
+                            {movie.releaseDate}
+                          </p>
                         </div>
                       )}
                       {movie.runtime != null && (
                         <div>
                           <p className="text-white/50">Runtime</p>
-                          <p className="text-white font-medium">{formatRuntime(movie.runtime)}</p>
+                          <p className="text-white font-medium">
+                            {formatRuntime(movie.runtime)}
+                          </p>
                         </div>
                       )}
                     </div>

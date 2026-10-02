@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Loader2, RotateCw } from "lucide-react";
-import { resolveEmbedSources, type ResolvedEmbedSource } from "@/lib/embedSources";
+import {
+  resolveEmbedSources,
+  type ResolvedEmbedSource,
+} from "@/lib/embedSources";
+import { EMBED_ALLOW } from "@/components/stream/ServerSelector";
 import { cn } from "@/lib/utils";
 import { titleUnavailable, tryAgain } from "@/lib/playbackCopy";
 
@@ -39,39 +43,52 @@ export interface EmbedPlayerProps {
   sources?: ResolvedEmbedSource[];
   /** Used only when the backend supplied no chain, to build one locally. */
   tmdbId?: number | string | null;
-  imdbId?: string | null;
   mediaType?: "movie" | "tv";
   season?: number;
   episode?: number;
   title: string;
   poster?: string;
   className?: string;
-  onClose?: () => void;
+  /**
+   * Controlled selection. When set, the frame shows this provider and the
+   * page's `ServerSelector` is the single source of truth for which one is
+   * playing — a player that also kept its own cursor would show one server
+   * while the picker highlighted another. Omit it and the player picks for
+   * itself, which is what a standalone embed player does.
+   */
+  activeSourceId?: string;
+  /**
+   * Called when the player decides the active source is unusable and moves to
+   * the next candidate in the chain. In controlled mode the page applies the
+   * move; the picker then highlights whatever is actually playing.
+   */
+  onActiveSourceIdChange?: (sourceId: string) => void;
 }
 
 export function EmbedPlayer({
   sources: providedSources,
   tmdbId,
-  imdbId,
   mediaType = "movie",
   season,
   episode,
   title,
   poster,
   className,
-  onClose,
+  activeSourceId,
+  onActiveSourceIdChange,
 }: EmbedPlayerProps) {
   const sources = useMemo<ResolvedEmbedSource[]>(
     () =>
       providedSources?.length
         ? providedSources
-        : resolveEmbedSources({ tmdbId, imdbId, mediaType, season, episode }),
-    [providedSources, tmdbId, imdbId, mediaType, season, episode],
+        : resolveEmbedSources({ tmdbId, mediaType, season, episode }),
+    [providedSources, tmdbId, mediaType, season, episode]
   );
 
+  const controlled = activeSourceId !== undefined;
   const [index, setIndex] = useState(0);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "failed">(
-    "loading",
+    "loading"
   );
   // Bumping this remounts the iframe, which is how a stalled frame is retried.
   const [attempt, setAttempt] = useState(0);
@@ -83,36 +100,42 @@ export function EmbedPlayer({
    */
   const blockedIds = useRef<Set<string>>(new Set());
 
-  const active = sources[index];
   const total = sources.length;
+  const controlledIndex = controlled
+    ? Math.max(
+        0,
+        sources.findIndex(src => src.id === activeSourceId)
+      )
+    : index;
+  const active = sources[controlledIndex];
 
   const goTo = useCallback(
     (next: number) => {
       if (total === 0) return;
       const wrapped = ((next % total) + total) % total;
+      const target = sources[wrapped];
+      if (!target) return;
       // Every path here is a deliberate settle: either the viewer chose it, or
       // the current one was ruled out. Both are worth remembering.
-      preferredSourceId = sources[wrapped]?.id ?? null;
-      setIndex(wrapped);
+      preferredSourceId = target.id;
+      if (onActiveSourceIdChange) onActiveSourceIdChange(target.id);
+      else setIndex(wrapped);
       setLoadState("loading");
-      setAttempt((n) => n + 1);
+      setAttempt(n => n + 1);
     },
-    [total, sources],
+    [total, sources, onActiveSourceIdChange]
   );
 
   /**
-   * Explicit viewer choice. Clears the dead-source memory for the target so a
-   * server that was ruled out for *this* title gets a genuine second chance --
-   * some providers rate-limit per title rather than being actually broken.
+   * Genuine second chance at the active source. The dead-source memory is
+   * cleared first: some providers rate-limit per title rather than being
+   * actually broken, and after a cooldown the same URL is worth asking again.
    */
-  const selectSource = useCallback(
-    (next: number) => {
-      if (next < 0 || next >= total || next === index) return;
-      blockedIds.current.delete(sources[next]?.id);
-      goTo(next);
-    },
-    [index, total, sources, goTo],
-  );
+  const retry = useCallback(() => {
+    if (active) blockedIds.current.delete(active.id);
+    setLoadState("loading");
+    setAttempt(n => n + 1);
+  }, [active]);
 
   /** Next source after `from` that has not already been ruled out, or -1. */
   const nextViableIndex = useCallback(
@@ -123,38 +146,45 @@ export function EmbedPlayer({
       }
       return -1;
     },
-    [sources, total],
+    [sources, total]
   );
 
   const advance = useCallback(() => {
-    const next = nextViableIndex(index);
+    const next = nextViableIndex(controlledIndex);
     if (next === -1) {
       setLoadState("failed");
       return;
     }
     goTo(next);
-  }, [index, nextViableIndex, goTo]);
-
-  const retry = useCallback(() => {
-    setLoadState("loading");
-    setAttempt((n) => n + 1);
-  }, []);
+  }, [controlledIndex, nextViableIndex, goTo]);
 
   // Reset whenever the underlying target changes (new season/episode, new title).
   useEffect(() => {
-    const remembered = preferredSourceId
-      ? sources.findIndex((src) => src.id === preferredSourceId)
-      : -1;
-    setIndex(remembered >= 0 ? remembered : 0);
+    const start = controlled
+      ? Math.max(
+          0,
+          sources.findIndex(src => src.id === activeSourceId)
+        )
+      : preferredSourceId
+        ? Math.max(
+            0,
+            sources.findIndex(src => src.id === preferredSourceId)
+          )
+        : 0;
+    if (!controlled) setIndex(start);
     setLoadState("loading");
-    setAttempt((n) => n + 1);
+    setAttempt(n => n + 1);
     blockedIds.current = new Set();
+    // `activeSourceId` is deliberately not a dep: the page changing the
+    // selection is a source swap, not a new target, and re-running this would
+    // wipe the dead-source memory the watchdog just built.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sources]);
 
   // Watchdog: an embed that never reports load is treated as failed and we
   // fall through to the next source.
   useEffect(() => {
-    if (loadState !== "loading") return;
+    if (loadState !== "loading" || !active) return;
     const timer = window.setTimeout(() => {
       blockedIds.current.add(active.id);
       advance();
@@ -182,7 +212,7 @@ export function EmbedPlayer({
    * candidates are still tried in order.
    */
   useEffect(() => {
-    if (loadState !== "ready") return;
+    if (loadState !== "ready" || !active) return;
     const timer = window.setTimeout(() => {
       const frame = frameRef.current;
       const frameWindow = frame?.contentWindow;
@@ -200,7 +230,7 @@ export function EmbedPlayer({
       <div
         className={cn(
           "flex items-center justify-center bg-black/90 text-center text-sm text-white/70",
-          className,
+          className
         )}
       >
         <p className="px-6">
@@ -211,7 +241,12 @@ export function EmbedPlayer({
   }
 
   return (
-    <div className={cn("relative h-full w-full overflow-hidden bg-black", className)}>
+    <div
+      className={cn(
+        "relative h-full w-full overflow-hidden bg-black",
+        className
+      )}
+    >
       {poster && loadState === "loading" ? (
         <img
           src={poster}
@@ -228,25 +263,12 @@ export function EmbedPlayer({
         ref={frameRef}
         src={active.url}
         title={title}
-        className="absolute inset-0 h-full w-full border-0"
-        allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+        className="absolute inset-0 h-full w-full border-0 rounded-2xl border-white/10 shadow-2xl bg-black"
+        // No `sandbox` attribute: these providers refuse to load inside one
+        // ("This content can't be embedded in a sandboxed frame"), which is a
+        // silent black rectangle rather than a visible failure. See EMBED_ALLOW.
+        allow={EMBED_ALLOW}
         allowFullScreen
-        // allow-scripts + allow-same-origin is safe here only because every
-        // provider is a distinct origin from this app. allow-presentation is
-        // what the `allow` token above already promised, so the sandbox does
-        // not contradict the permissions policy.
-        //
-        // Deliberately omitted: allow-popups, allow-popups-to-escape-sandbox
-        // and allow-top-navigation. Provider ad scripts (the `apu.php`
-        // popunder family) depend on opening a tab or navigating the top
-        // window to convert an impression; without those tokens they run
-        // inside a frame that cannot reach either, which is also what stops
-        // them from spinning up ever more documents and WebGL contexts in the
-        // background. Do not widen this to satisfy a provider that refuses to
-        // be framed -- allow-scripts + allow-same-origin already lets the
-        // framed document lift its own sandbox, and adding top-navigation
-        // hands it the top window. Providers that refuse are skipped instead.
-        sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
         // No referrer is sent to the provider at all. Several third-party
         // hosts reject a framed handshake with 403 Forbidden based on the
         // referring origin, and withholding this page's URL from ad networks
@@ -284,56 +306,13 @@ export function EmbedPlayer({
       ) : null}
 
       {/*
-        Server switcher.
-
-        Every provider in this chain is already a failover candidate the backend
-        vetted, so the tabs are not a way to ask for a *different* source -- the
-        resolver already did that. What they surface is which provider the
-        resolver landed on and whether a frame is failing, which is genuinely
-        useful when one provider serves a mislabelled or broken encode. The
-        "next" button is gone: with a settled chain, manual rotation is the
-        failover path the backend replaced, and leaving it invites viewers to
-        cycle away from a working provider.
+        The source switcher does not live here. It used to be a row of "Server
+        1 / Server 2" text tabs painted over the top-left of the frame, where it
+        covered the provider's own player chrome and read as a broken control
+        strip rather than as a choice. It is `ServerSelector` now, below the
+        player, where the whole set of sources is visible at once and the
+        selection is the one the player renders.
       */}
-      {total > 1 ? (
-        <div className="absolute left-3 top-3 z-30 flex items-center gap-1 rounded-lg bg-black/70 p-1 backdrop-blur">
-          {sources.map((src, i) => {
-            const isActive = i === index;
-            const isBlocked = blockedIds.current.has(src.id);
-            return (
-              <button
-                key={src.id}
-                type="button"
-                onClick={() => selectSource(i)}
-                title={isBlocked ? `${src.title} (failed, try again)` : src.title}
-                aria-current={isActive ? "true" : undefined}
-                className={cn(
-                  "rounded-md px-2.5 py-1 text-[11px] font-semibold transition",
-                  isActive
-                    ? "bg-violet-500 text-white"
-                    : isBlocked
-                      ? "text-white/35 line-through hover:bg-white/10 hover:text-white/70"
-                      : "text-white/70 hover:bg-white/10 hover:text-white",
-                )}
-              >
-                {src.label}
-              </button>
-            );
-          })}
-        </div>
-      ) : null}
-
-      {/* Close control */}
-      {onClose ? (
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close player"
-          className="absolute right-3 top-3 z-30 rounded-md bg-black/60 px-2.5 py-1.5 text-xs font-semibold text-white/80 backdrop-blur transition hover:bg-black/80 hover:text-white"
-        >
-          Close
-        </button>
-      ) : null}
     </div>
   );
 }

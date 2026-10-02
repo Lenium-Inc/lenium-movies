@@ -85,10 +85,27 @@ export interface Stats {
   progressFraction: Record<string, number>;
   completedCount: number;
   earned: string[];
-  /** Most recent play per stream id — powers the Continue Watching queue. */
+  /**
+   * Most recent play per stream id — powers the Continue Watching queue.
+   *
+   * `mediaType`/`season`/`episode` are what make a resume point land on the
+   * right thing. Without them a series was indistinguishable from a film in this
+   * record, so every locally-recorded series resume opened as a movie and
+   * `/watch/<id>` had nothing to play: the card looked correct and the title was
+   * unavailable. Optional because records written before this field existed are
+   * still valid to read — they fall back to the movie route.
+   */
   lastWatched: Record<
     string,
-    { t: number; title: string; poster: string | null; year: number | null }
+    {
+      t: number;
+      title: string;
+      poster: string | null;
+      year: number | null;
+      mediaType?: "movie" | "tv";
+      season?: number;
+      episode?: number;
+    }
   >;
 }
 
@@ -219,6 +236,10 @@ export interface WatchMeta {
   title: string;
   poster: string | null;
   year: number | null;
+  /** Whether this play was a film or an episode, and which one. */
+  mediaType?: "movie" | "tv";
+  season?: number;
+  episode?: number;
 }
 
 /**
@@ -258,6 +279,9 @@ export function recordWatch(
       title: meta?.title ?? id,
       poster: meta?.poster ?? null,
       year: meta?.year ?? null,
+      mediaType: meta?.mediaType,
+      season: meta?.season,
+      episode: meta?.episode,
     };
   }
   const gained = newlyEarned(data);

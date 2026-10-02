@@ -116,9 +116,26 @@ export interface VideoPlayerProps {
    * Buffering/error chrome is suppressed so ambient poster stays on screen.
    */
   autoCycling?: boolean;
+  /**
+   * Playback position, reported as it advances.
+   *
+   * This is the only place the player knows how far in someone is, and the
+   * Continue Watching shelf is built from exactly that number, so the page owns
+   * the recording and the player only reports. Sampling is throttled inside the
+   * component: `timeupdate` fires several times a second and every call here is
+   * a storage write on the page's side.
+   */
+  onProgress?: (progress: { seconds: number; durationSeconds: number }) => void;
 }
 
 const QUALITY_ORDER = ["4K", "1080p", "720p", "480p", "360p", "Auto"] as const;
+
+/**
+ * Seconds of playback between progress reports. Fine enough that the resume
+ * point someone sees in Continue Watching is close to where they stopped, coarse
+ * enough that it is not a storage write several times a second.
+ */
+const RESUME_SAMPLE_SECONDS = 10;
 export type QualityOption = (typeof QUALITY_ORDER)[number];
 
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
@@ -137,6 +154,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   hideCloseButton = false,
   autoPlay = true,
   autoCycling = false,
+  onProgress,
 }) => {
   const [isPlaying, setIsPlaying] = useState<boolean>(autoPlay);
   const [isMuted, setIsMuted] = useState<boolean>(false);
@@ -148,7 +166,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [qualityMenuOpen, setQualityMenuOpen] = useState<boolean>(false);
   const [subtitleMenuOpen, setSubtitleMenuOpen] = useState<boolean>(false);
   const [currentQuality, setCurrentQuality] = useState<string>(initialQuality);
-  const [hlsLevels, setHlsLevels] = useState<{ quality: string; height: number }[]>([]);
+  const [hlsLevels, setHlsLevels] = useState<
+    { quality: string; height: number }[]
+  >([]);
   const [hlsQuality, setHlsQuality] = useState<string>("Auto");
   const [posterSettled, setPosterSettled] = useState<boolean>(false);
   // "Off" or a `srcLang` from `subtitleTracks`. Held as a language code rather
@@ -163,12 +183,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     () =>
       currentSubtitles === "Off"
         ? "Off"
-        : subtitleTracks.find(t => t.srcLang === currentSubtitles)?.label ??
-          currentSubtitles,
+        : (subtitleTracks.find(t => t.srcLang === currentSubtitles)?.label ??
+          currentSubtitles),
     [currentSubtitles, subtitleTracks]
   );
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [hasUserInteracted, setHasUserInteracted] = useState<boolean>(false);
+  const lastProgressRef = useRef<{ seconds: number; duration: number }>({
+    seconds: 0,
+    duration: 0,
+  });
 
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -182,7 +206,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const list = video.textTracks;
     for (let i = 0; i < list.length; i += 1) {
       const track = list[i];
-      const shouldShow = currentSubtitles !== "Off" && track.language === currentSubtitles;
+      const shouldShow =
+        currentSubtitles !== "Off" && track.language === currentSubtitles;
       track.mode = shouldShow ? "showing" : "disabled";
     }
   }, [currentSubtitles]);
@@ -190,6 +215,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   useEffect(() => {
     applySubtitleMode();
   }, [applySubtitleMode, subtitleTracks, streamUrl]);
+
+  // A new source is a new position: the previous title's sample must not be
+  // compared against this one's clock, or a fresh load looks like progress.
+  useEffect(() => {
+    lastProgressRef.current = { seconds: 0, duration: 0 };
+  }, [streamUrl]);
   const playerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const canvasCtxRef = useRef<CanvasRenderingContext2D | null>(null);
@@ -262,11 +293,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // one URL per rendition handed over by the resolver.
   const qualityOptions = useMemo<string[]>(() => {
     if (hlsLevels.length > 1) {
-      return hlsLevels.map((l) => l.quality);
+      return hlsLevels.map(l => l.quality);
     }
-    return variants
-      .map((v) => v.quality)
-      .filter((q): q is string => Boolean(q));
+    return variants.map(v => v.quality).filter((q): q is string => Boolean(q));
   }, [hlsLevels, variants]);
 
   // While the manifest ladder is in play the active rung is tracked separately,
@@ -283,27 +312,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (!ctx) return;
     canvasCtxRef.current = ctx;
 
-    const fitCover = (
-      source: CanvasImageSource,
-      sw: number,
-      sh: number
-    ) => {
+    const fitCover = (source: CanvasImageSource, sw: number, sh: number) => {
       const w = canvas.width;
       const h = canvas.height;
       const scale = Math.max(w / sw, h / sh);
       const dw = sw * scale;
       const dh = sh * scale;
-      ctx.drawImage(
-        source,
-        0,
-        0,
-        sw,
-        sh,
-        (w - dw) / 2,
-        (h - dh) / 2,
-        dw,
-        dh
-      );
+      ctx.drawImage(source, 0, 0, sw, sh, (w - dw) / 2, (h - dh) / 2, dw, dh);
     };
 
     const paintPoster = () => {
@@ -315,11 +330,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (!playerRect) return;
       canvas.width = playerRect.width;
       canvas.height = playerRect.height;
-      fitCover(
-        posterImg,
-        posterImg.naturalWidth,
-        posterImg.naturalHeight
-      );
+      fitCover(posterImg, posterImg.naturalWidth, posterImg.naturalHeight);
       ctx.filter = "blur(80px)";
       ctx.globalAlpha = 0.55;
       ctx.drawImage(
@@ -382,7 +393,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       ctx.filter = "blur(80px)";
       ctx.globalAlpha = 0.4;
-      ctx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, canvas.width, canvas.height);
+      ctx.drawImage(
+        canvas,
+        0,
+        0,
+        canvas.width,
+        canvas.height,
+        0,
+        0,
+        canvas.width,
+        canvas.height
+      );
       ctx.filter = "none";
       ctx.globalAlpha = 1;
 
@@ -452,9 +473,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       // On a silent auto-cycle just hand the failure to the page without
       // flashing an error card — the next source is already queued.
       if (!autoCycling) {
-        setPlaybackError(
-          titleUnavailable
-        );
+        setPlaybackError(titleUnavailable);
         setIsLoading(false);
       }
       onSourceError?.();
@@ -510,18 +529,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           initAmbientCanvas();
         });
 
-        hls.on(Hls.Events.ERROR, (_event: unknown, data: { fatal?: boolean }) => {
-          if (data.fatal) {
-            if (!autoCycling) {
-              setPlaybackError(
-                titleUnavailable
-              );
-              setIsLoading(false);
+        hls.on(
+          Hls.Events.ERROR,
+          (_event: unknown, data: { fatal?: boolean }) => {
+            if (data.fatal) {
+              if (!autoCycling) {
+                setPlaybackError(titleUnavailable);
+                setIsLoading(false);
+              }
+              hls?.destroy();
+              onSourceError?.();
             }
-            hls?.destroy();
-            onSourceError?.();
           }
-        });
+        );
       } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
         video.src = streamUrl;
       } else {
@@ -562,7 +582,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, [streamUrl, streamType, initAmbientCanvas, attemptAutoplay, onSourceError, autoCycling]);
+  }, [
+    streamUrl,
+    streamType,
+    initAmbientCanvas,
+    attemptAutoplay,
+    onSourceError,
+    autoCycling,
+  ]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -572,11 +599,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (!isNaN(video.duration)) {
         setProgress((video.currentTime / video.duration) * 100);
       }
+      if (!onProgress || isNaN(video.duration) || video.duration <= 0) return;
+      const seconds = Math.floor(video.currentTime);
+      // Throttled to a sample every RESUME_SAMPLE_SECONDS of playback. The
+      // alternative is writing to storage four times a second per viewer.
+      if (seconds - lastProgressRef.current.seconds < RESUME_SAMPLE_SECONDS)
+        return;
+      lastProgressRef.current = {
+        seconds,
+        duration: Math.floor(video.duration),
+      };
+      onProgress({
+        seconds,
+        durationSeconds: Math.floor(video.duration),
+      });
     };
 
     video.addEventListener("timeupdate", handleTimeUpdate);
     return () => video.removeEventListener("timeupdate", handleTimeUpdate);
-  }, []);
+  }, [onProgress]);
 
   // Preload the poster so the ambient canvas always has art to paint, even
   // before the first video frame decodes.
@@ -691,7 +732,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       }
 
       if (quality === currentQuality) return;
-      const variant = variants.find((v) => v.quality === quality);
+      const variant = variants.find(v => v.quality === quality);
       if (!variant) return;
 
       setCurrentQuality(quality);
@@ -852,7 +893,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       <div
         className={`absolute top-0 inset-x-0 p-4 bg-gradient-to-b from-black/80 via-black/40 to-transparent flex items-center justify-end transition-opacity duration-300 z-30 ${
-          showControls && hasUserInteracted ? "opacity-100" : "opacity-0 pointer-events-none"
+          showControls && hasUserInteracted
+            ? "opacity-100"
+            : "opacity-0 pointer-events-none"
         }`}
       >
         {!hideCloseButton && (
@@ -867,7 +910,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       <div
         className={`absolute bottom-0 inset-x-0 p-4 bg-gradient-to-t from-black/95 via-black/60 to-transparent flex flex-col gap-2.5 transition-opacity duration-300 z-30 ${
-          showControls && hasUserInteracted ? "opacity-100" : "opacity-0 pointer-events-none"
+          showControls && hasUserInteracted
+            ? "opacity-100"
+            : "opacity-0 pointer-events-none"
         }}`}
       >
         <div className="relative group flex items-center">
@@ -879,7 +924,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             onChange={handleSeek}
             className="w-full h-1 bg-white/30 rounded-lg appearance-none cursor-pointer accent-violet-600 hover:h-2 transition-all"
             onMouseDown={() => {
-              if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+              if (controlsTimeoutRef.current)
+                clearTimeout(controlsTimeoutRef.current);
             }}
             onMouseUp={() => handleMouseMove()}
           />
@@ -941,13 +987,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 onChange={handleVolumeChange}
                 className="w-20 h-1 bg-white/30 rounded-lg appearance-none cursor-pointer accent-white hover:accent-violet-500 transition-all"
                 onMouseDown={() => {
-                  if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+                  if (controlsTimeoutRef.current)
+                    clearTimeout(controlsTimeoutRef.current);
                 }}
               />
             </div>
 
             <span className="text-xs font-medium text-white/80 flex-shrink-0">
-              {formatPlayerTime(videoRef.current?.currentTime || 0)} / {formatPlayerTime(duration)}
+              {formatPlayerTime(videoRef.current?.currentTime || 0)} /{" "}
+              {formatPlayerTime(duration)}
             </span>
           </div>
 
@@ -972,7 +1020,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     </p>
                     <div className="space-y-1">
                       <button
-                        onClick={(e) => {
+                        onClick={e => {
                           e.stopPropagation();
                           setCurrentSubtitles("Native");
                           setSubtitleMenuOpen(false);
@@ -985,36 +1033,39 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     </div>
                   </div>
                   {subtitleTracks.length > 0 && (
-                  <div className="px-4 py-2">
-                    <p className="text-xs font-semibold text-white/60 uppercase tracking-wider mb-2">
-                      Subtitles
-                    </p>
-                    <div className="space-y-1 max-h-48 overflow-y-auto">
-                      {["Off", ...subtitleTracks.map(t => t.srcLang)].map(sub => {
-                        const label =
-                          sub === "Off"
-                            ? "Off"
-                            : subtitleTracks.find(t => t.srcLang === sub)?.label ?? sub;
-                        return (
-                          <button
-                            key={sub}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setCurrentSubtitles(sub);
-                              setSubtitleMenuOpen(false);
-                            }}
-                            className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors ${
-                              currentSubtitles === sub
-                                ? "text-violet-500 font-bold"
-                                : "text-white"
-                            }`}
-                          >
-                            {label}
-                          </button>
-                        );
-                      })}
+                    <div className="px-4 py-2">
+                      <p className="text-xs font-semibold text-white/60 uppercase tracking-wider mb-2">
+                        Subtitles
+                      </p>
+                      <div className="space-y-1 max-h-48 overflow-y-auto">
+                        {["Off", ...subtitleTracks.map(t => t.srcLang)].map(
+                          sub => {
+                            const label =
+                              sub === "Off"
+                                ? "Off"
+                                : (subtitleTracks.find(t => t.srcLang === sub)
+                                    ?.label ?? sub);
+                            return (
+                              <button
+                                key={sub}
+                                onClick={e => {
+                                  e.stopPropagation();
+                                  setCurrentSubtitles(sub);
+                                  setSubtitleMenuOpen(false);
+                                }}
+                                className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors ${
+                                  currentSubtitles === sub
+                                    ? "text-violet-500 font-bold"
+                                    : "text-white"
+                                }`}
+                              >
+                                {label}
+                              </button>
+                            );
+                          }
+                        )}
+                      </div>
                     </div>
-                  </div>
                   )}
                 </div>
               )}
@@ -1034,10 +1085,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 </button>
                 {qualityMenuOpen && (
                   <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-28 bg-zinc-900 border border-white/10 rounded-lg shadow-xl overflow-hidden py-1 z-50">
-                    {qualityOptions.map((quality) => (
+                    {qualityOptions.map(quality => (
                       <button
                         key={quality}
-                        onClick={(e) => {
+                        onClick={e => {
                           e.stopPropagation();
                           switchQuality(quality);
                         }}
@@ -1051,12 +1102,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       </button>
                     ))}
                     <button
-                      onClick={(e) => {
+                      onClick={e => {
                         e.stopPropagation();
                         switchQuality("Auto");
                       }}
                       className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors ${
-                        activeQuality === "Auto" ? "text-violet-500 font-bold" : "text-white"
+                        activeQuality === "Auto"
+                          ? "text-violet-500 font-bold"
+                          : "text-white"
                       }`}
                     >
                       Auto
