@@ -33,6 +33,22 @@
          alternative, a production URL baked into the file, made every preview
          deploy claim to be the live site.
     -->
+    <!--
+      The region between these two markers is the only part of this file that
+      describes the route. `scripts/seoOriginPlugin.ts` replaces it wholesale to
+      prerender /terms, /privacy and /dmca, each of which otherwise served this
+      page's title and `canonical="/"` -- which is to say, the site had exactly one
+      indexable URL and its own sitemap contradicted the other three.
+
+      Everything outside the markers is identical on every route: the icons, the
+      verification token, the site-level JSON-LD. Regenerating those per route
+      would mean a second copy to keep in step, for no benefit.
+
+      The tags inside are generated from `client/src/lib/seo.ts` by the same
+      function that writes the head at runtime, and `seo.test.ts` asserts the copy
+      here still matches what that module produces for "/".
+    -->
+    <!-- seo:route-head:start -->
     <title>Stream Vy - Free Movies Online | Watch Public Domain Films</title>
     <meta
       name="description"
@@ -47,14 +63,7 @@
       content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"
     />
 
-    <meta name="application-name" content="Stream Vy" />
-    <meta name="apple-mobile-web-app-title" content="Stream Vy" />
-    <meta name="author" content="Lenium Inc" />
-    <meta name="creator" content="Lenium Inc" />
-    <meta name="publisher" content="Lenium Inc" />
-
     <link rel="canonical" href="__SITE_ORIGIN__/" />
-    <link rel="sitemap" type="application/xml" href="/sitemap.xml" />
 
     <!--
       Open Graph.
@@ -99,6 +108,14 @@
       content="Stream Vy is a free movie streaming platform for public domain and openly licensed films. Browse by genre, search the catalogue, build a watchlist, and keep your progress across episodes. No advertising network, no third-party analytics."
     />
     <meta name="twitter:image" content="__SITE_ORIGIN__/stream-vy-mark.svg" />
+    <!-- seo:route-head:end -->
+
+    <meta name="application-name" content="Stream Vy" />
+    <meta name="apple-mobile-web-app-title" content="Stream Vy" />
+    <meta name="author" content="Lenium Inc" />
+    <meta name="creator" content="Lenium Inc" />
+    <meta name="publisher" content="Lenium Inc" />
+    <link rel="sitemap" type="application/xml" href="/sitemap.xml" />
 
     <!--
       Structured data.

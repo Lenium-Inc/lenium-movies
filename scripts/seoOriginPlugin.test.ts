@@ -3,6 +3,8 @@ import {
   SITE_ORIGIN_TOKEN,
   injectOrigin,
   normalizeOrigin,
+  prerenderFileName,
+  prerenderRoutes,
   renderRobots,
   renderSitemap,
 } from "./seoOriginPlugin";
@@ -163,5 +165,82 @@ describe("renderRobots", () => {
     expect(
       renderRobots(ROBOTS_DISALLOW_PATHS, "https://vy.example")
     ).not.toMatch(/vy-virid\.vercel\.app/);
+  });
+});
+
+describe("prerenderRoutes", () => {
+  const template = [
+    "<head>",
+    "    <!-- seo:route-head:start -->",
+    "    <title>Homepage</title>",
+    '    <link rel="canonical" href="__SITE_ORIGIN__/" />',
+    "    <!-- seo:route-head:end -->",
+    '    <meta name="google-site-verification" content="tok" />',
+    "</head>",
+  ].join("\n");
+
+  const head = (html: string) =>
+    html.slice(html.indexOf("<head>"), html.indexOf("</head>"));
+
+  it("gives each route its own title and canonical", () => {
+    const pages = prerenderRoutes(template, "https://vy.example");
+    expect(pages.map(p => p.fileName)).toEqual([
+      "index.html",
+      "terms.html",
+      "privacy.html",
+      "dmca.html",
+    ]);
+
+    const terms = pages.find(p => p.fileName === "terms.html")!.source;
+    expect(terms).toContain("<title>Terms of Service - Stream Vy</title>");
+    expect(terms).toContain('rel="canonical" href="https://vy.example/terms"');
+    // ...and not the homepage's, which is the whole point: every route used to
+    // serve this, so the site had exactly one indexable URL.
+    expect(terms).not.toContain("<title>Homepage</title>");
+  });
+
+  it("keeps the tags that do not vary by route", () => {
+    // The verification token, icons and site-level JSON-LD live outside the
+    // markers and must survive: rewriting them per route would mean a second
+    // copy to keep in step for no benefit.
+    for (const page of prerenderRoutes(template, "https://vy.example")) {
+      expect(page.source, page.fileName).toContain(
+        'name="google-site-verification" content="tok"'
+      );
+    }
+  });
+
+  it("resolves the origin token, since the template still holds it", () => {
+    const home = prerenderRoutes(template, "https://vy.example")[0].source;
+    expect(home).not.toContain(SITE_ORIGIN_TOKEN);
+    expect(home).toContain('href="https://vy.example/"');
+  });
+
+  it("leaves the head untouched when the markers are missing", () => {
+    // The plugin turns this case into a build error; the pure function just does
+    // not invent a page, so it cannot be tested by asserting a throw here.
+    const stripped = template.replace(
+      / *<!-- seo:route-head:(start|end) -->\n?/g,
+      ""
+    );
+    for (const page of prerenderRoutes(stripped, "https://vy.example")) {
+      // Still the homepage's title, i.e. no prerender happened.
+      expect(head(page.source), page.fileName).toContain(
+        "<title>Homepage</title>"
+      );
+    }
+  });
+
+  it("names the SPA entry index.html and every other route <path>.html", () => {
+    expect(prerenderFileName("/")).toBe("index.html");
+    expect(prerenderFileName("/terms")).toBe("terms.html");
+    expect(prerenderFileName("/terms/")).toBe("terms.html");
+  });
+
+  it("emits no noindex on a prerendered page", () => {
+    for (const page of prerenderRoutes(template, "https://vy.example")) {
+      expect(page.source, page.fileName).not.toContain("noindex");
+      expect(page.source, page.fileName).toContain("index, follow");
+    }
   });
 });

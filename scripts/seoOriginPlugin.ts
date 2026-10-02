@@ -43,7 +43,14 @@
 
 import { execFileSync } from "node:child_process";
 import { loadEnv, type Plugin } from "vite";
-import { INDEXABLE_PATHS, ROBOTS_DISALLOW_PATHS } from "../client/src/lib/seo";
+import {
+  INDEXABLE_PATHS,
+  ROUTE_HEAD_END,
+  ROUTE_HEAD_START,
+  ROBOTS_DISALLOW_PATHS,
+  applyRouteHead,
+  pageSeo,
+} from "../client/src/lib/seo";
 
 export const SITE_ORIGIN_TOKEN = "__SITE_ORIGIN__";
 
@@ -193,11 +200,55 @@ export function renderRobots(
   return lines.join("\n");
 }
 
+/**
+ * The output file for a prerendered route.
+ *
+ * `/` is the SPA entry point itself; every other route becomes `<name>.html`,
+ * which `vercel.json` rewrites to. Directories like `terms/index.html` were the
+ * other option and would work too, but a rewrite is explicit about what it is
+ * doing, whereas a directory relies on host-specific clean-URL behaviour.
+ */
+export function prerenderFileName(path: string): string {
+  if (path === "/") return "index.html";
+  return `${path.replace(/^\/+|\/+$/g, "")}.html`;
+}
+
+/**
+ * One HTML document per sitemapped route.
+ *
+ * Without this the SPA has a single indexable URL. Every route returns the same
+ * `index.html`, whose canonical is `/`, so a crawler is told that `/terms` is a
+ * duplicate of the homepage -- and the sitemap's `<loc>https://.../terms</loc>`
+ * then contradicts the page it points at, which is how three legal pages ended up
+ * submitted, canonicalised away, and dropped.
+ *
+ * Hydration is unaffected: the prerendered files differ only in the marked head
+ * region, and `RouteSeo` still rewrites the head on navigation. The static copy is
+ * there for crawlers that do not execute JavaScript, and for the first paint.
+ */
+export function prerenderRoutes(
+  html: string,
+  origin: string,
+  paths: readonly string[] = INDEXABLE_PATHS
+): Array<{ fileName: string; source: string }> {
+  return paths.map(path => ({
+    fileName: prerenderFileName(path),
+    source: injectOrigin(applyRouteHead(html, pageSeo(path), origin), origin),
+  }));
+}
+
 export function seoOriginPlugin(): Plugin {
   let origin = "";
 
   return {
     name: "streamvy:seo-origin",
+    /*
+     * `post` because the prerender step reads `index.html` out of the bundle, and
+     * Vite's own HTML plugin emits it during its `generateBundle`. Without this
+     * the bundle is still missing the file and nothing gets prerendered -- which
+     * fails silently into a site with one indexable URL again.
+     */
+    enforce: "post",
     /*
      * `configResolved` rather than reading `process.env` inline: Vite does *not*
      * populate `process.env` from the `.env` files it loads, so a `VITE_SITE_URL`
@@ -218,18 +269,44 @@ export function seoOriginPlugin(): Plugin {
     },
 
     /*
-     * Emitted rather than read from `public/`, so the file is derived from the
-     * route table instead of maintained beside it.
+     * A real HTML document per sitemapped route. `transformIndexHtml` above only
+     * ever sees the entry `index.html`, so without this step `/terms`, `/privacy`
+     * and `/dmca` would ship the homepage's title and `canonical="/"`, and the
+     * sitemap would be listing URLs that disown themselves.
      *
-     * With no origin configured the sitemap is not written at all. A `<loc>` must
-     * be absolute, so the alternative is a file full of `/terms` that engines
-     * reject outright -- and a rejected sitemap is indistinguishable from no
-     * sitemap, which means the misconfiguration stays invisible. Omitting it is
-     * at least honest XML, and the warning below says why it is missing. The
-     * fix is to set VITE_SITE_URL, which this build already needed for the
-     * canonical URL in index.html.
+     * The markers are checked rather than assumed: if someone edits the region out
+     * of `index.html`, the pages would silently keep the homepage's head, so this
+     * fails the build instead.
      */
-    generateBundle() {
+    generateBundle(_options, bundle) {
+      const entry = Object.values(bundle).find(
+        chunk => chunk.type === "asset" && chunk.fileName === "index.html"
+      ) as { source: string } | undefined;
+
+      if (entry) {
+        if (
+          !entry.source.includes(ROUTE_HEAD_START) ||
+          !entry.source.includes(ROUTE_HEAD_END)
+        ) {
+          this.error(
+            `index.html no longer contains the ${ROUTE_HEAD_START} / ${ROUTE_HEAD_END} markers. ` +
+              "Without them the prerendered routes cannot be given their own " +
+              "title or canonical, and every route ships as a copy of the homepage."
+          );
+        }
+
+        for (const page of prerenderRoutes(
+          injectOrigin(entry.source, origin),
+          origin
+        )) {
+          this.emitFile({ type: "asset", ...page });
+        }
+      } else {
+        this.warn(
+          "index.html was not found in the bundle; nothing prerendered."
+        );
+      }
+
       this.emitFile({
         type: "asset",
         fileName: "robots.txt",

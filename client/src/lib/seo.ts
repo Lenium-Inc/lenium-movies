@@ -447,4 +447,78 @@ export function buildHeadTags(seo: PageSeo, origin: string): HeadTag[] {
   return tags;
 }
 
+/** Markers delimiting the region of `index.html` that describes the route. */
+export const ROUTE_HEAD_START = "seo:route-head:start";
+export const ROUTE_HEAD_END = "seo:route-head:end";
+
+const escapeHtml = (value: string): string =>
+  value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+
+/**
+ * Serialise head descriptors back to HTML.
+ *
+ * The inverse of what `head.ts` does to a live DOM, and it exists for the same
+ * reason: `index.html` can only describe one URL, so a build has to write a real
+ * HTML document per route for a crawler to see anything but the homepage.
+ *
+ * `remove` descriptors are dropped rather than emitted -- there is no HTML for
+ * "absent", and a prerendered page should simply not carry the tag. `jsonld` is
+ * skipped for the same reason it is absent from the marked region: the site-level
+ * and Organization blocks are identical on every route, so they stay literal in
+ * `index.html` rather than being regenerated here and drifting from the copy that
+ * documents them.
+ */
+export function renderHeadHtml(seo: PageSeo, origin: string): string {
+  return buildHeadTags(seo, origin)
+    .map(tag => {
+      switch (tag.kind) {
+        case "title":
+          return `    <title>${escapeHtml(tag.content)}</title>`;
+        case "meta":
+          return `    <meta ${tag.attribute}="${escapeHtml(tag.key)}" content="${escapeHtml(tag.content)}" />`;
+        case "link":
+          return `    <link rel="${escapeHtml(tag.rel)}" href="${escapeHtml(tag.href)}" />`;
+        case "jsonld":
+        case "removeJsonLd":
+        case "removeMeta":
+          return null;
+      }
+    })
+    .filter((line): line is string => line !== null)
+    .join("\n");
+}
+
+/**
+ * Replace the route-varying region of `index.html` with one route's head.
+ *
+ * Only the tags between the markers are rewritten. Everything else in the file --
+ * the icons, the Search Console verification token, the site-wide JSON-LD -- is
+ * identical on every page, and rewriting it would mean two copies of it to keep in
+ * step. Returns the input unchanged if the markers are missing, which is treated
+ * as a build failure by the caller rather than silently shipping a page whose
+ * title is still the homepage's.
+ */
+export function applyRouteHead(
+  html: string,
+  seo: PageSeo,
+  origin: string
+): string {
+  const start = html.indexOf(`<!-- ${ROUTE_HEAD_START} -->`);
+  const end = html.indexOf(`<!-- ${ROUTE_HEAD_END} -->`);
+  if (start < 0 || end < 0 || end < start) return html;
+
+  const head = renderHeadHtml(seo, origin);
+  return (
+    html.slice(0, start) +
+    `<!-- ${ROUTE_HEAD_START} -->\n` +
+    head +
+    `\n    <!-- ${ROUTE_HEAD_END} -->` +
+    html.slice(end + `<!-- ${ROUTE_HEAD_END} -->`.length)
+  );
+}
+
 export default pageSeo;

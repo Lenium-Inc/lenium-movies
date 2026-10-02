@@ -3,5 +3,10 @@
   "framework": "vite",
   "buildCommand": "vite build",
   "outputDirectory": "dist/public",
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+  "rewrites": [
+    { "source": "/terms", "destination": "/terms.html" },
+    { "source": "/privacy", "destination": "/privacy.html" },
+    { "source": "/dmca", "destination": "/dmca.html" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
 }
