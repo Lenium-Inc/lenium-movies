@@ -260,8 +260,14 @@ def _get_tv_metadata(tmdb_id: int | str, current_season: int = 1) -> tuple[int, 
 # steps.
 # ---------------------------------------------------------------------------
 
+# NOTE: moving the frontend to a new domain requires adding it HERE as well, and
+# redeploying the backend. A domain change is not frontend-only: until this list
+# contains the new origin, the browser refuses every cross-origin call with
+# "No 'Access-Control-Allow-Origin' header", which looks like an outage and is
+# only a stale allowlist. Set ALLOWED_ORIGINS in the environment to override.
 _DEFAULT_ALLOWED_ORIGINS = (
-    "https://vy-virid.vercel.app,http://localhost:5173,http://127.0.0.1:5173,"
+    "https://streamvy.vercel.app,https://vy-virid.vercel.app,"
+    "http://localhost:5173,http://127.0.0.1:5173,"
     "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5193,http://127.0.0.1:5193"
 )
 

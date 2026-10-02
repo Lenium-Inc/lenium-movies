@@ -202,6 +202,44 @@ def test_cors_is_not_a_wildcard():
     assert "Access-Control-Allow-Origin" not in denied.headers
 
 
+def test_allowlist_matches_the_frontend_domain():
+    """The frontend's origin has to be in the backend's allowlist.
+
+    The site moved from vy-virid.vercel.app to streamvy.vercel.app and every
+    cross-origin call failed with "No 'Access-Control-Allow-Origin' header" until
+    the new domain was added here. Nothing in the frontend changed and nothing
+    broke visibly: the catalogue just stayed empty and login silently stopped
+    working, because a CORS rejection is indistinguishable from a dead backend at
+    the call site -- both surface as `TypeError: Failed to fetch`.
+
+    So the coupling is asserted in both directions. A typo in a list entry, an
+    entry that lost its scheme, or a domain that moved again all fail here rather
+    than in someone's browser console.
+    """
+    _store, client = _fresh_client()
+    import app as application
+
+    # Every entry in the allowlist is actually reflected, and normalises the way
+    # a browser sends it.
+    for origin in application._DEFAULT_ALLOWED_ORIGINS.split(","):
+        origin = origin.strip()
+        if not origin:
+            continue
+        assert "*" not in origin, f"wildcard origin in allowlist: {origin}"
+        res = client.get("/api/auth/me", headers={"Origin": origin})
+        assert res.headers.get("Access-Control-Allow-Origin") == origin, (
+            f"{origin} is in the default allowlist but is not reflected: "
+            f"{dict(res.headers)}"
+        )
+
+    # The current production frontend is present. If the domain moves again and
+    # this fails, the fix is to update `_DEFAULT_ALLOWED_ORIGINS` above.
+    assert "https://streamvy.vercel.app" in application._ALLOWED_ORIGINS, (
+        "the frontend origin is missing from the CORS allowlist; the deployed "
+        f"backend allows {sorted(application._ALLOWED_ORIGINS)}"
+    )
+
+
 def test_every_share_route_answers_the_preflight():
     """A share POST cannot be blocked by a failed preflight.
 
