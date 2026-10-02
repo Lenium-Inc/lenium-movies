@@ -3,6 +3,7 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
 import { defineConfig } from "vite";
+import { seoOriginPlugin } from "./scripts/seoOriginPlugin";
 
 // =============================================================================
 // Vite config.
@@ -19,6 +20,10 @@ const plugins = [
   react(),
   tailwindcss(),
   jsxLocPlugin(),
+  // Replaces the __SITE_ORIGIN__ token in index.html with the deployed origin, so
+  // the canonical URL, og:url and og:image name the host they are served from
+  // instead of a production hostname baked into the file.
+  seoOriginPlugin(),
 ];
 
 export default defineConfig({

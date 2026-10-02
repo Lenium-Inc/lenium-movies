@@ -29,6 +29,10 @@ export default defineConfig({
       "server/**/*.test.ts",
       "server/**/*.spec.ts",
       "client/src/**/*.test.ts",
+      // Build-time plugins carry logic too -- the origin substitution decides
+      // what canonical URL every deployment ships, and it is only reachable
+      // through a production build otherwise.
+      "scripts/**/*.test.ts",
     ],
   },
 });

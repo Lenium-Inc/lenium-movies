@@ -6,186 +6,190 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1"
     />
-    <meta name="theme-color" content="#0b0b0e" />
-    
-    <!-- Primary Meta Tags -->
-    <meta name="title" content="Stream Vy - Free Movies Online | Watch Public Domain Films" />
+    <!-- The app's base colour. It was #0b0b0e, which matches no other value in
+         the palette: the shell resolves to #0b0c10, so the browser chrome was a
+         slightly different black from the page it frames. -->
+    <meta name="theme-color" content="#0b0c10" />
+
+    <!--
+      The static head.
+
+      These tags are here, duplicated from `client/src/lib/seo.ts`, because this
+      is the only SEO surface a crawler reliably reads -- it is the HTML it gets
+      before any JavaScript runs, and `RouteSeo` cannot help until the bundle
+      has loaded and executed.
+
+      Two rules keep the duplication honest, both enforced by `seo.test.ts`:
+
+      1. The title, description and keywords below are asserted to be exactly
+         what the module generates for "/". Editing one without the other fails
+         the suite instead of quietly drifting, which is what happened for six
+         months when a separate `seoConfig` object carried its own copies.
+      2. Nothing here hardcodes a hostname. `__SITE_ORIGIN__` is replaced at
+         build time by scripts/seoOriginPlugin.ts with the value of
+         VITE_SITE_URL, the same variable the runtime resolves. With it unset the
+         token becomes empty and every URL below stays root-relative, which each
+         consumer resolves against the host actually serving the page -- the
+         alternative, a production URL baked into the file, made every preview
+         deploy claim to be the live site.
+    -->
+    <title>Stream Vy - Free Movies Online | Watch Public Domain Films</title>
     <meta
       name="description"
-      content="Stream Vy is the best free movie streaming platform. Watch thousands of public domain and openly licensed films. Browse by genre, search movies, build your watchlist, and enjoy free streaming without ads. Stream Vy movies online now!"
+      content="Stream Vy is a free movie streaming platform for public domain and openly licensed films. Browse by genre, search the catalogue, build a watchlist, and keep your progress across episodes. No advertising network, no third-party analytics."
     />
-    <meta name="keywords" content="free movies, stream movies online, public domain movies, free streaming, vyvirid, stream vy, watch movies free, online cinema, movie database, film streaming" />
-    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
-    <meta name="googlebot" content="index, follow, max-image-preview:large" />
-    <meta name="bingbot" content="index, follow" />
+    <meta
+      name="keywords"
+      content="free movies, stream movies online, public domain movies, free streaming, watch movies free, public domain films, movie database"
+    />
+    <meta
+      name="robots"
+      content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"
+    />
+
     <meta name="application-name" content="Stream Vy" />
     <meta name="apple-mobile-web-app-title" content="Stream Vy" />
     <meta name="author" content="Lenium Inc" />
     <meta name="creator" content="Lenium Inc" />
     <meta name="publisher" content="Lenium Inc" />
-    <meta name="revisit-after" content="7 days" />
-    <meta name="language" content="English" />
-    <meta name="distribution" content="global" />
-    <meta name="rating" content="general" />
-    
-    <!-- Canonical URL -->
-    <link rel="canonical" href="https://vy-virid.vercel.app/" />
+
+    <link rel="canonical" href="__SITE_ORIGIN__/" />
     <link rel="sitemap" type="application/xml" href="/sitemap.xml" />
-    
-    <!-- Open Graph / Facebook -->
+
+    <!--
+      Open Graph.
+
+      og:image points at the brand mark, which is an SVG. Facebook, X/Twitter and
+      LinkedIn do not render SVG here and want a raster image of at least
+      1200x630, so these cards will show no picture on those platforms until a
+      real preview image exists. That is a design deliverable rather than a code
+      one, so it is recorded as a single constant -- OG_IMAGE in lib/seo.ts, and
+      these three tags -- rather than left to be rediscovered.
+    -->
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Stream Vy" />
-    <meta property="og:title" content="Stream Vy - Free Movies Online | Watch Public Domain Films" />
+    <meta
+      property="og:title"
+      content="Stream Vy - Free Movies Online | Watch Public Domain Films"
+    />
     <meta
       property="og:description"
-      content="Discover and stream thousands of public domain and openly licensed movies for free. Browse by genre, search, build your watchlist. The best free movie streaming platform."
+      content="Stream Vy is a free movie streaming platform for public domain and openly licensed films. Browse by genre, search the catalogue, build a watchlist, and keep your progress across episodes. No advertising network, no third-party analytics."
     />
-    <meta property="og:url" content="https://vy-virid.vercel.app/" />
-    <meta property="og:image" content="https://vy-virid.vercel.app/stream-vy-mark.svg" />
-    <meta property="og:image:alt" content="Stream Vy - Free Movie Streaming Platform" />
+    <meta property="og:url" content="__SITE_ORIGIN__/" />
+    <meta property="og:image" content="__SITE_ORIGIN__/stream-vy-mark.svg" />
+    <meta property="og:image:alt" content="The Stream Vy mark" />
     <meta property="og:locale" content="en_US" />
-    
-    <!-- Twitter -->
+
+    <!--
+      Twitter.
+
+      twitter:creator and twitter:site were removed. Both asserted an @StreamVy
+      account; an unverified handle on a site that does not control it is a claim
+      made on its behalf to a third party, and it buys nothing -- attribution is
+      controlled by who publishes the link, not by this tag.
+    -->
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Stream Vy - Free Movies Online | Watch Public Domain Films" />
+    <meta
+      name="twitter:title"
+      content="Stream Vy - Free Movies Online | Watch Public Domain Films"
+    />
     <meta
       name="twitter:description"
-      content="Stream Vy: Watch thousands of free public domain movies online. Browse by genre, search movies, build your watchlist. The ultimate free movie streaming platform."
+      content="Stream Vy is a free movie streaming platform for public domain and openly licensed films. Browse by genre, search the catalogue, build a watchlist, and keep your progress across episodes. No advertising network, no third-party analytics."
     />
-    <meta name="twitter:image" content="https://vy-virid.vercel.app/stream-vy-mark.svg" />
-    <meta name="twitter:creator" content="@StreamVy" />
-    <meta name="twitter:site" content="@StreamVy" />
-    
-    <!-- Schema.org Structured Data -->
-    <script type="application/ld+json">
+    <meta name="twitter:image" content="__SITE_ORIGIN__/stream-vy-mark.svg" />
+
+    <!--
+      Structured data.
+
+      `data-jsonld` is what makes this block adoptable: `RouteSeo` writes the
+      same id, so navigating to a title page updates this node in place instead of
+      appending a second WebSite block beside it. Without the attribute the
+      applier could not see this node and every route change would have left
+      another copy of the homepage's schema in the head.
+
+      Two blocks were deleted here. A VideoObject with `"duration": "PT0H0M0S"`
+      described the entire website as a zero-length video, on every page; and a
+      BreadcrumbList whose two items were "Home" and "Browse Movies", both
+      pointing at "/", described a hierarchy that does not exist. Both are
+      malformed structured data rather than merely redundant, and a crawler that
+      reads them has to decide what to believe about a site whose other claims
+      are accurate.
+    -->
+    <script type="application/ld+json" data-jsonld="site-jsonld">
       {
         "@context": "https://schema.org",
         "@type": "WebSite",
         "name": "Stream Vy",
         "alternateName": ["vyvirid", "Vy Virid"],
-        "url": "https://vy-virid.vercel.app/",
-        "description": "Free movie streaming platform with thousands of public domain and openly licensed films",
-        "image": "https://vy-virid.vercel.app/stream-vy-mark.svg",
-        "sameAs": [
-          "https://github.com/Lenium-Inc/lenium-movies"
-        ],
+        "url": "__SITE_ORIGIN__/",
+        "description": "Stream Vy is a free movie streaming platform for public domain and openly licensed films. Browse by genre, search the catalogue, build a watchlist, and keep your progress across episodes. No advertising network, no third-party analytics.",
+        "image": "__SITE_ORIGIN__/stream-vy-mark.svg",
+        "sameAs": ["https://github.com/Lenium-Inc/lenium-movies"],
         "creator": {
           "@type": "Organization",
           "name": "Lenium Inc",
           "url": "https://github.com/Lenium-Inc"
         },
-        "potentialAction": [
-          {
-            "@type": "SearchAction",
-            "target": {
-              "@type": "EntryPoint",
-              "urlTemplate": "https://vy-virid.vercel.app/?search={search_term_string}"
-            },
-            "query-input": "required name=search_term_string"
+        "potentialAction": {
+          "@type": "SearchAction",
+          "target": {
+            "@type": "EntryPoint",
+            "urlTemplate": "__SITE_ORIGIN__/?search={search_term_string}"
           },
-          {
-            "@type": "ViewAction",
-            "name": "Browse Movies",
-            "target": "https://vy-virid.vercel.app/"
-          }
-        ],
-        "mainEntity": {
-          "@type": "CollectionPage",
-          "name": "Free Movie Streaming Library",
-          "description": "Explore thousands of public domain and openly licensed films",
-          "url": "https://vy-virid.vercel.app/"
+          "query-input": "required name=search_term_string"
         }
       }
     </script>
-    
-    <!-- Movie/Video Schema -->
-    <script type="application/ld+json">
-      {
-        "@context": "https://schema.org",
-        "@type": "VideoObject",
-        "name": "Stream Vy - Free Movie Streaming",
-        "description": "Stream thousands of public domain movies for free on Stream Vy. Browse, search, and build your personal watchlist.",
-        "thumbnailUrl": "https://vy-virid.vercel.app/stream-vy-mark.svg",
-        "uploadDate": "2026-10-01T00:00:00Z",
-        "duration": "PT0H0M0S"
-      }
-    </script>
-    
-    <!-- Organization Schema -->
-    <script type="application/ld+json">
+
+    <script type="application/ld+json" data-jsonld="org-jsonld">
       {
         "@context": "https://schema.org",
         "@type": "Organization",
-        "name": "Stream Vy",
-        "url": "https://vy-virid.vercel.app/",
-        "description": "Free movie streaming platform for public domain and openly licensed films",
-        "image": "https://vy-virid.vercel.app/stream-vy-mark.svg",
-        "sameAs": [
-          "https://github.com/Lenium-Inc/lenium-movies"
-        ],
-        "contact": {
-          "@type": "ContactPoint",
-          "contactType": "Customer Service",
-          "url": "https://vy-virid.vercel.app/terms"
-        }
+        "name": "Lenium Inc",
+        "url": "https://github.com/Lenium-Inc",
+        "logo": "__SITE_ORIGIN__/stream-vy-mark.svg",
+        "sameAs": ["https://github.com/Lenium-Inc/lenium-movies"]
       }
     </script>
-    
-    <!-- Breadcrumb Schema -->
-    <script type="application/ld+json">
-      {
-        "@context": "https://schema.org",
-        "@type": "BreadcrumbList",
-        "itemListElement": [
-          {
-            "@type": "ListItem",
-            "position": 1,
-            "name": "Home",
-            "item": "https://vy-virid.vercel.app/"
-          },
-          {
-            "@type": "ListItem",
-            "position": 2,
-            "name": "Browse Movies",
-            "item": "https://vy-virid.vercel.app/"
-          }
-        ]
-      }
-    </script>
-    
-    <!-- Verification & Analytics -->
+
     <meta
       name="google-site-verification"
       content="j7jpZ4Rw36PBl13aJRvA50xKeobt_LhrirSzDBWUthc"
     />
-    
-    <!-- Icons -->
+
+    <!--
+      Icons. Only the SVG, which is the one that exists: `favicon.ico` and an
+      `.ico` alternate were both referenced and 404'd, and an SVG apple-touch-icon
+      is ignored by iOS, which wants a 180x180 PNG.
+    -->
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="alternate icon" href="/favicon.ico" sizes="32x32" />
-    <link rel="apple-touch-icon" href="/favicon.svg" />
-    
-    <!-- DNS Prefetch -->
+
+    <!-- Every poster, backdrop and still on this site comes from TMDB. -->
     <link rel="dns-prefetch" href="//www.themoviedb.org" />
     <link rel="preconnect" href="https://www.themoviedb.org" />
-    
-    <title>Stream Vy - Free Movies Online | Watch Public Domain Films</title>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
     <!--
-      No analytics beacons.
+      No analytics beacons, and none may be added unconditionally.
 
-      This used to ship two: an Umami script whose src was the literal
-      `%VITE_ANALYTICS_ENDPOINT%` (Vite only inlines the literal string
-      `import.meta.env.VITE_*`, so an unset var left the placeholder in dist
-      and every page load requested /%VITE_ANALYTICS_ENDPOINT%/umami), and a
-      Cloudflare beacon that ran unconditionally. The cookie notice meanwhile
-      told viewers "no third-party analytics in this app" -- which was false.
+      Two used to ship here: an Umami script whose src was the literal
+      `%VITE_ANALYTICS_ENDPOINT%` (Vite only inlines `import.meta.env.VITE_*`, so
+      an unset var left the placeholder in dist and every page load requested
+      /%VITE_ANALYTICS_ENDPOINT%/umami), and a Cloudflare beacon that ran
+      unconditionally. `/privacy` tells viewers in a legal section that there are
+      no third-party analytics scripts in this product, and that has to stay
+      literally true.
 
-      Removed rather than gated so the privacy notice is true by construction.
-      If analytics is wanted later, it should be added behind the consent
-      choice in CookieBanner, not unconditionally in this file.
+      This file used to end by pointing at CookieBanner as the place a future
+      consent choice would live. That component has since been deleted, because
+      there is nothing left to consent to: the only third parties are the embed
+      providers and TMDB, both named on the privacy page. If analytics is ever
+      wanted, it needs a consent mechanism built at the same time as the policy
+      change, not a script tag and a promise to add one later.
     -->
   </body>
 </html>
