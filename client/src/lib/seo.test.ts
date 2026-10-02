@@ -280,6 +280,7 @@ describe("static SEO files agree with the module", () => {
    * the shipped file says something different, because the renderer *is* the
    * shipped file.
    */
+  // With no origin the Sitemap line is omitted -- there is no sitemap to name.
   const robots = renderRobots();
   const sitemap = renderSitemap();
 
@@ -401,7 +402,12 @@ describe("static SEO files agree with the module", () => {
     expect(sitemap).not.toContain("image:");
   });
 
-  it("points robots.txt at the sitemap", () => {
-    expect(robots).toContain("Sitemap: /sitemap.xml");
+  it("points robots.txt at the sitemap when there is one", () => {
+    expect(renderRobots(undefined, "https://vy.example")).toContain(
+      "Sitemap: https://vy.example/sitemap.xml"
+    );
+    // ...and names no sitemap when there is not, rather than pointing at a file
+    // that was never written.
+    expect(renderRobots()).not.toContain("Sitemap:");
   });
 });

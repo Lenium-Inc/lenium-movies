@@ -41,6 +41,7 @@
  * URLs.
  */
 
+import { execFileSync } from "node:child_process";
 import { loadEnv, type Plugin } from "vite";
 import { INDEXABLE_PATHS, ROBOTS_DISALLOW_PATHS } from "../client/src/lib/seo";
 
@@ -78,30 +79,41 @@ const escapeXml = (value: string): string =>
 /**
  * `sitemap.xml`, built from `INDEXABLE_PATHS`.
  *
- * Carries `<loc>` and nothing else. The previous file also carried:
+ * `<loc>` must be an absolute URL -- the spec requires it, and a relative one is
+ * a parse error that gets the whole file discarded. So when no origin is
+ * configured this renders nothing at all rather than emitting `/terms` and
+ * calling it a sitemap; see the plugin's `generateBundle` for why that is the
+ * better of the two failures.
  *
- * - a `lastmod` of `2026-10-01` on all four URLs, a date no commit history
- *   supports. `lastmod` is a hint about how often to re-crawl, so a wrong value is
- *   not inert -- a crawler trusting it can skip a page that genuinely changed.
- * - `changefreq` and `priority`, which Google states it ignores outright. They
- *   looked like tuning and were decoration.
+ * On the other elements the previous file carried:
+ *
+ * - `changefreq` and `priority`, which Google's documentation states it ignores
+ *   ("Google ignores the `changefreq` and `priority` tags"). They looked like
+ *   tuning and were decoration. Worth noting they are also the tags most often
+ *   advised as necessary, and the advice is simply wrong.
  * - an `image:image` entry pointing at the 32x32 SVG brand mark, on the
  *   homepage. Google Images wants raster, and an image entry is meant for a page
  *   whose primary content is that image; the homepage's primary content is a
  *   film catalogue.
  *
- * The one thing a sitemap cannot express without an absolute URL is `<loc>`, which
- * is why an unconfigured build is documented above as a degraded state rather than
- * a supported one.
+ * `lastmod` is emitted only for a path whose real last-modified date is known --
+ * passed in from the caller, which reads it from git. Inventing one is worse
+ * than omitting it: `lastmod` is a claim about when to re-crawl, so the old
+ * file's blanket `2026-10-01` could talk a crawler out of re-fetching a page
+ * that genuinely changed. `new Date()` at build time, the usual replacement, is
+ * the same fabrication with a fresher timestamp.
  */
 export function renderSitemap(
   paths: readonly string[] = INDEXABLE_PATHS,
-  origin = ""
+  origin = "",
+  lastmodByPath: Readonly<Record<string, string>> = {}
 ): string {
   const entries = paths
     .map(path => {
       const loc = `${origin}${path === "/" ? "/" : path}`;
-      return `  <url>\n    <loc>${escapeXml(loc)}</loc>\n  </url>`;
+      const lastmod = lastmodByPath[path];
+      const lastmodTag = lastmod ? `\n    <lastmod>${lastmod}</lastmod>` : "";
+      return `  <url>\n    <loc>${escapeXml(loc)}</loc>${lastmodTag}\n  </url>`;
     })
     .join("\n");
 
@@ -110,6 +122,46 @@ export function renderSitemap(
 ${entries}
 </urlset>
 `;
+}
+
+/**
+ * Which source file each sitemapped page is rendered from, for `lastmod`.
+ *
+ * The last-modified date a crawler wants is when the *content* last changed, and
+ * for a route rendered by one component, that is when that component's file was
+ * last committed. `Home.tsx` changing is a real change to `/`.
+ */
+export const SITEMAP_SOURCES: Record<string, string> = {
+  "/": "client/src/pages/Home.tsx",
+  "/terms": "client/src/pages/Terms.tsx",
+  "/privacy": "client/src/pages/Privacy.tsx",
+  "/dmca": "client/src/pages/Dmca.tsx",
+};
+
+/**
+ * Last commit date for each sitemapped path, as `YYYY-MM-DD`.
+ *
+ * Read from git rather than trusted, and tolerant of git being absent: Vercel
+ * builds sometimes run against a shallow clone with no history, and a build that
+ * fails because it could not date a file would be a worse outcome than a sitemap
+ * without `lastmod`. Returns `{}` in that case and the elements are simply
+ * omitted, which is valid.
+ */
+export function gitLastmodByPath(cwd: string): Record<string, string> {
+  const dates: Record<string, string> = {};
+  for (const [path, file] of Object.entries(SITEMAP_SOURCES)) {
+    try {
+      const stamp = execFileSync(
+        "git",
+        ["log", "-1", "--format=%cs", "--", file],
+        { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
+      ).trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(stamp)) dates[path] = stamp;
+    } catch {
+      // No git, no history, or no such file. Omit rather than guess.
+    }
+  }
+  return dates;
 }
 
 /**
@@ -130,9 +182,14 @@ export function renderRobots(
     "",
     ...disallow.map(path => `Disallow: ${path}/`),
     "",
-    `Sitemap: ${origin}/sitemap.xml`,
-    "",
   ];
+  /*
+   * Only when there is a sitemap to point at. The spec wants an absolute URL here,
+   * and a relative one is ignored -- so with no origin the line is dropped rather
+   * than written as a reference to a file that does not exist. The disallow rules
+   * above are unaffected; they are the part that does the work.
+   */
+  if (origin) lines.push(`Sitemap: ${origin}/sitemap.xml`, "");
   return lines.join("\n");
 }
 
@@ -163,34 +220,67 @@ export function seoOriginPlugin(): Plugin {
     /*
      * Emitted rather than read from `public/`, so the file is derived from the
      * route table instead of maintained beside it.
+     *
+     * With no origin configured the sitemap is not written at all. A `<loc>` must
+     * be absolute, so the alternative is a file full of `/terms` that engines
+     * reject outright -- and a rejected sitemap is indistinguishable from no
+     * sitemap, which means the misconfiguration stays invisible. Omitting it is
+     * at least honest XML, and the warning below says why it is missing. The
+     * fix is to set VITE_SITE_URL, which this build already needed for the
+     * canonical URL in index.html.
      */
     generateBundle() {
-      this.emitFile({
-        type: "asset",
-        fileName: "sitemap.xml",
-        source: renderSitemap(INDEXABLE_PATHS, origin),
-      });
       this.emitFile({
         type: "asset",
         fileName: "robots.txt",
         source: renderRobots(ROBOTS_DISALLOW_PATHS, origin),
       });
+
+      if (!origin) {
+        this.warn(
+          "No VITE_SITE_URL set, so sitemap.xml was not written: a sitemap " +
+            "needs absolute URLs and would be rejected if written with " +
+            "relative paths. robots.txt has no sitemap URL for the same " +
+            "reason. The canonical and og:url in index.html are relative for " +
+            "the same reason."
+        );
+        return;
+      }
+
+      this.emitFile({
+        type: "asset",
+        fileName: "sitemap.xml",
+        source: renderSitemap(
+          INDEXABLE_PATHS,
+          origin,
+          gitLastmodByPath(process.cwd())
+        ),
+      });
     },
 
     /*
-     * `npm run dev` gets the same two files, from the same functions, so a local
-     * run shows what production will ship instead of a hand-written copy of it.
-     * Sitemaps only matter to crawlers, which never visit localhost, so this is
-     * for fidelity rather than for indexing.
+     * `npm run dev` gets both files, from the same functions, so a local run
+     * shows what production will ship instead of a hand-written copy of it.
+     *
+     * The sitemap is withheld here too, for the same reason as in the build. In
+     * dev the origin is usually unset anyway, and localhost is never crawled.
      */
     configureServer(server) {
-      server.middlewares.use("/sitemap.xml", (_request, response) => {
-        response.setHeader("Content-Type", "application/xml; charset=utf-8");
-        response.end(renderSitemap(INDEXABLE_PATHS, origin));
-      });
       server.middlewares.use("/robots.txt", (_request, response) => {
         response.setHeader("Content-Type", "text/plain; charset=utf-8");
         response.end(renderRobots(ROBOTS_DISALLOW_PATHS, origin));
+      });
+
+      if (!origin) return;
+      server.middlewares.use("/sitemap.xml", (_request, response) => {
+        response.setHeader("Content-Type", "application/xml; charset=utf-8");
+        response.end(
+          renderSitemap(
+            INDEXABLE_PATHS,
+            origin,
+            gitLastmodByPath(process.cwd())
+          )
+        );
       });
     },
   };

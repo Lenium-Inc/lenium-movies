@@ -79,17 +79,27 @@ describe("renderSitemap", () => {
     ]);
   });
 
-  it("omits lastmod rather than asserting one", () => {
+  it("omits lastmod rather than inventing one", () => {
     /*
-     * The previous sitemap put <lastmod>2026-10-01</lastmod> on every URL. A
-     * wrong lastmod is not harmless the way a wrong changefreq is: it is a claim
-     * about how often to re-crawl, so a crawler that trusts it can skip a page
-     * that actually changed. With no reliable modification date, the element is
-     * left out.
+     * `new Date()` at build time is the usual substitute and it is still a lie:
+     * every page would report the moment the build ran. The previous sitemap put
+     * a single blanket `2026-10-01` on all four URLs, which can talk a crawler
+     * out of re-fetching a page that genuinely changed. With no known date, the
+     * element is left out and the file stays valid.
      */
     const xml = renderSitemap(INDEXABLE_PATHS, "https://vy.example");
     expect(xml).not.toContain("lastmod");
     expect(xml).not.toContain("2026-");
+  });
+
+  it("emits lastmod only for paths whose date is known", () => {
+    const xml = renderSitemap(["/", "/terms"], "https://vy.example", {
+      "/terms": "2026-09-30",
+    });
+    // /terms carries a real date from git; / has none supplied, so none is claimed.
+    const terms = xml.slice(xml.indexOf("/terms"), xml.indexOf("/terms") + 120);
+    expect(terms).toContain("<lastmod>2026-09-30</lastmod>");
+    expect(xml.slice(0, xml.indexOf("/terms"))).not.toContain("<lastmod>");
   });
 
   it("escapes XML metacharacters in an origin", () => {
@@ -118,6 +128,16 @@ describe("renderRobots", () => {
   it("points at an absolute sitemap URL", () => {
     expect(renderRobots(ROBOTS_DISALLOW_PATHS, "https://vy.example")).toContain(
       "Sitemap: https://vy.example/sitemap.xml"
+    );
+  });
+
+  it("names no sitemap when there is no origin for one", () => {
+    // A relative Sitemap URL is ignored by every engine, so writing one would
+    // point crawlers at a file this build does not emit.
+    expect(renderRobots(ROBOTS_DISALLOW_PATHS, "")).not.toContain("Sitemap:");
+    // The disallow rules are the part that matters, and they stay.
+    expect(renderRobots(ROBOTS_DISALLOW_PATHS, "")).toContain(
+      "Disallow: /api/"
     );
   });
 
