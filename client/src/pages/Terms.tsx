@@ -31,7 +31,7 @@ export default function Terms() {
     >
       <LegalSection heading="What this service is">
         <p>
-          Stream Vy is a streaming front end for public-domain and openly
+          Lenium is a streaming front end for public-domain and openly
           licensed film. We hold a catalogue of titles, series and episode
           listings, and when you press play we take you to a copy hosted by a
           third party. We do not ask anyone to upload a film, and we do not

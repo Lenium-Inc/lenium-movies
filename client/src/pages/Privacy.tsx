@@ -24,7 +24,7 @@ export default function Privacy() {
   return (
     <LegalLayout
       title="Privacy Notice"
-      intro={`Last updated ${LEGAL_EFFECTIVE_DATE}. What Stream Vy records, why, how long it keeps it, and what you can do about it.`}
+      intro={`Last updated ${LEGAL_EFFECTIVE_DATE}. What Lenium records, why, how long it keeps it, and what you can do about it.`}
     >
       <LegalSection heading="The short version">
         <p>
@@ -115,7 +115,7 @@ export default function Privacy() {
           Being plain about the limits: because the session token lives in
           local storage rather than an HttpOnly cookie, a script that manages to
           run on this origin could read it. Keep your device secure and do not
-          use Stream Vy on a machine you do not trust.
+          use Lenium on a machine you do not trust.
         </p>
       </LegalSection>
 

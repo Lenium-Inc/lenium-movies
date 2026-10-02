@@ -884,10 +884,10 @@ export function WatchPage() {
         ? `${movie.title} — S${season} E${episode}`
         : movie?.title || "Loading...";
 
-  const DEFAULT_TAB_TITLE = "Stream Vy";
+  const DEFAULT_TAB_TITLE = "Lenium";
   useEffect(() => {
     document.title = movie?.title
-      ? `${movie.title} — Stream Vy`
+      ? `${movie.title} — Lenium`
       : DEFAULT_TAB_TITLE;
     return () => {
       document.title = DEFAULT_TAB_TITLE;

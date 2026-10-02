@@ -163,7 +163,7 @@ describe("applyHeadTags", () => {
     applyHeadTags(buildHeadTags(pageSeo("/"), ORIGIN));
     applyHeadTags(buildHeadTags(pageSeo("/terms"), ORIGIN));
 
-    expect(document.title).toBe("Terms of Service - Stream Vy");
+    expect(document.title).toBe("Terms of Service - Lenium");
     expect(meta('meta[name="description"]')).toContain("terms that apply");
     expect(count('meta[name="description"]')).toBe(1);
     expect(count('link[rel="canonical"]')).toBe(1);

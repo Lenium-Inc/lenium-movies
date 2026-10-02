@@ -258,7 +258,7 @@ export default function Home() {
               {/*
               Nothing here on purpose.
 
-              The home page used to open with a "What Stream Vy is" block
+              The home page used to open with a "What Lenium is" block
               restating what the product does and, underneath it, the daily
               viewing allowance in the same words the server refuses with. It sat
               between the featured title and the shelves, so the two things a

@@ -36,20 +36,16 @@
  * that both the browser and the build can load.
  */
 
-export const SITE_NAME = "Stream Vy";
-export const SITE_TAGLINE = "Free Movies Online | Watch Public Domain Films";
-export const SITE_TITLE = `${SITE_NAME} - ${SITE_TAGLINE}`;
+export const SITE_NAME = "Lenium";
+export const SITE_TAGLINE = "Your screen, your stories";
+export const SITE_TITLE = `${SITE_NAME} — ${SITE_TAGLINE}`;
 
 /**
  * Shown as the description for the homepage and as the fallback for every route
  * that has nothing better to say.
- *
- * Every claim in here is about this product: public-domain and openly licensed
- * titles, a watchlist, profiles, history. Nothing about a catalogue size we
- * cannot substantiate and nothing about a commercial model that does not exist.
  */
 export const SITE_DESCRIPTION =
-  "Stream Vy is a free movie streaming platform for public domain and openly licensed films. Browse by genre, search the catalogue, build a watchlist, and keep your progress across episodes. No advertising network, no third-party analytics.";
+  "Lenium is a self-hosted home for the films and series you are authorized to stream.";
 
 /**
  * `keywords` is not a ranking signal, and no major engine has read it in over a
@@ -77,7 +73,7 @@ export const SITE_KEYWORDS = [
  * change when it does: point it at a PNG, and the drift test will then require
  * `index.html` to match.
  */
-export const OG_IMAGE = "/stream-vy-mark.svg";
+export const OG_IMAGE = "/lenium-mark.svg";
 
 /** Routes that must never be indexed, mirroring `public/robots.txt`. */
 const PRIVATE_PREFIXES = [

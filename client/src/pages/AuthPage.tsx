@@ -299,7 +299,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
               pages. Non-interactive: the way back out is already the one link
               at the foot of the page, and two ways home is one too many. */}
           <div className="mb-9 sm:mb-11">
-            <BrandLockup size="lg" className="text-white" label="Stream Vy" />
+            <BrandLockup size="lg" className="text-white" label="Lenium" />
           </div>
 
           {/* Reel position: the technical voice, and the only small type here.
@@ -561,7 +561,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
                 it, and the rule is cheaper than another 24px of space. */}
             <div className="mt-7 border-t border-white/[0.07] pt-6">
               <p className="text-center text-[13.5px] text-[var(--booth-dust)]">
-                {isSignup ? "Already have an account?" : "New to Stream Vy?"}{" "}
+                {isSignup ? "Already have an account?" : "New to Lenium?"}{" "}
                 <Link
                   href={swapHref}
                   className="ln-focus-lamp rounded-sm font-semibold text-[var(--lamp)] underline-offset-4 transition hover:underline"

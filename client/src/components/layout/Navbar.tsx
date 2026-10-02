@@ -94,7 +94,7 @@ export function Navbar({ view, onNavigate }: NavbarProps) {
           href="/"
           onClick={() => window.scrollTo({ top: 0 })}
           className="shrink-0 rounded-md text-white"
-          aria-label="Stream Vy home"
+          aria-label="Lenium home"
         >
           <BrandLockup size="md" />
         </Link>

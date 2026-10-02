@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Lenium">
+  <defs>
+    <linearGradient id="leniumSilver" x1="128" x2="384" y1="64" y2="448" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#f8f8f8"/>
+      <stop offset="28%" stop-color="#ececec"/>
+      <stop offset="52%" stop-color="#fbfbfb"/>
+      <stop offset="100%" stop-color="#d8d8d8"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="110" fill="#0b0c10"/>
+  <path d="M350 128H191c-84 0-152 68-152 152 0 84 68 152 152 152h159" fill="none" stroke="url(#leniumSilver)" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M240 172 366 256 240 340Z" fill="url(#leniumSilver)"/>
+</svg>
