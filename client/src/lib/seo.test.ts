@@ -13,6 +13,7 @@ import {
   isPrivatePath,
   movieSchema,
   pageSeo,
+  watchIdFromPath,
   webSiteSchema,
 } from "./seo";
 import { renderRobots, renderSitemap } from "../../../scripts/seoOriginPlugin";
@@ -51,10 +52,24 @@ describe("isPrivatePath", () => {
       "/my-list",
       "/share",
       "/list/share",
-      "/watch/603",
     ]) {
       expect(isPrivatePath(p), p).toBe(true);
     }
+  });
+
+  it("treats a title page as indexable, not private", () => {
+    /*
+     * A film page is this site's only content. While it was noindex, loading and
+     * hosting every public-domain title bought no organic traffic at all, and the
+     * only thing it was protecting against -- a canonical pointing at `/` -- is
+     * fixed by each page carrying its own.
+     *
+     * It is also still crawlable in robots.txt, which is required rather than
+     * incidental: a blocked URL cannot be fetched, so it cannot see the `index`
+     * that replaced the `noindex`.
+     */
+    expect(isPrivatePath("/watch/603")).toBe(false);
+    expect(isPrivatePath("/watch/1396?season=1&episode=1")).toBe(false);
   });
 
   it("does not match a public path that merely starts with the same letters", () => {
@@ -108,6 +123,78 @@ describe("pageSeo", () => {
     // A 404 that indexes itself is a soft 404: the search engine lists a page
     // that does not exist.
     expect(pageSeo("/nope").indexable).toBe(false);
+  });
+});
+
+describe("title pages", () => {
+  const matrix = {
+    id: "603",
+    title: "The Matrix",
+    description: "A hacker learns the truth.",
+    image: "https://image.tmdb.org/t/p/w780/backdrop.jpg",
+    year: 1999,
+  };
+
+  it("extracts the id from a watch path and nothing else", () => {
+    expect(watchIdFromPath("/watch/603")).toBe("603");
+    expect(watchIdFromPath("/watch/1396")).toBe("1396");
+    expect(watchIdFromPath("/")).toBeNull();
+    expect(watchIdFromPath("/watch")).toBeNull();
+    expect(watchIdFromPath("/my-list")).toBeNull();
+  });
+
+  it("stays noindex until the details have loaded", () => {
+    // A title page with no title would otherwise be submitted with a placeholder,
+    // which is worse in a search result than not being submitted yet.
+    const seo = pageSeo("/watch/603");
+    expect(seo.indexable).toBe(false);
+    expect(seo.description).toBe("");
+  });
+
+  it("becomes indexable with the film's own title and description", () => {
+    const seo = pageSeo("/watch/603", { movie: matrix });
+    expect(seo.indexable).toBe(true);
+    expect(seo.title).toBe("The Matrix (1999) - Watch Free on Stream Vy");
+    expect(seo.description).toBe("A hacker learns the truth.");
+    expect(seo.image).toBe(matrix.image);
+  });
+
+  it("falls back to a description that does not invent a synopsis", () => {
+    const seo = pageSeo("/watch/603", {
+      movie: { id: "603", title: "The Matrix" },
+    });
+    expect(seo.description).toContain("Watch The Matrix free on Stream Vy");
+    expect(seo.description).not.toContain("1999");
+  });
+
+  it("canonicalises a title page without its season and episode", () => {
+    // The same film at /watch/1396 and /watch/1396?season=2&episode=4 is one page.
+    const seo = pageSeo("/watch/1396?season=2&episode=4", { movie: matrix });
+    expect(seo.path).toBe("/watch/1396");
+    expect(buildHeadTags(seo, "https://vy.example")).toContainEqual(
+      expect.objectContaining({
+        kind: "link",
+        href: "https://vy.example/watch/1396",
+      })
+    );
+  });
+
+  it("marks a title page as video, not a web page", () => {
+    expect(
+      metaContent(
+        buildHeadTags(pageSeo("/watch/603", { movie: matrix }), ORIGIN),
+        "og:type",
+        "property"
+      )
+    ).toBe("video.other");
+  });
+
+  it("describes the film with Movie schema and an absolute poster URL", () => {
+    const schema = movieSchema(matrix, ORIGIN);
+    expect(schema["@type"]).toBe("Movie");
+    expect(schema.name).toBe("The Matrix");
+    expect(schema.url).toBe(`${ORIGIN}/watch/603`);
+    expect(schema.image).toBe(matrix.image);
   });
 });
 
@@ -218,26 +305,34 @@ describe("movieSchema", () => {
     expect(schema.url).toContain("/watch/603");
   });
 
-  it("keeps an absent rating out of the schema entirely", () => {
-    // `rating: 0` is falsy, so the old `movie.rating ? ...` branch dropped a
-    // real zero -- and an explicit `null` became `"null"` in the JSON.
-    expect(
-      movieSchema(
-        { id: 1, title: "x", rating: undefined },
-        "https://vy.example"
-      ).aggregateRating
-    ).toBeUndefined();
-    expect(
-      movieSchema({ id: 1, title: "x", rating: 0 }, ORIGIN).aggregateRating
-    ).toBeUndefined();
-    expect(
-      movieSchema({ id: 1, title: "x", rating: 8.219 }, ORIGIN).aggregateRating
-    ).toEqual({
-      "@type": "AggregateRating",
-      ratingValue: 8.2,
-      bestRating: 10,
-      worstRating: 0,
-    });
+  it("publishes no aggregateRating, because no vote count exists", () => {
+    /*
+     * The tag used to be emitted from TMDB's `vote_average` alone, with no
+     * `ratingCount`. Google treats a rating with no count as invalid structured
+     * data rather than as a rating, so it was a way of publishing a number from a
+     * sample size nobody knew. The API exposes no vote count, so the whole tag is
+     * gone rather than left empty -- and `rating` is off the input type so it
+     * cannot be reintroduced by a caller who assumed it worked.
+     */
+    for (const schema of [
+      movieSchema({ id: 1, title: "x" }, ORIGIN),
+      movieSchema({ id: 1, title: "x", description: "d" }, ORIGIN),
+    ]) {
+      expect(schema.aggregateRating).toBeUndefined();
+      expect(JSON.stringify(schema)).not.toContain("AggregateRating");
+    }
+    expect("rating" in ({} as Parameters<typeof movieSchema>[0])).toBe(false);
+  });
+
+  it("keeps the tags it does emit minimal and correct", () => {
+    const schema = movieSchema({ id: 603, title: "The Matrix" }, ORIGIN);
+    expect(Object.keys(schema).sort()).toEqual([
+      "@context",
+      "@type",
+      "name",
+      "url",
+    ]);
+    expect(schema.url).toBe(`${ORIGIN}/watch/603`);
   });
 });
 
@@ -377,11 +472,11 @@ describe("static SEO files agree with the module", () => {
 
   it("keeps no private route out of the sitemap", () => {
     for (const privatePath of [
-      "/watch/603",
       "/my-list",
       "/profile",
       "/list/share/abc123",
       "/login",
+      "/signup",
     ]) {
       expect(sitemap, privatePath).not.toContain(privatePath);
       expect(isPrivatePath(privatePath), privatePath).toBe(true);

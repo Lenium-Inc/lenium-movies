@@ -208,6 +208,157 @@ export function renderRobots(
  * other option and would work too, but a rewrite is explicit about what it is
  * doing, whereas a directory relies on host-specific clean-URL behaviour.
  */
+/**
+ * Google's hard cap, and the reason the catalogue below is not paginated forever.
+ */
+export const MAX_SITEMAP_URLS = 50_000;
+
+/** One `<url>` entry for a title page. */
+function watchEntry(tmdbId: string, origin: string): string {
+  return `  <url>\n    <loc>${escapeXml(`${origin}/watch/${tmdbId}`)}</loc>\n  </url>`;
+}
+
+export type Fetcher = (url: string) => Promise<unknown>;
+
+/**
+ * Fetch with a timeout and one retry, because this runs inside a build.
+ *
+ * The timeout is generous on purpose. The backend is on Render's free tier, so an
+ * idle period spins the instance down and the next request pays a cold start --
+ * measured at well over 20s, which is exactly what a too-tight deadline trips on.
+ * A slow answer is still an answer; a failed build is not recoverable here.
+ */
+const REQUEST_TIMEOUT_MS = 60_000;
+
+const defaultFetcher: Fetcher = async url => {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+      if (!response.ok) throw new Error(`${response.status} ${url}`);
+      return await response.json();
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+};
+
+export async function fetchCatalogueIds(
+  apiBase: string,
+  fetcher: Fetcher = defaultFetcher,
+  concurrency = 8
+): Promise<string[]> {
+  const base = apiBase.replace(/\/+$/, "");
+  const pageUrl = (page: number) => `${base}/api/catalog/discover?page=${page}`;
+  type Page = {
+    items?: Array<{ id?: unknown }>;
+    has_more?: boolean;
+    total?: number;
+    per_page?: number;
+  };
+
+  const first = (await fetcher(pageUrl(1))) as Page;
+  const items = (page: Page) =>
+    (page.items ?? []).map(item => {
+      // The catalogue prefixes ids as `tmdb-969681`; the watch route uses the
+      // bare TMDB id, which is what `buildWatchPath` produces.
+      const raw = String(item?.id ?? "");
+      return raw.startsWith("tmdb-") ? raw.slice(5) : raw;
+    });
+
+  const perPage = first.per_page ?? items(first).length ?? 1;
+  /*
+   * Walk the catalogue with concurrent batches until the backend stops saying
+   * `has_more`, rather than trusting `total`.
+   *
+   * `total` reads back as different numbers on different calls -- 66 and 1971 for
+   * the same catalogue were both observed -- so deriving the page count from it
+   * silently produced sitemaps that varied by several hundred URLs depending on
+   * what a given response happened to say. `has_more` has been consistent, and the
+   * batch loop keeps ~99 round trips down to a handful of seconds.
+   *
+   * `total` still sets the starting batch size, since when it is right it is a
+   * useful hint; it just no longer decides when to stop.
+   */
+  const hintedPages =
+    typeof first.total === "number" && first.total > 0
+      ? Math.ceil(first.total / (perPage || 1))
+      : 1;
+
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  const add = (values: string[]) => {
+    let added = 0;
+    for (const id of values) {
+      if (id && !seen.has(id)) {
+        seen.add(id);
+        ids.push(id);
+        added += 1;
+      }
+    }
+    return added;
+  };
+  add(items(first));
+
+  let page = 2;
+  let more = first.has_more !== false;
+  let staleBatches = 0;
+  const hardCap = Math.ceil(MAX_SITEMAP_URLS / (perPage || 1));
+
+  while (more && page <= hardCap && page <= 10_000) {
+    const batchSize = Math.min(
+      concurrency,
+      Math.max(1, hintedPages - page + 1) || concurrency
+    );
+    const batch = Array.from({ length: batchSize }, (_, i) => page + i);
+    const fetched = await Promise.all(
+      batch.map(p => fetcher(pageUrl(p)) as Promise<Page>)
+    );
+
+    let added = 0;
+    let sawMore = false;
+    for (const result of fetched) {
+      added += add(items(result));
+      if (result.has_more !== false) sawMore = true;
+    }
+    more = sawMore;
+    page += batch.length;
+
+    /*
+     * A batch that contributes nothing new means the backend has started repeating
+     * itself, so the walk is finished even if it still claims there is more. This
+     * is the backstop that stops an inconsistent `has_more` from paging forever.
+     */
+    staleBatches = added === 0 ? staleBatches + 1 : 0;
+    if (staleBatches >= 2) break;
+    if (ids.length >= MAX_SITEMAP_URLS) break;
+  }
+
+  return ids.slice(0, MAX_SITEMAP_URLS);
+}
+
+/** The static routes plus one entry per title. */
+export function renderCatalogueSitemap(
+  ids: readonly string[],
+  origin: string,
+  lastmodByPath: Readonly<Record<string, string>> = {}
+): string {
+  const entries = INDEXABLE_PATHS.map(path => {
+    const loc = `${origin}${path === "/" ? "/" : path}`;
+    const lastmod = lastmodByPath[path];
+    return `  <url>\n    <loc>${escapeXml(loc)}</loc>${
+      lastmod ? `\n    <lastmod>${lastmod}</lastmod>` : ""
+    }\n  </url>`;
+  });
+  entries.push(...ids.map(id => watchEntry(id, origin)));
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${entries.join(
+    "\n"
+  )}\n</urlset>\n`;
+}
+
 export function prerenderFileName(path: string): string {
   if (path === "/") return "index.html";
   return `${path.replace(/^\/+|\/+$/g, "")}.html`;
@@ -237,8 +388,47 @@ export function prerenderRoutes(
   }));
 }
 
+/**
+ * The catalogue, read once per build.
+ *
+ * Failure is a warning, not an error: a build that cannot reach the backend should
+ * still produce a site, and a sitemap of the static routes is still correct if
+ * incomplete. What it must not do is fail silently -- a catalogue that quietly
+ * emptied out would drop every film from the index with nothing in the log.
+ */
+async function loadCatalogueIds(plugin: {
+  warn: (message: string) => void;
+  info: (message: string) => void;
+}): Promise<string[]> {
+  const apiBase = (
+    process.env.VITE_MOVIE_API_BASE_URL ??
+    process.env.MOVIE_API_BASE_URL ??
+    ""
+  ).trim();
+  if (!apiBase || apiBase === "/") {
+    plugin.warn(
+      "No absolute VITE_MOVIE_API_BASE_URL set, so title pages are not in " +
+        "sitemap.xml. The static routes are still listed."
+    );
+    return [];
+  }
+  try {
+    const ids = await fetchCatalogueIds(apiBase);
+    plugin.info(`Sitemap: ${ids.length} title pages from the catalogue.`);
+    return ids;
+  } catch (error) {
+    plugin.warn(
+      `Could not read the catalogue for sitemap.xml (${String(error)}). ` +
+        "The static routes are still listed; title pages will be missing " +
+        "until a build can reach the backend."
+    );
+    return [];
+  }
+}
+
 export function seoOriginPlugin(): Plugin {
   let origin = "";
+  let catalogueIds: string[] = [];
 
   return {
     name: "streamvy:seo-origin",
@@ -249,6 +439,9 @@ export function seoOriginPlugin(): Plugin {
      * fails silently into a site with one indexable URL again.
      */
     enforce: "post",
+    async buildStart() {
+      catalogueIds = await loadCatalogueIds(this);
+    },
     /*
      * `configResolved` rather than reading `process.env` inline: Vite does *not*
      * populate `process.env` from the `.env` files it loads, so a `VITE_SITE_URL`
@@ -327,8 +520,8 @@ export function seoOriginPlugin(): Plugin {
       this.emitFile({
         type: "asset",
         fileName: "sitemap.xml",
-        source: renderSitemap(
-          INDEXABLE_PATHS,
+        source: renderCatalogueSitemap(
+          catalogueIds,
           origin,
           gitLastmodByPath(process.cwd())
         ),

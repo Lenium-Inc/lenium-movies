@@ -70,6 +70,7 @@ import type { StreamEpisode } from "@/services/api";
 import { buildWatchPath, resolveMediaType } from "@/lib/watchRoute";
 import { progressKey } from "@/lib/progressKey";
 import { absoluteUrl } from "@/lib/siteUrl";
+import { publishWatchSeo, resetWatchSeo } from "@/lib/watchSeo";
 import { useTasteRecorder } from "@/hooks/useTaste";
 import { TrailerEmbed } from "@/components/movies/MediaCard";
 import {
@@ -402,9 +403,22 @@ export function WatchPage() {
       if (m) {
         setMovie(m);
         setMyRating(getRating(m.id) ?? 0);
+        /*
+         * Publish for the document head. Until this runs the page is noindex --
+         * a title page with no title would otherwise be submitted with a
+         * placeholder, which is worse than being submitted late.
+         */
+        publishWatchSeo({
+          id: m.providerId,
+          title: m.title,
+          description: m.synopsis || undefined,
+          image: m.backdrop || m.poster || undefined,
+          year: m.year,
+        });
       }
       setMovieLoading(false);
     });
+    return () => resetWatchSeo();
   }, [tmdbId]);
 
   // Subscribe to rating changes

@@ -89,8 +89,22 @@ const PRIVATE_PREFIXES = [
   "/my-list",
   "/share",
   "/list/share",
-  "/watch",
 ] as const;
+
+/*
+ * `/watch` is deliberately NOT private.
+ *
+ * A title page is this site's only content -- a catalogue of public-domain and
+ * openly licensed films -- and leaving it noindex means the work of loading and
+ * hosting every film buys no organic traffic at all. It was noindex while
+ * `index.html` was served for every route, because a page whose canonical pointed
+ * at `/` cannot be indexed honestly; now that a watch page carries its own title,
+ * description and canonical, that objection no longer applies.
+ *
+ * `robots.txt` also still permits `/watch`, and that is required rather than
+ * incidental: a crawler has to be able to fetch the page to see the `index` that
+ * replaces the old `noindex`.
+ */
 
 /**
  * Paths `robots.txt` refuses to let a crawler fetch.
@@ -177,6 +191,22 @@ function normalizePath(pathname: string): string {
   return trimmed === "" ? "/" : trimmed;
 }
 
+/** What a title page knows about itself, for its head and its Movie schema. */
+export interface WatchSeoContext {
+  id: string | number;
+  title: string;
+  /** TMDB's overview. Absent when the lookup has not landed yet. */
+  description?: string;
+  image?: string;
+  year?: string | number | null;
+}
+
+/** The tmdb id in `/watch/:id`, or null if this is not a watch path. */
+export function watchIdFromPath(path: string): string | null {
+  const match = /^\/watch\/([^/]+)$/.exec(path);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 export interface PageSeo {
   /** Canonical path for this page, without the origin. */
   path: string;
@@ -199,8 +229,37 @@ export interface PageSeo {
  * have meant three different pages claiming to be `/`, which is the same
  * canonical-URL conflict the old config had.
  */
-export function pageSeo(pathname: string): PageSeo {
+export function pageSeo(
+  pathname: string,
+  context: { movie?: WatchSeoContext } = {}
+): PageSeo {
   const path = normalizePath(pathname);
+  const watchId = watchIdFromPath(path);
+
+  /*
+   * A watch page before its details have loaded has no title and no description,
+   * and inventing either would put a wrong string in a search result. So it stays
+   * noindex until the lookup lands, then becomes indexable. A crawler that runs
+   * JavaScript -- which Googlebot does -- sees the indexed version.
+   */
+  if (watchId) {
+    const movie = context.movie;
+    if (!movie) {
+      return { path, title: `${SITE_NAME} - Loading`, description: "", indexable: false };
+    }
+    const year = movie.year ? ` (${movie.year})` : "";
+    return {
+      path,
+      title: `${movie.title}${year} - Watch Free on ${SITE_NAME}`,
+      description:
+        movie.description ||
+        `Watch ${movie.title}${year} free on ${SITE_NAME}, the free movie streaming platform for public domain and openly licensed films.`,
+      keywords: SITE_KEYWORDS,
+      image: movie.image || OG_IMAGE,
+      type: "video.other",
+      indexable: true,
+    };
+  }
   const originless = (
     title: string,
     description: string,
@@ -276,23 +335,26 @@ export interface MovieSchemaInput {
   title: string;
   description?: string;
   image?: string;
-  rating?: number;
 }
 
 /**
  * schema.org metadata for one title.
  *
- * There is deliberately no `datePublished`. The old generator synthesised
- * `${year}-01-01` from the release year, which asserts a publication date the
- * catalogue does not have -- for most public-domain prints it is wrong by most of
- * a century -- and structured data is the one place where a confident wrong fact
- * is read as authoritative. `datePublished` is absent from `MovieSchemaInput` so
- * that no future caller can put it back by accident; a real per-title release
- * date has to arrive first.
+ * There is deliberately no `datePublished` and no `aggregateRating`.
  *
- * `aggregateRating` is only emitted with a `ratingCount`. A `ratingValue` with no
- * count is a rating nobody can audit, which Google treats as invalid structured
- * data rather than as a rating.
+ * `datePublished` was synthesised as `${year}-01-01` from the release year, which
+ * asserts a publication date the catalogue does not have -- for most
+ * public-domain prints it is wrong by most of a century -- and structured data is
+ * the one place where a confident wrong fact is read as authoritative. It is
+ * absent from `MovieSchemaInput` so no future caller can reintroduce it by
+ * accident.
+ *
+ * `aggregateRating` was emitted from TMDB's `vote_average` with no `ratingCount`.
+ * The API exposes no vote count, and Google treats a rating with no count as
+ * invalid structured data rather than as a rating -- so the tag was a way of
+ * publishing a number nobody could audit, from a sample size nobody knew. The
+ * score still shows in the UI, where it is presented as what it is; structured
+ * data is held to a stricter standard than a badge on a card.
  */
 export function movieSchema(
   movie: MovieSchemaInput,
@@ -307,14 +369,6 @@ export function movieSchema(
 
   if (movie.description) schema.description = movie.description;
   if (movie.image) schema.image = movie.image;
-  if (movie.rating != null && movie.rating > 0) {
-    schema.aggregateRating = {
-      "@type": "AggregateRating",
-      ratingValue: Number(movie.rating.toFixed(1)),
-      bestRating: 10,
-      worstRating: 0,
-    };
-  }
   return schema;
 }
 
