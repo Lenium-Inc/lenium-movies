@@ -365,6 +365,18 @@ def test_download_sends_attachment_disposition():
     assert "Movie.mp4" in disposition, disposition
 
 
+def test_versioned_download_alias_uses_archive_attachment_proxy():
+    _, client = _client()
+    _fake_archive(b"movie-bytes")
+    res = client.get(
+        "/api/v1/stream/download?url=https://archive.org/download/x/a.mp4"
+        "&filename=Movie.mp4"
+    )
+    assert res.status_code == 200, res.status_code
+    assert res.data == b"movie-bytes"
+    assert (res.headers.get("Content-Disposition") or "").startswith("attachment;")
+
+
 def test_download_includes_utf8_filename_star():
     _, client = _client()
     _fake_archive(b"movie-bytes")

@@ -69,15 +69,15 @@ export interface ServerSelectorProps {
 /** The badge a provider's audience earns: one word, one tint. */
 function TypeBadge({ type }: { type: ResolvedEmbedSource["type"] }) {
   if (type === "arabic") {
-    return <span className="sv-badge sv-badge-emerald">Mycima</span>;
+    return <span className="sv-badge sv-badge-emerald">Intl</span>;
   }
   if (type === "fast") {
-    return <span className="sv-badge sv-badge-cyan">HLS</span>;
+    return <span className="sv-badge sv-badge-cyan">Adaptive</span>;
   }
   if (type === "embed") {
-    return <span className="sv-badge">Mirror</span>;
+    return <span className="sv-badge">Backup</span>;
   }
-  return <span className="sv-badge sv-badge-violet">HD</span>;
+  return <span className="sv-badge sv-badge-violet">Premium</span>;
 }
 
 /**
@@ -147,10 +147,10 @@ export function ServerSelector({
     <div className={cn("space-y-4", className)}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
-          Select Source
+          Playback source
         </h3>
         <span className="sv-badge sv-badge-violet">
-          Active: {selected.label}
+          Now playing: {selected.label}
         </span>
       </div>
 
@@ -163,7 +163,7 @@ export function ServerSelector({
               type="button"
               onClick={() => select(source)}
               aria-pressed={isActive}
-              title={`${source.title} — ${source.host}`}
+              title={source.title}
               className={cn(
                 "flex flex-col rounded-xl border p-3 text-left transition-all",
                 isActive
@@ -197,6 +197,7 @@ export function ServerSelector({
             src={selected.url}
             title={title ?? `${selected.label} player`}
             className="h-full w-full border-0"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
             allow={EMBED_ALLOW}
             allowFullScreen
             referrerPolicy="no-referrer"

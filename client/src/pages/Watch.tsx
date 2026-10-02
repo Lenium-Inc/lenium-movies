@@ -46,6 +46,7 @@ import {
 } from "@/components/stream/VideoPlayer";
 import { EmbedPlayer } from "@/components/stream/EmbedPlayer";
 import { ServerSelector } from "@/components/stream/ServerSelector";
+import { DownloadButton } from "@/components/stream/DownloadButton";
 import { StreamLoader } from "@/components/stream/StreamLoader";
 import { formatRuntime } from "@/lib/format";
 import { titleUnavailable } from "@/lib/playbackCopy";
@@ -73,13 +74,6 @@ import { absoluteUrl } from "@/lib/siteUrl";
 import { publishWatchSeo, resetWatchSeo } from "@/lib/watchSeo";
 import { useTasteRecorder } from "@/hooks/useTaste";
 import { TrailerEmbed } from "@/components/movies/MediaCard";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -367,8 +361,6 @@ export function WatchPage() {
   const [watchedSeconds, setWatchedSeconds] = useState(0);
   const [trailer, setTrailer] = useState<TrailerInfo | null>(null);
   const [detailsLoaded, setDetailsLoaded] = useState(false);
-  const [showSeasonSelector, setShowSeasonSelector] = useState(false);
-  const [showEpisodeDetails, setShowEpisodeDetails] = useState(false);
   const [episodeDetails, setEpisodeDetails] = useState<any>(null);
   const [currentEpisodeTitle, setCurrentEpisodeTitle] = useState("");
 
@@ -687,16 +679,6 @@ export function WatchPage() {
       }
     },
     [movie, resolved, resolving, navigate, resolveWithRetry]
-  );
-
-  const playEpisode = useCallback(
-    (targetSeason: number, targetEpisode: number) => {
-      autoRetryRef.current = 0;
-      autoRetryStartedRef.current = Date.now();
-      setStreamUnavailable(false);
-      void resolveAndPlay(targetSeason, targetEpisode);
-    },
-    [resolveAndPlay]
   );
 
   // Retry handler for playback errors
@@ -1598,21 +1580,31 @@ export function WatchPage() {
 
               {/* Season/episode navigation, directly below the player */}
               {movie.mediaType === "tv" ? (
-                <WatchTVControls
-                  currentSeason={season}
-                  currentEpisode={episode}
-                  seasons={tvSeasons}
-                  episodes={currentSeasonEpisodes}
-                  onSelectEpisode={handleSelectEpisode}
-                />
+                <details className="mt-4 rounded-2xl border border-white/10 bg-zinc-900/60">
+                  <summary className="cursor-pointer list-none px-4 py-4 text-sm font-semibold text-white [&::-webkit-details-marker]:hidden">
+                    Seasons and episodes
+                    <span className="ml-2 font-normal text-white/55">
+                      Season {season} · Episode {episode}
+                    </span>
+                  </summary>
+                  <div className="border-t border-white/10 p-4">
+                    <WatchTVControls
+                      currentSeason={season}
+                      currentEpisode={episode}
+                      seasons={tvSeasons}
+                      episodes={currentSeasonEpisodes}
+                      onSelectEpisode={handleSelectEpisode}
+                    />
+                  </div>
+                </details>
               ) : null}
             </div>
 
             {/*
-              RIGHT PANEL: the details, synopsis, My List action and, for a
-              series, the episode list. `sv-surface` is the standard pane from
-              the design system, so this column is the same glass as the hero
-              card on the home page rather than a second surface treatment.
+              RIGHT PANEL: the details, synopsis and My List action.
+              `sv-surface` is the standard pane from the design system, so this
+              column is the same glass as the hero card on the home page rather
+              than a second surface treatment.
             */}
             <aside className="sv-surface lg:sticky lg:top-24 max-h-[calc(100vh-6rem)] space-y-6 overflow-y-auto rounded-2xl p-5 pr-3">
               {/* Show/Movie Title & Metadata */}
@@ -1707,6 +1699,11 @@ export function WatchPage() {
                       {isInMyList(movie.id) ? "✓ In My List" : "Add to My List"}
                     </span>
                   </Button>
+                  <DownloadButton
+                    title={movie.title}
+                    year={movie.year}
+                    variants={resolved?.stream?.streams ?? []}
+                  />
 
                   {/*
                     Share, next to Add to My List rather than floating over the
@@ -1734,83 +1731,15 @@ export function WatchPage() {
               {/* Divider */}
               <Separator className="border-white/10" />
 
-              {/* TV Shows: Season Selector + Episode List */}
+              {/* Series context; episode controls stay collapsed below the player. */}
               {movie.mediaType === "tv" && resolved ? (
-                <div className="space-y-4">
-                  {/* Season Selector */}
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <h2 className="text-sm font-semibold text-white/80 uppercase tracking-wide">
-                        Season
-                      </h2>
-                      <Select
-                        value={season.toString()}
-                        onValueChange={value => {
-                          const newSeason = parseInt(value, 10);
-                          if (newSeason !== season) {
-                            setSeason(newSeason);
-                            setEpisode(1);
-                            playEpisode(newSeason, 1);
-                          }
-                        }}
-                      >
-                        <SelectTrigger className="w-[140px] bg-white/5 border border-white/10 text-white/80 text-xs">
-                          <SelectValue placeholder="Select season" />
-                        </SelectTrigger>
-                        <SelectContent className="bg-zinc-900 border border-white/10 text-white">
-                          {Array.from(
-                            { length: resolved.stream.seasons || 1 },
-                            (_, i) => i + 1
-                          ).map(s => (
-                            <SelectItem key={s} value={s.toString()}>
-                              Season {s}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    {/* Episode List */}
-                    <div className="space-y-1 max-h-[50vh] overflow-y-auto">
-                      {resolved.stream.episodes
-                        ?.filter((ep: any) => ep.season === season)
-                        .map((ep: any) => (
-                          <button
-                            key={`${ep.season}-${ep.number}`}
-                            onClick={() => playEpisode(ep.season, ep.number)}
-                            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all ${
-                              ep.season === season && ep.number === episode
-                                ? "bg-white/10 text-white border border-white/20"
-                                : "text-white/80 hover:bg-white/5 hover:text-white hover:border-white/10 border border-transparent"
-                            }`}
-                          >
-                            <span className="flex-shrink-0 w-8 text-center text-xs font-mono font-semibold text-white/50">
-                              E{String(ep.number).padStart(2, "0")}
-                            </span>
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm font-medium truncate">
-                                {ep.title || `Episode ${ep.number}`}
-                              </p>
-                              <p className="text-xs text-white/50 flex items-center gap-2">
-                                {ep.runtime && `${ep.runtime}m`}
-                                {ep.air_date && ep.air_date}
-                                {ep.vote_average && (
-                                  <span className="flex items-center gap-1 text-amber-400">
-                                    <Star className="h-3 w-3 fill-current" />
-                                    {ep.vote_average.toFixed(1)}
-                                  </span>
-                                )}
-                              </p>
-                            </div>
-                            {ep.season === season && ep.number === episode && (
-                              <span className="text-xs text-green-400 font-medium">
-                                Playing
-                              </span>
-                            )}
-                          </button>
-                        ))}
-                    </div>
-                  </div>
+                <div className="space-y-2">
+                  <h2 className="text-sm font-semibold uppercase tracking-wide text-white/55">
+                    Now playing
+                  </h2>
+                  <p className="text-sm text-white">
+                    {currentEpisodeTitle} · Season {season}, Episode {episode}
+                  </p>
                 </div>
               ) : (
                 // Movie: Show details in sidebar

@@ -174,7 +174,8 @@ export function proxiedStreamUrl(url: string): string {
 }
 
 /**
- * Same-origin URL that saves an Archive.org file via `/api/movies/download`.
+ * Same-origin URL that saves an Archive.org file via the versioned download
+ * alias. Both routes use the same Archive.org-only Flask relay.
  *
  * The backend, not this function, is what makes the save work: it relays the
  * bytes with a `Content-Disposition: attachment` header, and a browser ignores
@@ -184,7 +185,7 @@ export function proxiedStreamUrl(url: string): string {
  */
 export function proxiedDownloadUrl(url: string, filename: string): string {
   const params = new URLSearchParams({ url, filename });
-  return `${MOVIE_API_BASE_URL}/api/movies/download?${params.toString()}`;
+  return `${MOVIE_API_BASE_URL}/api/v1/stream/download?${params.toString()}`;
 }
 
 /**

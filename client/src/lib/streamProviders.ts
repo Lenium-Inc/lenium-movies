@@ -44,7 +44,7 @@ export interface StreamProvider {
 export const STREAM_PROVIDERS: StreamProvider[] = [
   {
     id: "vidsrc-pro",
-    name: "Primary HD (Auto-Quality & Subs)",
+    name: "Prime HD",
     quality: "1080p / 4K",
     type: "global",
     getUrl: (id, type, s = 1, e = 1) =>
@@ -54,7 +54,7 @@ export const STREAM_PROVIDERS: StreamProvider[] = [
   },
   {
     id: "embed-su",
-    name: "Server Alpha (Fast HLS)",
+    name: "Home Stream",
     quality: "1080p",
     type: "fast",
     getUrl: (id, type, s = 1, e = 1) =>
@@ -64,7 +64,7 @@ export const STREAM_PROVIDERS: StreamProvider[] = [
   },
   {
     id: "vidsrc-cc",
-    name: "Server Beta (Multi-Subtitles)",
+    name: "Cinema Plus",
     quality: "1080p",
     type: "global",
     getUrl: (id, type, s = 1, e = 1) =>
@@ -74,7 +74,7 @@ export const STREAM_PROVIDERS: StreamProvider[] = [
   },
   {
     id: "mycima-api",
-    name: "Mycima / ArabEmbed",
+    name: "International Cut",
     quality: "720p / 1080p",
     type: "arabic",
     getUrl: (id, type, s = 1, e = 1) =>
@@ -84,7 +84,7 @@ export const STREAM_PROVIDERS: StreamProvider[] = [
   },
   {
     id: "autoembed",
-    name: "Server Gamma (Backup)",
+    name: "Backup Stream",
     quality: "720p / 1080p",
     type: "global",
     getUrl: (id, type, s = 1, e = 1) =>

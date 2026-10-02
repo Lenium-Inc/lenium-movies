@@ -264,9 +264,7 @@ export function EmbedPlayer({
         src={active.url}
         title={title}
         className="absolute inset-0 h-full w-full border-0 rounded-2xl border-white/10 shadow-2xl bg-black"
-        // No `sandbox` attribute: these providers refuse to load inside one
-        // ("This content can't be embedded in a sandboxed frame"), which is a
-        // silent black rectangle rather than a visible failure. See EMBED_ALLOW.
+        sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
         allow={EMBED_ALLOW}
         allowFullScreen
         // No referrer is sent to the provider at all. Several third-party

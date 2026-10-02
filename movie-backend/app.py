@@ -983,6 +983,7 @@ def _safe_download_name(raw: str | None, fallback: str) -> str:
 
 
 @app.route("/api/movies/download", methods=["GET"])
+@app.route("/api/v1/stream/download", methods=["GET"])
 def movie_download():
     """Stream a direct Archive.org file to the browser as an attachment.
 

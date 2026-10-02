@@ -84,6 +84,10 @@ export default function Home() {
   const isClientSearch = search.trim().length > 0;
   const isHomeView = view === "home" && !isClientSearch;
   const isBrowseView = INFINITE_VIEWS.has(view) && !isClientSearch;
+  const heroItems = useMemo(
+    () => filtered.filter(movie => movie.mediaType !== "tv"),
+    [filtered]
+  );
 
   /*
    * The episode shelf is fed by the shows already on this page rather than by a
@@ -135,7 +139,7 @@ export default function Home() {
   }, [newEpisodes]);
   // A hero with nothing in it is a 70vh rectangle of empty gradient, so it is
   // only rendered when the home view actually has titles to feature.
-  const showHero = isHomeView && filtered.length > 0 && !loading;
+  const showHero = isHomeView && heroItems.length > 0 && !loading;
 
   const heroBackdrop = heroActive?.backdrop;
   // `tmdbImage` rewrites the size segment. The `startsWith("http")` branch this
@@ -180,7 +184,7 @@ export default function Home() {
         {showHero ? (
           <div className="relative">
             <Spotlight
-              items={filtered}
+              items={heroItems}
               savedIds={savedIds}
               onSave={toggleSave}
               onActiveChange={setHeroActive}
@@ -194,7 +198,7 @@ export default function Home() {
             later in document order and both are in the same stacking context --
             `z-10` is what puts the shelves back in front. Overlap is capped so the
             hero's title, copy and buttons are never covered by a shelf. */}
-        <main className="relative z-10 mx-auto -mt-10 max-w-[1480px] px-4 pb-24 sm:px-6 lg:px-8 lg:-mt-24">
+        <main className="relative z-10 mx-auto mt-8 max-w-[1480px] px-4 pb-24 sm:px-6 lg:px-8">
           {view === "collections" ? (
             <section className="py-12">
               <h1 className="text-2xl font-bold">Collections</h1>

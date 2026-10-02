@@ -145,7 +145,7 @@ export function Spotlight({
       // Full-bleed: edge to edge, no rounded frame. The bottom edge stops short
       // of the viewport bottom rather than butting against it, so the first shelf
       // has somewhere to sit.
-      className="relative isolate h-[540px] w-full overflow-hidden sm:h-[600px] lg:h-[76vh] lg:min-h-[560px] lg:max-h-[720px]"
+      className="relative isolate h-[70vh] min-h-[520px] w-full overflow-hidden lg:h-[85vh] lg:min-h-[680px]"
     >
       {/* Artwork. `original` is a real 1920px-wide file, so it covers a 70vh
           hero at 2x without the browser upscaling a 780px rendition. */}
@@ -163,7 +163,8 @@ export function Spotlight({
               {art ? (
                 <img
                   src={art}
-                  alt={current.title}
+                  alt=""
+                  aria-hidden
                   loading="eager"
                   fetchPriority="high"
                   className="h-full w-full object-cover object-[center_25%] opacity-60"
@@ -190,11 +191,11 @@ export function Spotlight({
           dimming the artwork the viewer came for. */}
       <div
         aria-hidden
-        className="absolute inset-0 bg-gradient-to-t from-[#0B0C10] via-[#0B0C10]/40 to-transparent"
+        className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/60 to-transparent"
       />
       <div
         aria-hidden
-        className="absolute inset-0 bg-gradient-to-r from-[#0B0C10] via-[#0B0C10]/60 to-transparent"
+        className="absolute inset-0 bg-gradient-to-r from-slate-950/90 via-slate-950/60 to-transparent"
       />
       {/* Cyan counter-light on the right edge, so the frame is not lit by one
           colour alone. */}

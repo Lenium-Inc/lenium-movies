@@ -130,11 +130,11 @@ def _safe_id(value: object) -> str:
 #: the next one when the frame went blank; the label now carries the quality
 #: tier and the language/subtitle audience that actually differs between them.
 EMBED_PROVIDERS: tuple[EmbedProvider, ...] = (
-    EmbedProvider("vidsrc-pro", "Primary HD (Auto-Quality & Subs)", "vidsrc.pro", 10),
-    EmbedProvider("embed-su", "Server Alpha (Fast HLS)", "embed.su", 20),
-    EmbedProvider("vidsrc-cc", "Server Beta (Multi-Subtitles)", "vidsrc.cc", 30, "/v2/embed"),
-    EmbedProvider("mycima-api", "Mycima / ArabEmbed", "mycima.vidsrc.pm", 40),
-    EmbedProvider("autoembed", "Server Gamma (Backup)", "player.autoembed.cc", 50),
+    EmbedProvider("vidsrc-pro", "Prime HD", "vidsrc.pro", 10),
+    EmbedProvider("embed-su", "Home Stream", "embed.su", 20),
+    EmbedProvider("vidsrc-cc", "Cinema Plus", "vidsrc.cc", 30, "/v2/embed"),
+    EmbedProvider("mycima-api", "International Cut", "mycima.vidsrc.pm", 40),
+    EmbedProvider("autoembed", "Backup Stream", "player.autoembed.cc", 50),
 )
 
 DIRECT_PROVIDER_ID = "archive_direct"

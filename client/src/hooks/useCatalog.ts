@@ -165,6 +165,7 @@ interface UseCatalog {
 }
 
 const VIEWS_WITH_TV_FILTER: View[] = [
+  "movies",
   "tv",
   "trending",
   "popular",
@@ -428,7 +429,17 @@ export function useCatalog(): UseCatalog {
   );
 
   const filtered = useMemo(() => {
-    if (searching) return movies;
+    if (searching) {
+      const searchType =
+        mediaType !== "all"
+          ? mediaType
+          : view === "movies"
+            ? "movie"
+            : view === "tv"
+              ? "tv"
+              : "all";
+      return applySort(applyMediaType(movies, searchType), sort);
+    }
     let base =
       genre === "All"
         ? movies
@@ -436,7 +447,9 @@ export function useCatalog(): UseCatalog {
 
     // Filter by media type for TV-specific views
     if (VIEWS_WITH_TV_FILTER.includes(view)) {
-      if (view === "tv") {
+      if (view === "movies") {
+        base = base.filter(movie => movie.mediaType !== "tv");
+      } else if (view === "tv") {
         base = base.filter(movie => movie.mediaType === "tv");
       } else if (view === "trending") {
         // Trending shows both but prioritizes TV
@@ -451,7 +464,9 @@ export function useCatalog(): UseCatalog {
     // An explicit media-type choice from the filter panel wins over the view's
     // own TV bias, but is never additive: asking for "Movie" while on the TV
     // shelf would otherwise intersect to nothing.
-    if (mediaType !== "all") base = applyMediaType(base, mediaType);
+    if (view !== "movies" && view !== "tv" && mediaType !== "all") {
+      base = applyMediaType(base, mediaType);
+    }
 
     return applySort(base, sort);
   }, [genre, movies, searching, view, sort, mediaType]);

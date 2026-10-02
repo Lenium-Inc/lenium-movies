@@ -48,7 +48,8 @@ and error codes are not in this codebase.
 | ---------------------------- | --------- | -------------------------------------------------------------- |
 | `/api/get-stream`            | GET       | Direct (Archive.org) source, ordered candidates                 |
 | `/api/movies/stream`         | GET       | Byte relay for range requests and seeking                       |
-| `/api/movies/download`       | GET       | Explicit download path; a **GET**, so it is not CSRF-relevant  |
+| `/api/movies/download`       | GET       | Archive.org-only attachment relay                              |
+| `/api/v1/stream/download`    | GET       | Versioned alias for the same Archive.org-only download relay   |
 
 `stream_providers.resolve()` returns the first playable provider plus the
 remaining ordered candidates. The client renders the first and may fail over

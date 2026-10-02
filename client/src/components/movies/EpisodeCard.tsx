@@ -142,10 +142,22 @@ export function formatAirDate(airDate: string): string {
   const parsed = Date.parse(`${airDate}T00:00:00Z`);
   if (Number.isNaN(parsed)) return airDate;
 
-  const days = Math.round((parsed - Date.now()) / 86_400_000);
+  const now = new Date();
+  const nowUtcDay = Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate(),
+  );
+  const airDateUtcDay = Date.UTC(
+    new Date(parsed).getUTCFullYear(),
+    new Date(parsed).getUTCMonth(),
+    new Date(parsed).getUTCDate(),
+  );
+  const days = Math.round((airDateUtcDay - nowUtcDay) / 86_400_000);
+
   if (days === 0) return "today";
   if (days === -1) return "yesterday";
-  if (days < -1 && days >= -7) return `${-days} days ago`;
+  if (days < 0 && days >= -7) return `${Math.abs(days)} days ago`;
   if (days === 1) return "tomorrow";
   if (days > 1 && days <= 7) return `in ${days} days`;
 
