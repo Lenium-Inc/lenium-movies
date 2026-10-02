@@ -24,7 +24,7 @@ export function RouteSeo(): null {
   useEffect(() => {
     const seo = pageSeo(location);
     applyHeadTags([
-      ...buildHeadTags(seo),
+      ...buildHeadTags(seo, siteUrl()),
       { kind: "jsonld", id: "site-jsonld", data: webSiteSchema(siteUrl()) },
     ]);
   }, [location]);

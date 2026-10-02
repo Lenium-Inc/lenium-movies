@@ -2,8 +2,10 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  INDEXABLE_PATHS,
   MOVIE_JSONLD_ID,
   OG_IMAGE,
+  ROBOTS_DISALLOW_PATHS,
   SITE_DESCRIPTION,
   SITE_KEYWORDS,
   SITE_TITLE,
@@ -13,8 +15,14 @@ import {
   pageSeo,
   webSiteSchema,
 } from "./seo";
+import { renderRobots, renderSitemap } from "../../../scripts/seoOriginPlugin";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..", "..");
+
+/** The origin every assertion below builds URLs against. */
+const ORIGIN = "https://vy.example";
+
+const headFor = (pathname: string) => buildHeadTags(pageSeo(pathname), ORIGIN);
 
 function metaContent(
   tags: ReturnType<typeof buildHeadTags>,
@@ -105,10 +113,8 @@ describe("pageSeo", () => {
 
 describe("buildHeadTags", () => {
   it("sets a robots directive that matches the page's indexability", () => {
-    expect(metaContent(buildHeadTags(pageSeo("/")), "robots")).toContain(
-      "index, follow"
-    );
-    expect(metaContent(buildHeadTags(pageSeo("/watch/603")), "robots")).toBe(
+    expect(metaContent(headFor("/"), "robots")).toContain("index, follow");
+    expect(metaContent(headFor("/watch/603"), "robots")).toBe(
       "noindex, nofollow"
     );
   });
@@ -119,7 +125,7 @@ describe("buildHeadTags", () => {
      * title page and never cleared, so the legal pages inherited it and were
      * advertised to Facebook as videos.
      */
-    const removed = removedKeys(buildHeadTags(pageSeo("/watch/603")));
+    const removed = removedKeys(headFor("/watch/603"));
     expect(removed).toContain("property:og:type");
     expect(removed).toContain("property:og:image");
     expect(removed).toContain("name:description");
@@ -127,7 +133,7 @@ describe("buildHeadTags", () => {
   });
 
   it("takes the per-title schema block off a page that has no title", () => {
-    const tags = buildHeadTags(pageSeo("/terms"));
+    const tags = headFor("/terms");
     expect(tags).toContainEqual({ kind: "removeJsonLd", id: MOVIE_JSONLD_ID });
   });
 
@@ -145,11 +151,7 @@ describe("buildHeadTags", () => {
   });
 
   it("makes the og:image absolute, since consumers resolve it alone", () => {
-    const content = metaContent(
-      buildHeadTags(pageSeo("/"), "https://vy.example"),
-      "og:image",
-      "property"
-    );
+    const content = metaContent(headFor("/"), "og:image", "property");
     expect(content).toBe(`https://vy.example${OG_IMAGE}`);
   });
 
@@ -168,17 +170,14 @@ describe("buildHeadTags", () => {
     // `content=""` is a different claim from omitting the tag: a search engine
     // indexes it as "this page has an empty description".
     for (const route of ["/", "/terms", "/privacy", "/dmca"]) {
-      const description = metaContent(
-        buildHeadTags(pageSeo(route)),
-        "description"
-      );
+      const description = metaContent(headFor(route), "description");
       expect(description, route).toBeTruthy();
     }
   });
 
   it("is stable across repeated calls", () => {
-    const first = buildHeadTags(pageSeo("/"));
-    const second = buildHeadTags(pageSeo("/"));
+    const first = headFor("/");
+    const second = headFor("/");
     expect(second).toEqual(first);
   });
 });
@@ -192,7 +191,10 @@ describe("movieSchema", () => {
      * wrong fact does the most damage. `year` is not in the input type at all
      * now, so this cannot regress silently through a new caller.
      */
-    const schema = movieSchema({ id: 603, title: "The Matrix" });
+    const schema = movieSchema(
+      { id: 603, title: "The Matrix" },
+      "https://vy.example"
+    );
     expect(schema.datePublished).toBeUndefined();
   });
 
@@ -203,11 +205,14 @@ describe("movieSchema", () => {
   });
 
   it("carries the title, type and canonical watch URL", () => {
-    const schema = movieSchema({
-      id: 603,
-      title: "The Matrix",
-      description: "d",
-    });
+    const schema = movieSchema(
+      {
+        id: 603,
+        title: "The Matrix",
+        description: "d",
+      },
+      ORIGIN
+    );
     expect(schema["@type"]).toBe("Movie");
     expect(schema.name).toBe("The Matrix");
     expect(schema.url).toContain("/watch/603");
@@ -217,13 +222,16 @@ describe("movieSchema", () => {
     // `rating: 0` is falsy, so the old `movie.rating ? ...` branch dropped a
     // real zero -- and an explicit `null` became `"null"` in the JSON.
     expect(
-      movieSchema({ id: 1, title: "x", rating: undefined }).aggregateRating
+      movieSchema(
+        { id: 1, title: "x", rating: undefined },
+        "https://vy.example"
+      ).aggregateRating
     ).toBeUndefined();
     expect(
-      movieSchema({ id: 1, title: "x", rating: 0 }).aggregateRating
+      movieSchema({ id: 1, title: "x", rating: 0 }, ORIGIN).aggregateRating
     ).toBeUndefined();
     expect(
-      movieSchema({ id: 1, title: "x", rating: 8.219 }).aggregateRating
+      movieSchema({ id: 1, title: "x", rating: 8.219 }, ORIGIN).aggregateRating
     ).toEqual({
       "@type": "AggregateRating",
       ratingValue: 8.2,
@@ -264,10 +272,16 @@ describe("static SEO files agree with the module", () => {
    * a note about that tag reports those explanations as violations.
    */
   const indexHtml = rawHtml.replace(/<!--[\s\S]*?-->/g, "");
-  const robots = readFileSync(
-    path.join(repoRoot, "client", "public", "robots.txt"),
-    "utf8"
-  );
+  /*
+   * robots.txt and sitemap.xml no longer exist as files: both are generated at
+   * build time from the constants below, so these read the rendered output. That
+   * is the point of the change -- there is no second copy of the route list left
+   * to fall out of step -- and it also means the guards below cannot pass while
+   * the shipped file says something different, because the renderer *is* the
+   * shipped file.
+   */
+  const robots = renderRobots();
+  const sitemap = renderSitemap();
 
   it("uses the module's title in index.html", () => {
     expect(indexHtml).toContain(SITE_TITLE);
@@ -325,23 +339,69 @@ describe("static SEO files agree with the module", () => {
     }
   });
 
-  it("disallows exactly the paths the runtime marks private", () => {
-    const disallowed = new Set(
-      Array.from(robots.matchAll(/^Disallow:\s*(\S+)\s*$/gm)).map(m => m[1])
-    );
-    for (const prefix of [
-      "/api/",
-      "/profile/",
-      "/profiles/",
-      "/my-list/",
-      "/share/",
-    ]) {
-      expect(disallowed, prefix).toContain(prefix);
+  it("only disallows paths the runtime also treats as private", () => {
+    /*
+     * The invariant that matters, and it is directional on purpose. A
+     * robots.txt `Disallow` is allowed to omit a private path -- the runtime's
+     * `noindex` covers that, and blocking a page a crawler must fetch to *see*
+     * the noindex is counterproductive. The reverse is not allowed: every blocked
+     * path has to be genuinely private, or the site is refusing to be crawled on
+     * pages that are meant to be public.
+     */
+    for (const entry of ROBOTS_DISALLOW_PATHS) {
+      expect(isPrivatePath(`${entry}/anything`), entry).toBe(true);
     }
-    // `/watch` is private to this module but absent from robots.txt. robots.txt
-    // governs fetching and the runtime's noindex governs indexing, so the lists
-    // are allowed to differ -- but only in that direction, and this test is the
-    // thing that has to notice if it stops making sense.
-    expect(isPrivatePath("/watch/603")).toBe(true);
+    // And the paths that are private *only* to the runtime stay crawlable, so
+    // their noindex is reachable.
+    expect(robots).not.toContain("Disallow: /watch/");
+    expect(robots).not.toContain("Disallow: /login/");
+  });
+
+  it("lists every public route in the sitemap, and nothing else", () => {
+    const locations = Array.from(sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)).map(
+      m => m[1]
+    );
+    // Stripped of an origin, the <loc> list is exactly the route table.
+    const paths = locations.map(
+      loc => loc.replace(/^https?:\/\/[^/]+/, "") || "/"
+    );
+    expect(paths).toEqual([...INDEXABLE_PATHS]);
+  });
+
+  it("sitemaps only routes the runtime agrees are indexable", () => {
+    for (const route of INDEXABLE_PATHS) {
+      expect(pageSeo(route).indexable, route).toBe(true);
+    }
+  });
+
+  it("keeps no private route out of the sitemap", () => {
+    for (const privatePath of [
+      "/watch/603",
+      "/my-list",
+      "/profile",
+      "/list/share/abc123",
+      "/login",
+    ]) {
+      expect(sitemap, privatePath).not.toContain(privatePath);
+      expect(isPrivatePath(privatePath), privatePath).toBe(true);
+    }
+  });
+
+  it("names no production host and no fabricated dates in the sitemap", () => {
+    // The old sitemap had `https://vy-virid.vercel.app` in all four <loc> entries
+    // and `<lastmod>2026-10-01</lastmod>` on every URL, a date no commit supports.
+    expect(sitemap).not.toMatch(/vy-virid\.vercel\.app/);
+    expect(sitemap).not.toContain("lastmod");
+    // changefreq and priority are documented as ignored by Google; carrying them
+    // looked like tuning and was decoration.
+    expect(sitemap).not.toContain("changefreq");
+    expect(sitemap).not.toContain("priority");
+    // The image entry pointed at a 32x32 SVG on the homepage, which Google
+    // Images cannot render and which was not the page's primary content anyway.
+    expect(sitemap).not.toContain("image:");
+  });
+
+  it("points robots.txt at the sitemap", () => {
+    expect(robots).toContain("Sitemap: /sitemap.xml");
   });
 });

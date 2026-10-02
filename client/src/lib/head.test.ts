@@ -117,6 +117,8 @@ afterEach(() => {
   }
 });
 
+const ORIGIN = "https://vy.example";
+
 const meta = (selector: string) =>
   headElement.querySelector(selector)?.getAttribute("content");
 const count = (selector: string) =>
@@ -124,7 +126,7 @@ const count = (selector: string) =>
 
 describe("applyHeadTags", () => {
   it("writes a title and the description through the right attribute", () => {
-    applyHeadTags(buildHeadTags(pageSeo("/"), "https://vy.example"));
+    applyHeadTags(buildHeadTags(pageSeo("/"), ORIGIN));
 
     expect(document.title).toBe(pageSeo("/").title);
     // The regression that started all of this: `updateOrCreateMetaTag` was called
@@ -144,7 +146,7 @@ describe("applyHeadTags", () => {
   });
 
   it("is idempotent: applying the same page twice adds nothing", () => {
-    const tags = buildHeadTags(pageSeo("/"), "https://vy.example");
+    const tags = buildHeadTags(pageSeo("/"), ORIGIN);
     applyHeadTags(tags);
     const first = headElement.children.length;
 
@@ -158,8 +160,8 @@ describe("applyHeadTags", () => {
   });
 
   it("updates in place when the page changes", () => {
-    applyHeadTags(buildHeadTags(pageSeo("/"), "https://vy.example"));
-    applyHeadTags(buildHeadTags(pageSeo("/terms"), "https://vy.example"));
+    applyHeadTags(buildHeadTags(pageSeo("/"), ORIGIN));
+    applyHeadTags(buildHeadTags(pageSeo("/terms"), ORIGIN));
 
     expect(document.title).toBe("Terms of Service - Stream Vy");
     expect(meta('meta[name="description"]')).toContain("terms that apply");
@@ -168,16 +170,16 @@ describe("applyHeadTags", () => {
   });
 
   it("removes a tag the next page does not have", () => {
-    applyHeadTags(buildHeadTags(pageSeo("/watch/603"), "https://vy.example"));
+    applyHeadTags(buildHeadTags(pageSeo("/watch/603"), ORIGIN));
     // A watch page must not advertise its og:image or description to a crawler.
     expect(count('meta[property="og:image"]')).toBe(0);
     expect(count('meta[name="description"]')).toBe(0);
 
-    applyHeadTags(buildHeadTags(pageSeo("/"), "https://vy.example"));
+    applyHeadTags(buildHeadTags(pageSeo("/"), ORIGIN));
     expect(count('meta[property="og:image"]')).toBe(1);
 
     // ...and back again, so the removal is not one-way.
-    applyHeadTags(buildHeadTags(pageSeo("/my-list"), "https://vy.example"));
+    applyHeadTags(buildHeadTags(pageSeo("/my-list"), ORIGIN));
     expect(count('meta[property="og:image"]')).toBe(0);
   });
 
@@ -207,7 +209,7 @@ describe("applyHeadTags", () => {
   });
 
   it("marks everything it creates, so clearManagedHead can find all of it", () => {
-    applyHeadTags(buildHeadTags(pageSeo("/"), "https://vy.example"));
+    applyHeadTags(buildHeadTags(pageSeo("/"), ORIGIN));
     expect(count("[data-seo-managed]")).toBeGreaterThan(0);
 
     clearManagedHead();
@@ -220,6 +222,6 @@ describe("applyHeadTags", () => {
 
   it("reports failure instead of throwing when there is no document", () => {
     delete (globalThis as { document?: unknown }).document;
-    expect(applyHeadTags(buildHeadTags(pageSeo("/")))).toBe(false);
+    expect(applyHeadTags(buildHeadTags(pageSeo("/"), ORIGIN))).toBe(false);
   });
 });

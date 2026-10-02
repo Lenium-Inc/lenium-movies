@@ -19,16 +19,22 @@
  *
  * Why it is pure
  * --------------
- * Nothing in this file touches `document` or `window`. It takes an origin and a
- * pathname and returns a list of plain descriptors. That is what makes the
- * interesting parts -- which routes are indexable, what the canonical URL is,
- * which tags must be *removed* on the way to a page that does not have them --
- * testable in a plain Node environment, with no DOM and no mocking. The file
- * that does touch the DOM (`head.ts`) is deliberately dumb enough that there is
- * little left in it to want a test.
+ * Nothing in this file touches `document`, `window` or `import.meta.env`. It
+ * takes an origin and a pathname and returns a list of plain descriptors. That is
+ * what makes the interesting parts -- which routes are indexable, what the
+ * canonical URL is, which tags must be *removed* on the way to a page that does not
+ * have them -- testable in a plain Node environment, with no DOM and no mocking.
+ * The file that does touch the DOM (`head.ts`) is deliberately dumb enough that
+ * there is little left in it to want a test.
+ *
+ * The origin is a required argument rather than a default read from `siteUrl`,
+ * which is the other half of that. A default would have made this file import
+ * `siteUrl`, and `siteUrl` reads `import.meta.env` -- at which point this module
+ * could not be loaded by the build plugin that generates `sitemap.xml`, because
+ * the `@/` alias does not exist outside the client's bundler. Depending on the
+ * origin instead of reading it keeps one module as the single authority on routes
+ * that both the browser and the build can load.
  */
-
-import { siteUrl } from "@/lib/siteUrl";
 
 export const SITE_NAME = "Stream Vy";
 export const SITE_TAGLINE = "Free Movies Online | Watch Public Domain Films";
@@ -85,6 +91,51 @@ const PRIVATE_PREFIXES = [
   "/list/share",
   "/watch",
 ] as const;
+
+/**
+ * Paths `robots.txt` refuses to let a crawler fetch.
+ *
+ * A deliberately shorter list than `PRIVATE_PREFIXES`, and the difference is the
+ * point rather than an oversight. `Disallow` stops a crawler *fetching* a URL; it
+ * does not remove it from an index, because a crawler can still reach a blocked
+ * URL by following a link to it. So blocking a page that exists only to be
+ * `noindex` is counterproductive: it stops the crawler reaching the very tag that
+ * would have dropped the page, and can leave the URL sitting in the index as
+ * "blocked by robots.txt".
+ *
+ * These are the paths that carry nothing a crawler should have -- an API surface
+ * and per-account or per-token pages. `/login`, `/signup` and `/watch` are
+ * `noindex` through their meta tag instead, which is the control that works.
+ * `seo.test.ts` asserts every entry here is genuinely private, so this list cannot
+ * quietly start blocking pages it should not.
+ */
+export const ROBOTS_DISALLOW_PATHS = [
+  "/api",
+  "/profile",
+  "/profiles",
+  "/my-list",
+  "/share",
+  "/list/share",
+] as const;
+
+/**
+ * Every URL that belongs in `sitemap.xml`.
+ *
+ * Exported because the sitemap is generated from it at build time (see
+ * `scripts/seoOriginPlugin.ts`) rather than hand-maintained. The previous sitemap
+ * was a literal file listing four `<loc>` entries with the production hostname
+ * written into each one, which is a fourth copy of the route table to keep in
+ * step with `pageSeo` below -- and a fourth copy of an origin that is wrong in
+ * every other environment.
+ *
+ * Movie pages are absent, and that is a real limitation rather than an oversight:
+ * `/watch/:id` is `noindex`, so listing it would invite crawlers to index pages
+ * this app tells them not to index. A catalogue of several thousand titles is
+ * also well past the point where a hand-written file is the right shape. The
+ * honest version of that feature is to index the title pages and generate the
+ * sitemap from the catalogue, in that order.
+ */
+export const INDEXABLE_PATHS = ["/", "/terms", "/privacy", "/dmca"] as const;
 
 /**
  * `robots.txt` and this list have to agree.
@@ -245,7 +296,7 @@ export interface MovieSchemaInput {
  */
 export function movieSchema(
   movie: MovieSchemaInput,
-  origin = siteUrl()
+  origin: string
 ): Record<string, unknown> {
   const schema: Record<string, unknown> = {
     "@context": "https://schema.org",
@@ -286,7 +337,7 @@ export function webSiteSchema(origin: string): Record<string, unknown> {
  * old writer set `og:type` on a movie page and left it there on `/terms`, so a
  * legal page inherited `video.other` from whatever the viewer watched before it.
  */
-export function buildHeadTags(seo: PageSeo, origin = siteUrl()): HeadTag[] {
+export function buildHeadTags(seo: PageSeo, origin: string): HeadTag[] {
   const canonical = resolve(seo.path, origin);
   const tags: HeadTag[] = [{ kind: "title", content: seo.title }];
 
