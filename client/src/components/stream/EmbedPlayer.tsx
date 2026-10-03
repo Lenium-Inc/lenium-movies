@@ -1,19 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Loader2, RotateCw } from "lucide-react";
 import {
+  EMBED_ALLOW,
   resolveEmbedSources,
   type ResolvedEmbedSource,
 } from "@/lib/embedSources";
-import { EMBED_ALLOW } from "@/components/stream/ServerSelector";
 import { cn } from "@/lib/utils";
-import { titleUnavailable, tryAgain } from "@/lib/playbackCopy";
+import { titleUnavailable } from "@/lib/playbackCopy";
 
 /**
+ * How long a candidate gets before the next one in the chain is tried.
+ *
  * Cross-origin iframes never fire `onError` for a dead or blocked provider, so
- * "did it load?" is inferred: if `onLoad` has not landed within this window we
- * treat the server as failed and move on.
+ * "did it load?" is inferred from time: a frame that has not reported load
+ * inside this window is treated as failed.
+ *
+ * Four seconds is short enough that the sum of the whole chain stays inside the
+ * viewer's patience even when every candidate is dead -- the worst case is now
+ * `chain length x 4s` of one continuous wait rather than a wait interrupted by an
+ * error card. It is also long enough to clear the handshake on a cold embed,
+ * which is where most of the real latency is.
  */
-const LOAD_TIMEOUT_MS = 12_000;
+const CANDIDATE_HEALTH_TIMEOUT_MS = 4_000;
 
 /**
  * Grace period after `onLoad` before inspecting the frame, so a player that
@@ -63,6 +70,18 @@ export interface EmbedPlayerProps {
    * move; the picker then highlights whatever is actually playing.
    */
   onActiveSourceIdChange?: (sourceId: string) => void;
+  /**
+   * Called once a candidate has settled -- the frame reported load and was not
+   * then ruled out as an anti-framing refusal. This is the signal the page holds
+   * its loading overlay up for.
+   */
+  onPlaying?: () => void;
+  /**
+   * Called when every candidate in the chain has been ruled out. The page turns
+   * this into its own terminal state, so the player never renders an error of
+   * its own.
+   */
+  onExhausted?: () => void;
 }
 
 export function EmbedPlayer({
@@ -76,6 +95,8 @@ export function EmbedPlayer({
   className,
   activeSourceId,
   onActiveSourceIdChange,
+  onPlaying,
+  onExhausted,
 }: EmbedPlayerProps) {
   const sources = useMemo<ResolvedEmbedSource[]>(
     () =>
@@ -126,17 +147,6 @@ export function EmbedPlayer({
     [total, sources, onActiveSourceIdChange]
   );
 
-  /**
-   * Genuine second chance at the active source. The dead-source memory is
-   * cleared first: some providers rate-limit per title rather than being
-   * actually broken, and after a cooldown the same URL is worth asking again.
-   */
-  const retry = useCallback(() => {
-    if (active) blockedIds.current.delete(active.id);
-    setLoadState("loading");
-    setAttempt(n => n + 1);
-  }, [active]);
-
   /** Next source after `from` that has not already been ruled out, or -1. */
   const nextViableIndex = useCallback(
     (from: number) => {
@@ -157,7 +167,6 @@ export function EmbedPlayer({
     }
     goTo(next);
   }, [controlledIndex, nextViableIndex, goTo]);
-
   // Reset whenever the underlying target changes (new season/episode, new title).
   useEffect(() => {
     const start = controlled
@@ -181,14 +190,15 @@ export function EmbedPlayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sources]);
 
-  // Watchdog: an embed that never reports load is treated as failed and we
-  // fall through to the next source.
+  // Watchdog: an embed that never reports load inside its budget is treated as
+  // failed and we fall through to the next source. Nothing is shown to the
+  // viewer when this fires -- the page's overlay never came down.
   useEffect(() => {
     if (loadState !== "loading" || !active) return;
     const timer = window.setTimeout(() => {
       blockedIds.current.add(active.id);
       advance();
-    }, LOAD_TIMEOUT_MS);
+    }, CANDIDATE_HEALTH_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
   }, [loadState, active, advance]);
 
@@ -217,13 +227,21 @@ export function EmbedPlayer({
       const frame = frameRef.current;
       const frameWindow = frame?.contentWindow;
       if (!frame || !frameWindow) return;
-      if (frameWindow.length > 0) return;
+      if (frameWindow.length > 0) {
+        // A live player nests at least one frame, so this candidate is good.
+        onPlaying?.();
+        return;
+      }
 
       blockedIds.current.add(active.id);
       advance();
     }, REFUSAL_SETTLE_MS);
     return () => window.clearTimeout(timer);
-  }, [loadState, active, advance]);
+  }, [loadState, active, advance, onPlaying]);
+
+  useEffect(() => {
+    if (loadState === "failed") onExhausted?.();
+  }, [loadState, onExhausted]);
 
   if (total === 0 || !active) {
     return (
@@ -233,9 +251,7 @@ export function EmbedPlayer({
           className
         )}
       >
-        <p className="px-6">
-          No playback sources are available for this title.
-        </p>
+        <p className="px-6">{titleUnavailable}</p>
       </div>
     );
   }
@@ -275,41 +291,16 @@ export function EmbedPlayer({
         onLoad={handleLoad}
       />
 
-      {loadState === "loading" ? (
-        <div
-          role="status"
-          aria-label="Loading stream"
-          className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center"
-        >
-          <Loader2 className="h-10 w-10 animate-spin text-white/90" />
-          <span className="sr-only">Loading stream…</span>
-        </div>
-      ) : null}
-
-      {loadState === "failed" ? (
-        <div className="absolute inset-x-0 top-1/2 z-20 mx-auto w-fit max-w-sm -translate-y-1/2 rounded-xl border border-white/10 bg-black/85 px-6 py-5 text-center backdrop-blur">
-          <AlertTriangle className="mx-auto h-6 w-6 text-amber-400" />
-          <p className="mt-2 text-sm font-semibold text-white">
-            {titleUnavailable}
-          </p>
-          <button
-            type="button"
-            onClick={retry}
-            className="mt-4 inline-flex items-center gap-2 rounded-lg bg-white/10 px-4 py-2 text-xs font-semibold text-white transition hover:bg-white/20"
-          >
-            <RotateCw className="h-3.5 w-3.5" />
-            {tryAgain}
-          </button>
-        </div>
-      ) : null}
-
       {/*
-        The source switcher does not live here. It used to be a row of "Server
-        1 / Server 2" text tabs painted over the top-left of the frame, where it
-        covered the provider's own player chrome and read as a broken control
-        strip rather than as a choice. It is `ServerSelector` now, below the
-        player, where the whole set of sources is visible at once and the
-        selection is the one the player renders.
+        No spinner and no error card here, on purpose.
+
+        The page renders one overlay above this frame and keeps it up until
+        `onPlaying` fires, so anything drawn in this component during the load is
+        a second spinner stacked on the first. And the terminal state is the
+        page's: `onExhausted` lets it decide what an unplayable title looks like
+        once every candidate has been tried, instead of this component asserting
+        it mid-failover with a button that would restart a chain already known to
+        be dead.
       */}
     </div>
   );
