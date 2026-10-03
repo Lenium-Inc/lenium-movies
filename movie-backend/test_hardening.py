@@ -239,6 +239,18 @@ def test_allowlist_matches_the_frontend_domain():
         f"backend allows {sorted(application._ALLOWED_ORIGINS)}"
     )
 
+    # The `www` and apex hosts are distinct origins to a browser: a redirect to
+    # one does not help a page served from the other, and the browser sends the
+    # `www` form after the redirect. The deployed site serves the frontend from
+    # `www`, so allowing only the apex host blocked every cross-origin call with
+    # "No 'Access-Control-Allow-Origin' header" while the apex origin worked --
+    # which looks like a broken backend rather than a one-entry allowlist gap.
+    for frontend_origin in ("https://streamvy.me", "https://www.streamvy.me"):
+        assert frontend_origin in application._ALLOWED_ORIGINS, (
+            f"{frontend_origin} is missing from the CORS allowlist; the deployed "
+            f"backend allows {sorted(application._ALLOWED_ORIGINS)}"
+        )
+
 
 def test_every_share_route_answers_the_preflight():
     """A share POST cannot be blocked by a failed preflight.
