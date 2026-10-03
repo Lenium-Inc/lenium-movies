@@ -45,9 +45,11 @@ import {
   type StreamVariant,
 } from "@/components/stream/VideoPlayer";
 import { EmbedPlayer } from "@/components/stream/EmbedPlayer";
-import { ServerSelector } from "@/components/stream/ServerSelector";
 import { DownloadButton } from "@/components/stream/DownloadButton";
-import { StreamLoader } from "@/components/stream/StreamLoader";
+import {
+  StreamLoader,
+  type StreamLoadStage,
+} from "@/components/stream/StreamLoader";
 import { formatRuntime } from "@/lib/format";
 import { titleUnavailable } from "@/lib/playbackCopy";
 import {
@@ -78,7 +80,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { isExternalEmbedUrl, orderDirectStreams } from "@/lib/streamUtils";
-import { resolveEmbedSources } from "@/lib/embedSources";
+import { chainFromBackend, resolveEmbedSources } from "@/lib/embedSources";
 import { tmdbImage, type TmdbImageSize } from "@/lib/tmdbImages";
 import { useAuth } from "@/context/AuthContext";
 import { useActiveProfile } from "@/context/ActiveProfileContext";
@@ -217,12 +219,10 @@ function classifyError(error: unknown) {
       type: "server_error",
       message: "The movie service returned an error. Please try again.",
       // Still `recoverable`, because a 500 is often a transient blip and the
-      // viewer should be able to ask again. What must not happen is retrying
-      // forever without telling anyone, and that is now the retry budget's job
-      // rather than this flag's: at most MAX_RETRY_ATTEMPTS within
-      // MAX_AUTO_RETRY_WINDOW_MS, then a terminal error card. Setting this false
-      // would have stopped the loop just as effectively while also removing the
-      // user's own "Try again", since handleRetry gates on the same flag.
+      // resolve should be asked again. What must not happen is retrying forever
+      // without telling anyone, and that is now the retry budget's job rather
+      // than this flag's: at most MAX_RETRY_ATTEMPTS within
+      // MAX_AUTO_RETRY_WINDOW_MS, then the terminal state.
       recoverable: true,
       retryCount: 0,
     };
@@ -312,9 +312,6 @@ export function WatchPage() {
   const [movieLoading, setMovieLoading] = useState(true);
   const [resolved, setResolved] = useState<ResolvedStream | null>(null);
   const [resolving, setResolving] = useState(false);
-  const [playError, setPlayError] = useState<ReturnType<
-    typeof classifyError
-  > | null>(null);
   const [season, setSeason] = useState(urlSeason);
   const [episode, setEpisode] = useState(urlEpisode);
 
@@ -566,7 +563,6 @@ export function WatchPage() {
        * no viewer-facing copy on the page describes a limit.
        */
       setResolving(true);
-      setPlayError(null);
 
       if (retryTimeoutRef.current) {
         clearTimeout(retryTimeoutRef.current);
@@ -643,19 +639,16 @@ export function WatchPage() {
           `[WatchPage] could not resolve "${movie.title}" (${movie.year ?? "unknown year"})`,
           error
         );
-        setPlayError(playbackError);
 
         // This used to re-schedule itself every second with no cap and no time
         // budget, and the captured closure always had `resolving === false`, so
         // the guard at the top could not stop the re-entry. A backend that fails
         // in a way the classifier calls "recoverable" therefore produced an
-        // endless 1Hz retry loop: the Play button flickering, "Preparing
-        // stream..." spinning forever, and no error ever shown -- because
-        // `playError` is only rendered once a URL is in hand.
+        // endless 1Hz retry loop: the overlay spinning forever with nothing ever
+        // reaching the screen.
         //
         // A retry budget bounds it. When it is spent the failure becomes
-        // terminal, and `streamUnavailable` is what actually reaches the screen
-        // even though nothing is resolved yet.
+        // terminal and `streamUnavailable` is what reaches the screen.
         autoRetryRef.current += 1;
         const budgetSpent =
           autoRetryRef.current >= MAX_RETRY_ATTEMPTS ||
@@ -680,23 +673,6 @@ export function WatchPage() {
     },
     [movie, resolved, resolving, navigate, resolveWithRetry]
   );
-
-  // Retry handler for playback errors
-  const handleRetry = useCallback(() => {
-    if (playError?.recoverable) {
-      setPlayError(null);
-      // A deliberate retry is a fresh budget, otherwise the loop that ran out
-      // of attempts would refuse the user's own second attempt.
-      autoRetryRef.current = 0;
-      autoRetryStartedRef.current = Date.now();
-      setStreamUnavailable(false);
-      if (isSeries) {
-        resolveAndPlay(season, episode);
-      } else {
-        resolveAndPlay(1, 1);
-      }
-    }
-  }, [playError, resolved, season, episode, resolveAndPlay]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -1022,13 +998,15 @@ export function WatchPage() {
   /**
    * The provider chain to hand the embed player.
    *
-   * Every entry is keyed on the title's own TMDB id, so the registry supplies
-   * the chain whether or not the backend listed mirrors: the ids are the same
-   * ones the server hands out, and the URL patterns are its URL patterns. A
-   * backend mirror that names one of these providers is matched to that
-   * provider's entry, so a server-side decision about order or availability is
-   * respected rather than overwritten; anything unrecognised is appended as a
-   * last-resort frame.
+   * `/api/movies/resolve` returns this as an ordered `providers` array of
+   * `{name, url, is_embed}` -- the order it probed in, winner first -- and that
+   * order is used verbatim. Correlating it against the manifest afterwards (the
+   * host-matching that used to build this) could only ever re-derive an order the
+   * server had already decided, and did it wrongly whenever the two disagreed.
+   *
+   * The manifest chain is still the fallback and the tail: it is what makes the
+   * list non-empty when a payload predates `providers`, and any provider the
+   * server did not name is appended after the ones it did, rather than dropped.
    */
   const embedChain = useMemo(() => {
     const local = resolveEmbedSources({
@@ -1037,47 +1015,72 @@ export function WatchPage() {
       season,
       episode,
     });
-    const mirrors = (resolved?.stream?.mirrors ?? []).filter(
-      mirror => mirror?.url && isExternalEmbedUrl(mirror.url)
-    );
-    if (!mirrors.length) return local;
-
-    const matched: typeof local = [];
-    const extras: typeof local = [];
-    for (const mirror of mirrors) {
-      const host = safeHost(mirror.url);
-      const known = local.find(source => source.host === host);
-      if (known) {
-        // The server's own URL wins over the registry's: it may carry the
-        // season, episode or referrer the provider needs.
-        matched.push({ ...known, url: mirror.url });
-      } else {
-        extras.push({
-          id: `server-${mirrors.indexOf(mirror)}`,
-          label: mirror.name || "Alternate server",
-          title: mirror.name || "Alternate server",
-          host,
-          url: mirror.url,
-          quality: null,
-          type: "embed",
-        });
-      }
-    }
-    const used = new Set(matched.map(source => source.id));
-    return [
-      ...matched,
-      ...extras,
-      ...local.filter(source => !used.has(source.id)),
-    ];
-  }, [resolved?.stream?.mirrors, embedTargetId, isSeries, season, episode]);
+    return chainFromBackend(resolved?.stream?.providers, local);
+  }, [resolved?.stream?.providers, embedTargetId, isSeries, season, episode]);
 
   // A new title/episode drops any earlier embed decision, so the loader shows
   // while the resolver walks the chain again -- and the provider selection goes
-  // with it, because "Server A" on one episode says nothing about another.
+  // with it, because a source that settled for one episode says nothing about
+  // another.
   useEffect(() => {
     setUsingEmbedProvider(false);
     setEmbedSourceId(null);
   }, [movie?.id, season, episode]);
+
+  /**
+   * Where playback is, as one state.
+   *
+   *   idle                 nothing mounted yet
+   *   resolving_backend    the resolver has not answered
+   *   testing_candidate    an embed chain is being walked, one candidate at a
+   *                        time, on the player's own 4s budget
+   *   playing              something is on screen and the overlay is down
+   *
+   * The middle two are both "waiting", and the overlay stays up across both --
+   * the caption is the only thing that changes. Collapsing them into one state
+   * would mean the caption could not say which wait it is; keeping the waiting
+   * and the failing apart in two different pieces of state is what produced
+   * error cards appearing mid-failover.
+   *
+   * Nothing here is user-selectable. The viewer's only interaction with the
+   * chain is not having one.
+   */
+  const [stage, setStage] = useState<StreamLoadStage>("idle");
+  const [embedExhausted, setEmbedExhausted] = useState(false);
+
+  useEffect(() => {
+    setStage("resolving_backend");
+    setEmbedExhausted(false);
+  }, [movie?.id, season, episode]);
+
+  // The resolver has answered. A direct source plays itself; an embed still has
+  // to be tried, so the overlay stays up until one of its candidates settles.
+  useEffect(() => {
+    if (resolving || !resolved) return;
+    setStage(usingEmbedProvider ? "testing_candidate" : "playing");
+  }, [resolving, resolved, usingEmbedProvider]);
+
+  /**
+   * A candidate is live. Clears any earlier exhaustion first: the player only
+   * reports this for a frame it confirmed, so it is the authoritative answer
+   * over a previous "nothing worked".
+   */
+  const handleEmbedPlaying = useCallback(() => {
+    setEmbedExhausted(false);
+    setStage("playing");
+  }, []);
+
+  /**
+   * Every candidate in the chain was ruled out. This is the one state that does
+   * not get a spinner, and it is the only place the page admits it cannot play
+   * the title -- an infinite ring over a frame that will never appear is a worse
+   * answer than saying so.
+   */
+  const handleEmbedExhausted = useCallback(() => {
+    setEmbedExhausted(true);
+    setStage("playing");
+    setStreamUnavailable(true);
+  }, []);
 
   // When the player is advancing through alternate sources on its own the
   // switch is kept silent: no buffering spinner, just the ambient poster
@@ -1332,7 +1335,6 @@ export function WatchPage() {
       setSourceIndex(0);
       setStreamUnavailable(false);
       setUsingEmbedProvider(false);
-      setPlayError(null);
       const qs = new URLSearchParams({
         season: String(nextSeason),
         episode: String(nextEpisode),
@@ -1412,21 +1414,6 @@ export function WatchPage() {
       ? getImageUrl(movie.poster, "w780")
       : "";
 
-  /**
-   * Host of a provider URL, for labelling the server tabs.
-   *
-   * Falls back to the provider's own host when the URL is unparseable rather
-   * than rendering an empty tab, so a malformed entry from the backend is
-   * still selectable and still fails over on its own terms.
-   */
-  function safeHost(url: string): string {
-    try {
-      return new URL(url).hostname;
-    } catch {
-      return "";
-    }
-  }
-
   return (
     <div className="min-h-screen text-white">
       <main className="pt-16 pb-12 px-4 sm:px-6 lg:px-8">
@@ -1458,26 +1445,20 @@ export function WatchPage() {
                       Player surface, in strict precedence order:
 
                       1. a directly playable source -> <VideoPlayer>
-                      2. the chain settled on an embed provider -> <EmbedPlayer>
-                      3. every provider exhausted -> "Title unavailable"
-                      4. anything else -> the wordless loader
+                      2. the resolver settled on an embed provider -> <EmbedPlayer>
+                      3. every candidate ruled out -> "Title unavailable"
 
                       Steps 1 and 2 are not error recovery. The backend picks a
                       provider before answering, so whichever of the two the
-                      resolver chose is simply the source that plays. Step 4 is
-                      the wait, and it deliberately carries no technical copy: a
-                      viewer waiting on provider failover has no use for a
-                      description of which stage it is on, and the stage labels
-                      it replaced ("Optimizing high-definition stream…",
-                      "Resolving playback sources…") described retries that had
-                      nothing to do with the stated activity.
+                      resolver chose is simply the source that plays, and the
+                      only thing left for this page to do is wait.
 
-                      The order between 1 and 2 is absolute, not a preference:
-                      a payload that carries both a manifest and an embed URL
-                      plays the manifest (HLS first, see `orderDirectStreams`)
-                      and never mounts the frame, because the embed is the only
-                      one of the two that pulls a third-party ad provider's
-                      scripts into the page.
+                      The order between 1 and 2 is absolute, not a preference: a
+                      payload that carries both a manifest and an embed URL plays
+                      the manifest (HLS first, see `orderDirectStreams`) and never
+                      mounts the frame, because the embed is the only one of the
+                      two that pulls a third-party ad provider's scripts into the
+                      page.
                     */}
                     {currentStreamUrl && !streamUnavailable ? (
                       <VideoPlayer
@@ -1495,19 +1476,11 @@ export function WatchPage() {
                         onQualityChange={q => {}}
                         isLoading={resolving}
                         autoCycling={autoCycling}
-                        playbackError={playError?.message || null}
-                        onRetry={() => {
-                          if (playError) {
-                            handleRetry();
-                          } else {
-                            handleSourceError();
-                          }
-                        }}
                         onSourceError={handleSourceError}
                         onProgress={handleProgress}
                         hideCloseButton
                       />
-                    ) : usingEmbedProvider ? (
+                    ) : usingEmbedProvider && !embedExhausted ? (
                       <EmbedPlayer
                         key={playerKeyRef.current}
                         sources={embedChain}
@@ -1515,68 +1488,61 @@ export function WatchPage() {
                         poster={streamPoster}
                         activeSourceId={embedSourceId ?? undefined}
                         onActiveSourceIdChange={setEmbedSourceId}
+                        onPlaying={handleEmbedPlaying}
+                        onExhausted={handleEmbedExhausted}
                       />
-                    ) : streamUnavailable ? (
-                      <div className="absolute inset-0 flex items-center justify-center">
-                        <div className="relative w-full h-full max-w-6xl max-h-[85vh] flex items-center justify-center">
-                          <img
-                            src={streamPoster}
-                            alt=""
-                            aria-hidden
-                            className="absolute inset-0 w-full h-full object-cover opacity-40 blur-2xl scale-110"
-                          />
-                          <div className="relative z-20 rounded-xl px-8 py-6 text-center">
-                            <p className="text-lg font-semibold text-white">
-                              {titleUnavailable}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
-                      <StreamLoader
-                        poster={streamPoster}
-                        title={displayTitle}
-                      />
-                    )}
+                    ) : null}
                   </>
                 )}
+
                 {/*
-                  Before the first resolve lands there is no `resolved` to
-                  render the player surface for. The same loader covers it, so
-                  opening a title is one continuous wait rather than a labelled
-                  skeleton that swaps to a differently-labelled spinner.
+                  The overlay, and the only place a wait is drawn.
+
+                  It is a sibling of the surface rather than a state of it, and
+                  deliberately outside the `resolved` guard above: the wait has to
+                  start on the card click, before the resolver has answered and
+                  therefore before there is a surface to sit over. Both waits --
+                  the resolver's and the candidate's -- render this one element,
+                  which is why a viewer who arrives during failover never sees the
+                  picture change, and why nothing below it has to know which of
+                  the two is running.
                 */}
-                {!resolved && (
-                  <StreamLoader poster={streamPoster} title={movie.title} />
-                )}
+                {stage === "resolving_backend" ||
+                stage === "testing_candidate" ? (
+                  <StreamLoader
+                    className="z-30"
+                    poster={streamPoster}
+                    title={displayTitle}
+                    stage={stage}
+                  />
+                ) : null}
+
+                {/*
+                  The one terminal state. Reached only once every candidate has
+                  been ruled out, and it has no button: the chain was walked in
+                  full, so a retry would ask the same providers the same question
+                  and get the same answer. It is worded as a temporary condition
+                  because that is the only thing known -- whether a given provider
+                  will be up in a minute is not something this page can find out.
+                */}
+                {streamUnavailable ? (
+                  <div className="absolute inset-0 z-30 flex items-center justify-center">
+                    <div className="relative w-full h-full max-w-6xl max-h-[85vh] flex items-center justify-center">
+                      <img
+                        src={streamPoster}
+                        alt=""
+                        aria-hidden
+                        className="absolute inset-0 w-full h-full object-cover opacity-40 blur-2xl scale-110"
+                      />
+                      <div className="relative z-20 rounded-xl px-8 py-6 text-center">
+                        <p className="text-lg font-semibold text-white">
+                          {titleUnavailable}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
               </div>
-
-              {/*
-                The source choice, directly under the frame.
-
-                      It was a row of "Server 1 / Server 2" tabs painted over
-                      the top-left of the player, which sat on top of the
-                      provider's own controls and read as a broken strip rather
-                      than a choice. It is a proper selector below the video now,
-                      and it is the same list the player renders -- no "this is
-                      the server you are watching" caption needed, because the
-                      active one is marked as active.
-                    */}
-              {usingEmbedProvider && !streamUnavailable ? (
-                <ServerSelector
-                  tmdbId={embedTargetId ?? movie.providerId}
-                  mediaType={isSeries ? "tv" : "movie"}
-                  season={isSeries ? season : undefined}
-                  episode={isSeries ? episode : undefined}
-                  sources={embedChain}
-                  selectedId={embedSourceId ?? undefined}
-                  onSelect={setEmbedSourceId}
-                  // The real player is the <EmbedPlayer> above this picker.
-                  showPlayer={false}
-                  title={displayTitle}
-                  className="mt-4"
-                />
-              ) : null}
 
               {/* Season/episode navigation, directly below the player */}
               {movie.mediaType === "tv" ? (
