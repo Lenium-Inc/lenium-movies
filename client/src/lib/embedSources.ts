@@ -31,6 +31,113 @@ import {
 
 export type EmbedMedia = "movie" | "tv";
 
+/**
+ * Permissions every provider frame is granted.
+ *
+ * The `sandbox` attribute is deliberately absent. A sandboxed frame is served a
+ * null origin, and these providers answer a null-origin handshake with "This
+ * content can't be embedded in a sandboxed frame" -- the frame then renders
+ * nothing at all, so the viewer sees an empty black rectangle with no error and
+ * no way to tell a dead source from a broken page. Every provider here is a
+ * distinct origin from this app, so the frame is isolated by origin policy
+ * rather than by a sandbox the providers refuse to load inside.
+ *
+ * `autoplay`, `encrypted-media` and `fullscreen` are all required: without the
+ * first the player cannot start itself, without the second an encrypted HLS
+ * stream refuses to play, and without the third the provider's own fullscreen
+ * button is inert. `picture-in-picture` and the sensor tokens are harmless on
+ * desktop and required on mobile, where a provider hands playback to the OS.
+ *
+ * It lives here rather than on a component because it is part of the provider
+ * contract, not of any one player's markup.
+ */
+export const EMBED_ALLOW =
+  "autoplay; encrypted-media; fullscreen; picture-in-picture; accelerometer; gyroscope";
+
+/**
+ * One entry of the `providers` array `/api/movies/resolve` returns.
+ *
+ * The backend sends this shape rather than its internal provider records because
+ * the client's only job with the chain is to walk it in order: it needs a name
+ * to show if it ever has to, a URL to load, and whether the URL is a frame or a
+ * file. Anything richer would be a second contract to keep in step with the
+ * resolver.
+ */
+export interface BackendProviderCandidate {
+  name?: string | null;
+  url?: string | null;
+  is_embed?: boolean | null;
+}
+
+/**
+ * Turn the backend's `providers` array into a playable chain.
+ *
+ * Order is the backend's decision and is preserved exactly -- it is the order it
+ * probed in, and reversing it would put a host it already ruled out first.
+ *
+ * Each URL is matched back to its manifest entry by host so the label and
+ * audience type come from one place rather than from whatever string the server
+ * happened to send. A URL naming no known provider is kept anyway: the resolver
+ * may know about a host this deploy's manifest does not, and dropping its URL
+ * would throw away a candidate the server offered.
+ *
+ * `fallback` (the manifest chain for this target) is appended for any provider
+ * the backend did not mention. Those were never vetted, but they are addressable
+ * and cost nothing to try, and a chain that shrinks when the resolver is unsure
+ * is a chain with nowhere left to go.
+ */
+export function chainFromBackend(
+  providers: readonly BackendProviderCandidate[] | null | undefined,
+  fallback: readonly ResolvedEmbedSource[]
+): ResolvedEmbedSource[] {
+  const out: ResolvedEmbedSource[] = [];
+  const seenUrls = new Set<string>();
+  const seenIds = new Set<string>();
+
+  for (const entry of providers ?? []) {
+    const url = entry?.url?.trim();
+    if (!url) continue;
+    if (seenUrls.has(url)) continue;
+
+    const host = hostOf(url);
+    const known = fallback.find(source => source.host === host);
+    const id = known?.id ?? `server-${out.length}`;
+    if (seenIds.has(id)) continue;
+
+    seenUrls.add(url);
+    seenIds.add(id);
+    out.push(
+      known
+        ? { ...known, url }
+        : {
+            id,
+            label: entry?.name?.trim() || "Alternate source",
+            title: entry?.name?.trim() || "Alternate source",
+            host,
+            url,
+            quality: null,
+            type: "embed",
+          }
+    );
+  }
+
+  for (const source of fallback) {
+    if (seenIds.has(source.id)) continue;
+    seenIds.add(source.id);
+    out.push(source);
+  }
+
+  return out;
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "";
+  }
+}
+
 export interface EmbedSource {
   /** Stable id used for state and React keys. */
   id: string;
