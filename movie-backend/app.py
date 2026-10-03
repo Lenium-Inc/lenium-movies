@@ -734,7 +734,22 @@ def resolve_movie():
     )
     direct = resolution.winner.payload if resolution.winner and resolution.winner.kind == "direct" else None
     stream_url = resolution.url
-    provider_candidates = resolution.candidate_urls()
+
+    # The candidate chain is what the client walks after this, so its shape is
+    # part of the contract rather than a dump of internals: `name` / `url` /
+    # `is_embed`, winner first.
+    #
+    # A resolution can come back empty -- every provider benched, every probe
+    # timed out, the embed budget spent -- and an empty `providers` array would
+    # leave the client with nothing to try, so it can only render a dead end.
+    # For an addressable target the planned chain is emitted instead: every
+    # configured provider's URL in priority order. `available` is already a
+    # separate field and is what tells the client nothing was verified.
+    provider_candidates = resolution.candidate_entries()
+    if not provider_candidates:
+        provider_candidates = stream_providers.planned_candidate_entries(
+            tmdb_id, media_type, season, episode
+        )
 
     # Extract runtime as number
     runtime = details.get("runtime")
@@ -869,11 +884,17 @@ def get_stream_direct():
         # no provider can currently serve it. `attempts` carries the per-provider
         # outcome so this is diagnosable from the client's own terminal state
         # rather than being an opaque "nothing worked".
+        #
+        # The chain is still returned, unresolved but in priority order, so a
+        # client walking it on its own timer has something to walk. The 503 and
+        # `available: false` are what say none of it was verified.
         return _json_error(
             "No streaming provider could serve this title.",
             503,
             available=False,
-            providers=[],
+            providers=stream_providers.planned_candidate_entries(
+                tmdb_id, media_type, season_number, episode_number
+            ),
             provider_attempts=resolution.attempts,
         )
 
