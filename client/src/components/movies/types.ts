@@ -89,6 +89,21 @@ export type ResolvedStream = {
     name: string;
     url: string;
   }>;
+  /**
+   * The ordered failover chain, winner first, as `{name, url, is_embed}`.
+   *
+   * The client walks this on its own per-candidate timer rather than asking the
+   * resolver again, so the list is delivered even when `available` is false --
+   * see `chainFromBackend`. `mirrors` is kept for the direct tier's quality
+   * variants, which are a different thing: those are the same source at
+   * different heights, not different sources.
+   */
+  providers?: Array<{
+    name: string;
+    url: string;
+    is_embed: boolean;
+  }>;
   source_type?: "hls" | "dash" | "mp4" | "embed";
   is_embed?: boolean;
+  available?: boolean;
 };
