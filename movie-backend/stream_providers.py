@@ -418,6 +418,31 @@ class Resolution:
                 out.append(candidate.url)
         return out
 
+    def candidate_entries(self) -> list[dict]:
+        """The chain in the one shape every client of the resolver expects.
+
+        `{name, url, is_embed}`, winner first, deduplicated by URL. The client
+        walks this list on its own timer instead of asking the server again, so
+        the order and the labels here are the whole contract -- a consumer that
+        had to correlate `candidates` against the manifest to learn a URL's
+        provider would drift from it the moment the manifest and the resolution
+        disagreed.
+        """
+        seen: set[str] = set()
+        out: list[dict] = []
+        for candidate in self.candidates:
+            if not candidate.url or candidate.url in seen:
+                continue
+            seen.add(candidate.url)
+            out.append(
+                {
+                    "name": candidate.label,
+                    "url": candidate.url,
+                    "is_embed": candidate.kind == "embed",
+                }
+            )
+        return out
+
 
 def resolve_direct(
     direct_lookup,
@@ -579,3 +604,31 @@ def _unprobed_embeds(tmdb_id: int | str, media_type: str, season: int, episode: 
         if url:
             out.append(ResolvedProvider(provider.id, "embed", provider.label, url, verified=False))
     return out
+
+
+def planned_candidate_entries(
+    tmdb_id: int | str, media_type: str, season: int, episode: int
+) -> list[dict]:
+    """The full manifest chain for a target, as `{name, url, is_embed}` entries.
+
+    Nothing here is liveness-checked -- these are the URLs every configured
+    provider *would* serve, in priority order, for the addresses to hand the
+    client when a resolution came back empty.
+
+    A resolution can legitimately be empty: every provider benched, every probe
+    timed out, the embed phase budget spent. Answering with `providers: []` in
+    that case leaves the client with nothing to try and no way to tell "no such
+    title" from "everything was down", so it can only show a dead end. Emitting
+    the planned chain instead means the caller always hands back an ordered list
+    for an addressable target, and whether an entry was verified travels with it
+    (`Resolution.candidate_entries` covers only probed candidates).
+    """
+    return [
+        {
+            "name": provider.label,
+            "url": url,
+            "is_embed": True,
+        }
+        for provider in active_embed_providers()
+        if (url := provider.build(tmdb_id, media_type, season, episode))
+    ]
