@@ -14,7 +14,6 @@ import {
   VolumeX,
   Maximize,
   Settings,
-  RefreshCw,
   Languages,
   Volume2 as Volume2Icon,
   X,
@@ -23,7 +22,6 @@ import {
 } from "lucide-react";
 import Hls from "hls.js";
 import { formatPlayerTime } from "@/lib/format";
-import { titleUnavailable } from "@/lib/playbackCopy";
 import { subtitleTrackUrl, type StreamSubtitle } from "@/services/api";
 
 export interface StreamVariant {
@@ -106,8 +104,6 @@ export interface VideoPlayerProps {
   currentQuality?: string;
   onQualityChange?: (quality: string) => void;
   isLoading?: boolean;
-  playbackError?: string | null;
-  onRetry?: () => void;
   onSourceError?: () => void;
   hideCloseButton?: boolean;
   autoPlay?: boolean;
@@ -148,8 +144,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   currentQuality: initialQuality = "Auto",
   onQualityChange,
   isLoading: externalIsLoading = false,
-  playbackError: externalPlaybackError = null,
-  onRetry,
   onSourceError,
   hideCloseButton = false,
   autoPlay = true,
@@ -187,7 +181,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           currentSubtitles),
     [currentSubtitles, subtitleTracks]
   );
-  const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [hasUserInteracted, setHasUserInteracted] = useState<boolean>(false);
   const lastProgressRef = useRef<{ seconds: number; duration: number }>({
     seconds: 0,
@@ -264,12 +257,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     tryPlay(false);
   }, []);
-
-  useEffect(() => {
-    if (externalPlaybackError) {
-      setPlaybackError(externalPlaybackError);
-    }
-  }, [externalPlaybackError]);
 
   useEffect(() => {
     if (initialQuality && initialQuality !== currentQuality) {
@@ -425,7 +412,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (!video || !streamUrl) return;
 
     let hls: any = null;
-    setPlaybackError(null);
     setIsLoading(true);
     // Ladder and poster are per-source; drop stale values so a manifest from
     // the previous mirror never leaks into the next one.
@@ -470,12 +456,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     const handleError = () => {
       clearStallWatch();
-      // On a silent auto-cycle just hand the failure to the page without
-      // flashing an error card — the next source is already queued.
-      if (!autoCycling) {
-        setPlaybackError(titleUnavailable);
-        setIsLoading(false);
-      }
+      // Reported, never rendered. The page owns the failure state: it walks the
+      // candidate chain and keeps its own overlay up, so an error card painted
+      // here would appear and vanish once per candidate on the way to the one
+      // that works.
       onSourceError?.();
     };
 
@@ -533,10 +517,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           Hls.Events.ERROR,
           (_event: unknown, data: { fatal?: boolean }) => {
             if (data.fatal) {
-              if (!autoCycling) {
-                setPlaybackError(titleUnavailable);
-                setIsLoading(false);
-              }
               hls?.destroy();
               onSourceError?.();
             }
@@ -545,20 +525,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
         video.src = streamUrl;
       } else {
-        if (!autoCycling) {
-          setPlaybackError(titleUnavailable);
-          setIsLoading(false);
-        }
         onSourceError?.();
       }
     } else if (streamType === "dash") {
       if (video.canPlayType("application/dash+xml")) {
         video.src = streamUrl;
       } else {
-        if (!autoCycling) {
-          setPlaybackError(titleUnavailable);
-          setIsLoading(false);
-        }
         onSourceError?.();
       }
     } else {
@@ -737,7 +709,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       setCurrentQuality(quality);
       setIsLoading(true);
-      setPlaybackError(null);
       setQualityMenuOpen(false);
       onQualityChange?.(quality);
     },
@@ -806,12 +777,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     e.preventDefault();
   };
 
-  const handleRetry = useCallback(() => {
-    setPlaybackError(null);
-    setIsLoading(true);
-    onRetry?.();
-  }, [onRetry]);
-
   return (
     <div
       ref={playerRef}
@@ -825,28 +790,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         aria-hidden="true"
       />
 
+      {/*
+        Buffering only. A failure is reported to the page and never drawn here:
+        the page is already walking the candidate chain behind one overlay, so an
+        error card with a retry button inside the frame would appear and vanish
+        once per candidate on the way to the source that works -- and its retry
+        would restart a chain that had just been proven to need a different
+        candidate, not a second attempt at the same one.
+      */}
       {effectiveIsLoading && !autoCycling && (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
-          <div className="pointer-events-auto flex flex-col items-center gap-4 rounded-2xl bg-black/45 px-8 py-6 text-center backdrop-blur-md">
+          <div className="pointer-events-none flex flex-col items-center gap-4 rounded-2xl bg-black/45 px-8 py-6 text-center backdrop-blur-md">
             <div className="h-10 w-10 animate-spin rounded-full border-[3px] border-white/20 border-t-white" />
-            {playbackError ? (
-              <div className="max-w-md px-4">
-                <p className="mb-3 text-sm font-medium tracking-wider text-white/90">
-                  {playbackError}
-                </p>
-                <button
-                  onClick={handleRetry}
-                  className="mx-auto flex items-center gap-2 rounded-lg border border-white/20 bg-white/10 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-white/20"
-                >
-                  <RefreshCw className="h-4 w-4" />
-                  Retry
-                </button>
-              </div>
-            ) : (
-              <p className="text-sm font-medium tracking-wider text-white/90">
-                Buffering video...
-              </p>
-            )}
+            <p className="text-sm font-medium tracking-wider text-white/90">
+              Buffering video...
+            </p>
           </div>
         </div>
       )}
