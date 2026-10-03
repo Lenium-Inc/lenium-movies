@@ -14,9 +14,9 @@ export default function HomePage() {
         <nav className="mx-auto flex h-20 max-w-[1440px] items-center justify-between px-5 sm:px-8 lg:px-12">
           <Link
             href="/"
-            className="text-lg font-semibold tracking-[0.12em] text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white"
+            className="text-lg font-bold tracking-tight text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white font-sans"
           >
-            LENIUM<span className="text-cyan-200">.</span>
+            Stream Vy
           </Link>
           <span className="text-xs font-medium uppercase tracking-[0.18em] text-white/55">
             Your screen, your stories

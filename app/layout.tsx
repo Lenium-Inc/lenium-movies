@@ -3,10 +3,23 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: {
-    default: "Lenium — Your screen, your stories",
-    template: "%s — Lenium",
+    default: "Stream Vy — Watch Movies & TV Shows",
+    template: "%s — Stream Vy",
   },
-  description: "A self-hosted home for the films and series you are authorized to stream.",
+  description: "High-end minimalist VOD streaming platform.",
+  metadataBase: new URL("https://streamvy.me"),
+  openGraph: {
+    title: "Stream Vy — Watch Movies & TV Shows",
+    description: "High-end minimalist VOD streaming platform.",
+    url: "https://streamvy.me",
+    siteName: "Stream Vy",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Stream Vy — Watch Movies & TV Shows",
+    description: "High-end minimalist VOD streaming platform",
+  },
 };
 
 export default function RootLayout({

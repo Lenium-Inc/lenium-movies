@@ -266,7 +266,7 @@ def _get_tv_metadata(tmdb_id: int | str, current_season: int = 1) -> tuple[int, 
 # "No 'Access-Control-Allow-Origin' header", which looks like an outage and is
 # only a stale allowlist. Set ALLOWED_ORIGINS in the environment to override.
 _DEFAULT_ALLOWED_ORIGINS = (
-    "https://streamvy.vercel.app,https://vy-virid.vercel.app,"
+    "https://streamvy.me,https://streamvy.vercel.app,https://vy-virid.vercel.app,"
     "http://localhost:5173,http://127.0.0.1:5173,"
     "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5193,http://127.0.0.1:5193"
 )

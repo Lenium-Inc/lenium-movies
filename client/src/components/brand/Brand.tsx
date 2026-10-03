@@ -39,7 +39,7 @@ import { cn } from "@/lib/utils";
  *
  * WORDMARK
  *
- * "Lenium" stays live text in DM Sans — the sans the whole app is set in —
+ * "Stream Vy" stays live text in the UI font — the sans the whole app is set in —
  * rather than being outlined into the SVG. A path-traced wordmark would freeze
  * the letterforms at whatever weight the type was captured in and would then
  * disagree with the running UI, and it would need a new file per size. Live
@@ -153,7 +153,7 @@ export function BrandLockup({
             s.wordmark
           )}
         >
-          Lenium
+          Stream Vy
         </span>
       )}
     </span>

@@ -12,7 +12,7 @@
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
 
   /* ------------------------------------------------------------------------
-     StreamVy palette.
+     Stream Vy palette.
 
      One ground, two lights. `--fs-base` is the deep black-slate every screen
      is painted on; violet and cyan are the only two emitted colours, and they
@@ -429,7 +429,7 @@ button {
   --color-input: rgba(255, 255, 255, 0.1);
   --color-ring: #ffffff;
 
-  /* StreamVy brand tokens. Available as `bg-glow-violet`, `text-glow-cyan`,
+  /* Stream Vy brand tokens. Available as `bg-glow-violet`, `text-glow-cyan`,
      `from-glow-violet` and so on, so the hero, the source selector and the
      watch page all draw the same two lights without repeating a hex. */
   --color-void: #0b0c10;

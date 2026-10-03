@@ -234,7 +234,7 @@ def test_allowlist_matches_the_frontend_domain():
 
     # The current production frontend is present. If the domain moves again and
     # this fails, the fix is to update `_DEFAULT_ALLOWED_ORIGINS` above.
-    assert "https://streamvy.vercel.app" in application._ALLOWED_ORIGINS, (
+    assert "https://streamvy.me" in application._ALLOWED_ORIGINS, (
         "the frontend origin is missing from the CORS allowlist; the deployed "
         f"backend allows {sorted(application._ALLOWED_ORIGINS)}"
     )

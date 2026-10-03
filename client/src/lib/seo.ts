@@ -36,7 +36,7 @@
  * that both the browser and the build can load.
  */
 
-export const SITE_NAME = "Lenium";
+export const SITE_NAME = "Stream Vy";
 export const SITE_TAGLINE = "Your screen, your stories";
 export const SITE_TITLE = `${SITE_NAME} — ${SITE_TAGLINE}`;
 
@@ -45,7 +45,7 @@ export const SITE_TITLE = `${SITE_NAME} — ${SITE_TAGLINE}`;
  * that has nothing better to say.
  */
 export const SITE_DESCRIPTION =
-  "Lenium is a self-hosted home for the films and series you are authorized to stream.";
+  "High-end minimalist VOD streaming platform.";
 
 /**
  * `keywords` is not a ranking signal, and no major engine has read it in over a
