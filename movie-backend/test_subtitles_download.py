@@ -338,16 +338,33 @@ def test_subtitles_route_rejects_truncated_caption_file():
 def test_subtitles_route_honours_allowlist_inside_helper():
     # The helper is the single place the host allowlist is enforced; the route
     # must surface that as a 400 rather than a 502.
+    #
+    # It keys off the exception type, not its wording. The route used to decide
+    # with `"archive.org" in str(error)`, so this test passed only because the
+    # stub happened to use the same phrasing as the helper -- and a rejection
+    # worded differently (a scheme, a port, a credential in the authority) came
+    # back as a 502, which reads as archive.org being down rather than as a
+    # refused request.
     _, client = _client()
+    import app as application
 
     def _rejecting(url, timeout, max_bytes):
-        raise ValueError("URL must be an archive.org download")
-
-    import app as application
+        raise application.catalog_lib.ArchiveUrlRejected(
+            "stream URL must be http or https"
+        )
 
     application.catalog_lib.fetch_bounded_text = _rejecting
     res = client.get("/api/subtitles?url=https://evil.example.com/a.vtt")
     assert res.status_code == 400, res.status_code
+
+    # A plain ValueError is the byte cap, which is an upstream refusal and stays
+    # a 502 -- the two cases are no longer told apart by message text.
+    def _oversized(url, timeout, max_bytes):
+        raise ValueError("file exceeds the maximum subtitle size")
+
+    application.catalog_lib.fetch_bounded_text = _oversized
+    res = client.get("/api/subtitles?url=https://archive.org/download/x/a.vtt")
+    assert res.status_code == 502, res.status_code
 
 
 # --- /api/movies/download ----------------------------------------------------

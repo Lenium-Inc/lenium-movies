@@ -66,6 +66,23 @@ export interface StreamMirror {
   url: string;
 }
 
+/**
+ * One entry of `/api/movies/resolve`'s ordered `providers` array: the failover
+ * chain the resolver walked, winner first.
+ *
+ * The client walks this list itself on a per-candidate timer instead of asking
+ * the server again, so `name` is a label to show, `url` is the thing to load, and
+ * `is_embed` says whether the URL is a frame or a file. The backend also emits
+ * the planned (unprobed) chain this shape when nothing resolved, so an entry
+ * being here never means it was verified -- `available` on the payload is what
+ * says that.
+ */
+export interface StreamProviderCandidate {
+  name: string;
+  url: string;
+  is_embed: boolean;
+}
+
 export interface StreamEpisode {
   season: number;
   number: number;
@@ -102,6 +119,13 @@ export interface StreamMovie {
   episode?: number;
   /** Alternate embed sources returned by `/api/get-stream`. */
   mirrors?: StreamMirror[];
+  /**
+   * The resolver's ordered provider chain (winner first), carried onto the movie
+   * because `resolveStream` returns `{stream, exact}` and the chain is the one
+   * field the page cannot re-derive: the order is the backend's own decision
+   * about what it probed and what survived.
+   */
+  providers?: StreamProviderCandidate[];
   /**
    * The backend's provider chain settled on a third-party iframe rather than a
    * directly playable file. Optional because catalog listings carry no stream at
@@ -468,6 +492,28 @@ function normalizeResolvedMovie(value: unknown): StreamMovie | null {
                 typeof (mirror as StreamMirror).url === "string"
             )
           ),
+        }
+      : {}),
+    // The failover chain, in the backend's own probed order. This normalizer
+    // rebuilds the movie field by field, so a field it forgets to copy vanishes
+    // rather than arriving malformed -- and a dropped chain is exactly what left
+    // the page with nothing to walk, so every candidate had to be guessed.
+    ...(Array.isArray(value.providers) && value.providers.length > 0
+      ? {
+          providers: value.providers
+            .map((entry): StreamProviderCandidate | null => {
+              if (typeof entry !== "object" || entry === null) return null;
+              const record = entry as Record<string, unknown>;
+              if (typeof record.url !== "string" || !record.url) return null;
+              const name =
+                typeof record.name === "string" && record.name.trim()
+                  ? record.name.trim()
+                  : "Alternate source";
+              return { name, url: record.url, is_embed: record.is_embed !== false };
+            })
+            .filter(
+              (entry): entry is StreamProviderCandidate => entry !== null
+            ),
         }
       : {}),
   };

@@ -99,20 +99,129 @@ def probe_stream(url: str, deadline: float | None = None) -> bool:
 
 STREAM_HOST_ALLOWLIST = ("archive.org",)
 
+# Ports a relay request may name. `None` is "whatever the scheme implies";
+# anything else is either a scanner trying to reach something on the same host or
+# a URL that did not come from the resolver, and neither is worth answering.
+_STREAM_ALLOWED_PORTS = (None, 80, 443)
+
+
+class ArchiveUrlRejected(ValueError):
+    """A URL the relay is not allowed to fetch.
+
+    A distinct type rather than a plain `ValueError` because callers used to
+    tell "you asked for something forbidden" (400) from "upstream went wrong"
+    (502) by searching the message text for `archive.org` -- so a rejection
+    worded any other way was reported as a server fault, and the tests that
+    assert a 400 quietly depended on the wording. Subclasses `ValueError`, so
+    every existing `except ValueError` still catches it.
+    """
+
+
+def _is_archive_host(hostname: str | None) -> bool:
+    """True for archive.org itself and any host inside its DNS zone.
+
+    The subdomain form is required, not incidental: `/download/...` answers with
+    a 302 to a storage node (`ia600803.us.archive.org`) and the redirect is
+    followed on every single playback, so rejecting nodes would break streaming
+    entirely. What it does not permit is a host *outside* the zone -- the exact
+    property a single-host string comparison cannot express.
+    """
+    if not hostname:
+        return False
+    host = hostname.lower().rstrip(".")
+    return any(
+        host == allowed or host.endswith("." + allowed)
+        for allowed in STREAM_HOST_ALLOWLIST
+    )
+
+
+# The two shapes a media file is served under: the canonical
+# `/download/{identifier}/{name}` and a storage node's `/{shard}/items/{id}/{name}`.
+# Anchored on the segment structure rather than a prefix alone, so a query that
+# merely *mentions* `/download/` (`/metadata/x?file=/download/y`) is not one.
+_ARCHIVE_MEDIA_PATH = re.compile(r"^/(?:download/|\d+/items/)\S")
+
+
+def validate_archive_url(url: str, *, require_download_path: bool = False) -> str:
+    """Return `url` if it may be relayed, else raise `ValueError`.
+
+    Three separate things are checked, because each has a different failure
+    mode and only checking the first two leaves the relay a one-string bypass
+    away from being open again:
+
+    - **scheme and host.** http/https, no credentials in the authority, and a
+      host inside the allow-listed zone. `parsed.netloc == "archive.org"` used to
+      stand in for this, which silently rejects legitimate node URLs while
+      comparing a string that carries userinfo and port along with the host.
+    - **port.** Only the two default ones, so the relay cannot be pointed at an
+      unrelated service listening on the same box.
+    - **path.** A media-file path when `require_download_path` is set: either
+      `/download/...` (what the resolver produces, via `DOWNLOAD_URL`) or a node's
+      `/NN/items/...`, which is the shape a storage node serves and which a
+      stored URL can already be. Anything else -- Archive's JSON APIs, search
+      endpoints, account pages -- is refused, so the relay cannot be used as a
+      general fetch service for the whole site.
+
+    `require_download_path` is off for redirect hops rather than on, because a
+    node answers from `/NN/items/{id}/{name}` rather than `/download/`, and that
+    hop is where the bytes actually come from on every playback.
+    """
+    try:
+        parsed = urllib.parse.urlparse(url)
+        port = parsed.port
+    except ValueError as error:
+        raise ArchiveUrlRejected(f"malformed URL: {error}") from error
+
+    if parsed.scheme not in ("http", "https"):
+        raise ArchiveUrlRejected("stream URL must be http or https")
+    if parsed.username or parsed.password:
+        raise ArchiveUrlRejected("stream URL must not carry credentials")
+    if port not in _STREAM_ALLOWED_PORTS:
+        raise ArchiveUrlRejected("stream URL must use the default port")
+    if not _is_archive_host(parsed.hostname):
+        raise ArchiveUrlRejected("stream URL must be an archive.org download")
+    if require_download_path and not _is_archive_media_path(parsed.path):
+        raise ArchiveUrlRejected("stream URL must be an archive.org download")
+    return url
+
+
+def _is_archive_media_path(path: str) -> bool:
+    return bool(_ARCHIVE_MEDIA_PATH.match(path))
+
+
+class _ArchiveOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Re-apply the host check to every redirect hop.
+
+    `urllib` follows redirects to *any* host by default, so validating only the
+    URL the caller supplied made the allow-list a check on the first hop and
+    nothing more: one 302 from a permitted host to anywhere on the internet, and
+    the relay is an open proxy again. The check runs here instead of at the call
+    site so it applies to hops the caller never sees.
+    """
+
+    max_redirections = 5
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        validate_archive_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _archive_opener() -> urllib.request.OpenerDirector:
+    return urllib.request.build_opener(_ArchiveOnlyRedirectHandler())
+
 
 def open_archive_stream(url: str, range_header: str | None):
     """Open a bounded, host-allowlisted Archive.org stream request.
 
-    Returns (status, headers, iterator-of-bytes). Only archive.org hosts are
-    permitted so this cannot be abused as a general-purpose proxy."""
-    parsed = urllib.parse.urlparse(url)
-    if parsed.scheme not in ("http", "https") or parsed.netloc not in STREAM_HOST_ALLOWLIST:
-        raise ValueError("stream URL must be an archive.org download")
+    Returns (status, headers, iterator-of-bytes). Only Archive.org download URLs
+    are permitted -- at the first hop and at every redirect after it -- so this
+    cannot be abused as a general-purpose proxy."""
+    validate_archive_url(url, require_download_path=True)
     headers = {"User-Agent": UA}
     if range_header:
         headers["Range"] = range_header
     req = urllib.request.Request(url, headers=headers)
-    response = urllib.request.urlopen(req, timeout=60)
+    response = _archive_opener().open(req, timeout=60)
 
     def chunks(read_size: int = 256 * 1024):
         try:
@@ -146,14 +255,12 @@ def fetch_bounded_text(url: str, timeout: float, max_bytes: int) -> str:
     Kept beside `open_archive_stream` so both routes share one allowlist check
     rather than each restating it.
     """
-    parsed = urllib.parse.urlparse(url)
-    if parsed.scheme not in ("http", "https") or parsed.netloc not in STREAM_HOST_ALLOWLIST:
-        raise ValueError("URL must be an archive.org download")
+    validate_archive_url(url, require_download_path=True)
     req = urllib.request.Request(
         url,
         headers={"User-Agent": UA, "Accept": "text/vtt, text/plain, */*"},
     )
-    with urllib.request.urlopen(req, timeout=timeout) as response:
+    with _archive_opener().open(req, timeout=timeout) as response:
         raw = response.read(max_bytes + 1)
     if len(raw) > max_bytes:
         raise ValueError("file exceeds the maximum subtitle size")

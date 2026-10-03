@@ -9,4 +9,8 @@ export const ENV = {
   forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? "",
   tmdbApiKey: process.env.TMDB_API_KEY ?? "",
   omdbApiKey: process.env.OMDB_API_KEY ?? "",
+  veniceApiKey: process.env.VENICE_API_KEY ?? "",
+  veniceApiBaseUrl:
+    process.env.VENICE_API_BASE_URL ?? "https://api.venice.ai/api/v1",
+  veniceModel: process.env.VENICE_MODEL ?? "zai-org-glm-5-2",
 };

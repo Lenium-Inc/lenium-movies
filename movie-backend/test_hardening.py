@@ -601,6 +601,191 @@ def test_pick_best_docs_passes_title_score_into_the_year_guard():
     )) is True
 
 
+def test_relay_refuses_anything_that_is_not_an_archive_download():
+    """The byte relay takes a URL from its caller, so it has to be the one thing
+    that decides what may be fetched.
+
+    It is an allow-list, not a deny-list, and every part of it is asserted: a
+    caller-controlled `url` is the whole attack surface, and any single missing
+    check (host, credentials, port, path) reopens it.
+    """
+    import catalog_lib
+
+    ok = "https://archive.org/download/public-domain-film/movie.mp4"
+    assert catalog_lib.validate_archive_url(ok, require_download_path=True) == ok
+
+    # A stored node URL is the other shape a real media file is served under, and
+    # the client already treats `*.archive.org` as an Archive URL. Refusing it
+    # would turn a working source into a 400 the first time a scrape captured a
+    # node link instead of the canonical `/download/` one.
+    node = "https://ia600803.us.archive.org/24/items/public-domain-film/movie.mp4"
+    assert catalog_lib.validate_archive_url(node, require_download_path=True) == node
+
+    # Not Archive.org at all: the loopback address, the cloud metadata service,
+    # a private-range host and a lookalike domain.
+    for hostile in (
+        "http://127.0.0.1:5000/api/auth/me",
+        "http://localhost/admin",
+        "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+        "http://10.0.0.5/internal",
+        "http://[::1]/x",
+        "https://archive.org.evil.example/download/x.mp4",
+        "https://evilarchive.org/download/x.mp4",
+        "https://evil.example/?x=archive.org",
+    ):
+        try:
+            catalog_lib.validate_archive_url(hostile, require_download_path=True)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"relay accepted {hostile}")
+
+    # Scheme, credentials and port are checked independently of the host, so a
+    # host that *is* allowed still cannot smuggle any of them through.
+    for hostile in (
+        "file:///etc/passwd",
+        "gopher://archive.org:70/x",
+        "ftp://archive.org/download/x.mp4",
+        "https://user:pass@archive.org/download/x.mp4",
+        "https://archive.org:8443/download/x.mp4",
+        "https://archive.org:notaport/download/x.mp4",
+    ):
+        try:
+            catalog_lib.validate_archive_url(hostile, require_download_path=True)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"relay accepted {hostile}")
+
+    # The path check keeps the relay off Archive's JSON APIs and search
+    # endpoints, which are the non-media things worth stopping.
+    for api_url in (
+        "https://archive.org/advancedsearch.php?q=cinema&output=json",
+        "https://archive.org/metadata/public-domain-film",
+        "https://archive.org/services/loans/loan/?action=media_url",
+        "https://archive.org/account/index.php?settings=1",
+        # A path that only *mentions* the download prefix is not one.
+        "https://archive.org/metadata/x?file=/download/y",
+    ):
+        try:
+            catalog_lib.validate_archive_url(api_url, require_download_path=True)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"relay accepted {api_url}")
+
+
+def test_relay_allowlist_survives_redirects():
+    """Archive answers a download with a 302 to a storage node, so redirects
+    cannot simply be switched off -- and `urllib` follows them to any host, so
+    the allow-list has to be re-applied per hop or it only ever checked the
+    first one.
+
+    Both halves matter: a node URL has to pass (it is where the bytes are), and
+    an off-zone redirect target has to fail (it is the actual bypass).
+    """
+    import urllib.request
+
+    import catalog_lib
+
+    # Real node redirects land on `/NN/items/...`, not `/download/`, which is why
+    # the per-hop check does not demand the download path.
+    for node in (
+        "https://ia600803.us.archive.org/24/items/public-domain-film/movie.mp4",
+        "http://dn790009.ca.archive.org/0/items/x/y.mp4",
+    ):
+        catalog_lib.validate_archive_url(node)
+
+    handler = catalog_lib._ArchiveOnlyRedirectHandler()
+    request = urllib.request.Request("https://archive.org/download/x/y.mp4")
+
+    for hop in (
+        "http://169.254.169.254/latest/meta-data/",
+        "https://metadata.google.internal/computeMetadata/v1/",
+        "https://archive.org.evil.example/download/x.mp4",
+    ):
+        try:
+            handler.redirect_request(request, None, 302, "Found", {}, hop)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"redirect to {hop} was allowed")
+
+    # And a legitimate hop is still followed rather than refused.
+    node = "https://ia600803.us.archive.org/24/items/x/y.mp4"
+    assert handler.redirect_request(
+        request, None, 302, "Found", {}, node
+    ) is not None
+
+
+def test_relay_route_rejects_a_hostile_url_without_fetching_it():
+    """The 400 has to come from validation, before any socket is opened."""
+    _store, client = _fresh_client()
+    import app as application
+
+    # The opener is what actually opens a socket, so exploding it proves the
+    # request never got that far -- stubbing `open_archive_stream` itself would
+    # replace the validation along with the network call and prove nothing.
+    original = application.catalog_lib._archive_opener
+
+    def _explode(*_args, **_kwargs):
+        raise AssertionError("a rejected URL reached the network layer")
+
+    application.catalog_lib._archive_opener = _explode
+    try:
+        for hostile in (
+            "http://127.0.0.1:5000/api/auth/me",
+            "http://169.254.169.254/latest/meta-data/",
+            "https://archive.org/metadata/x",
+        ):
+            res = client.get("/api/movies/stream", query_string={"url": hostile})
+            assert res.status_code == 400, (hostile, res.status_code, res.get_json())
+    finally:
+        application.catalog_lib._archive_opener = original
+
+
+def test_relay_is_not_readable_from_an_arbitrary_origin():
+    """The route used to set `Access-Control-Allow-Origin: *`, which contradicted
+    the allow-list policy every other route follows and made the relay usable
+    from any site on the internet -- including through a victim's browser.
+    """
+    _store, client = _fresh_client()
+    import app as application
+
+    original = application.catalog_lib.open_archive_stream
+
+    def _stub(url, _range):
+        application.catalog_lib.validate_archive_url(url, require_download_path=True)
+        return 200, {"Content-Length": "4", "Content-Type": "video/mp4"}, iter([b"data"])
+
+    application.catalog_lib.open_archive_stream = _stub
+    try:
+        url = "https://archive.org/download/public-domain-film/movie.mp4"
+
+        hostile = client.get(
+            "/api/movies/stream",
+            query_string={"url": url},
+            headers={"Origin": "https://evil.example"},
+        )
+        assert hostile.status_code == 200
+        assert "Access-Control-Allow-Origin" not in hostile.headers, dict(hostile.headers)
+
+        # The frontend's own origins still work, which is what playback needs:
+        # the media element and hls.js send the site's origin.
+        for allowed in ("https://streamvy.me", "https://www.streamvy.me"):
+            ok = client.get(
+                "/api/movies/stream",
+                query_string={"url": url},
+                headers={"Origin": allowed},
+            )
+            assert ok.status_code == 200, (allowed, ok.status_code)
+            assert ok.headers.get("Access-Control-Allow-Origin") == allowed, dict(
+                ok.headers
+            )
+    finally:
+        application.catalog_lib.open_archive_stream = original
+
+
 def main() -> int:
     tests = [value for name, value in sorted(globals().items()) if name.startswith("test_")]
     failures = 0
