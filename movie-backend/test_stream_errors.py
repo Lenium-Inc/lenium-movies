@@ -230,7 +230,27 @@ def test_get_stream_answers_503_only_after_every_provider_failed():
 
     body = _assert_json_error(res, 503)
     assert body.get("available") is False, f"exhaustion did not report available:false: {body!r}"
-    assert body.get("providers") == [], f"exhaustion advertised providers: {body!r}"
+
+    # Exhaustion still advertises the chain, in priority order and in the one
+    # shape every resolver client reads. An empty `providers` here was the old
+    # contract and it was the wrong one: the client walks this list on its own
+    # per-candidate timer, so handing it nothing on a 503 leaves it with no way
+    # to try anything, and no way to tell "no such title" from "every provider
+    # was down at this instant". `available: false` is what says none of it was
+    # verified -- the chain is addressable, not vetted.
+    providers = body.get("providers")
+    assert isinstance(providers, list) and providers, (
+        f"exhaustion advertised no candidates: {body!r}"
+    )
+    assert all({"name", "url", "is_embed"} <= set(entry) for entry in providers), (
+        f"candidate entries are not in the documented shape: {providers!r}"
+    )
+    assert all(entry["is_embed"] for entry in providers), (
+        f"a planned embed candidate claimed to be a file: {providers!r}"
+    )
+    assert [entry["name"] for entry in providers] == [
+        provider.label for provider in app.stream_providers.EMBED_PROVIDERS
+    ], f"exhaustion chain is out of priority order: {providers!r}"
 
 
 def test_get_stream_exhaustion_reports_what_each_provider_did():
