@@ -102,7 +102,9 @@ export default function AuthPage({ mode }: AuthPageProps) {
   const referralCode = useMemo(() => {
     const query = location.split("?")[1] ?? "";
     const match = /[?&]ref=([^&]+)/.exec(query);
-    const value = match?.[1] ? decodeURIComponent(match[1]).trim().toUpperCase() : "";
+    const value = match?.[1]
+      ? decodeURIComponent(match[1]).trim().toUpperCase()
+      : "";
     return /^LM[A-Z0-9]{8}$/.test(value) ? value : null;
   }, [location]);
 
@@ -132,24 +134,43 @@ export default function AuthPage({ mode }: AuthPageProps) {
 
   useEffect(() => {
     let mounted = true;
-    fetchTrending({ time_window: "week", media_type: "movie" })
-      .then((items: StreamMovie[]) => {
-        if (!mounted) return;
-        const withArt = items.filter(i => i.backdrop_url);
-        const pick = withArt[Math.floor(Math.random() * withArt.length)];
-        if (pick?.backdrop_url) {
-          // Re-point the size segment rather than trusting the stored url; the
-          // backend bakes w1280 in, and the old `startsWith("http")` bail-out
-          // meant the ambient backdrop was never actually requested at
-          // `original`.
-          setBackdrop(tmdbImage(pick.backdrop_url, "original"));
-        }
-      })
-      .catch(() => {
-        /* keep the lamp */
-      });
+
+    // Below `sm` the backdrop is never painted (see the render), so on a phone
+    // this is not fetched at all. A media query rather than a width check on
+    // `window.innerWidth`, because the interesting case is the one where it is
+    // wrong -- a phone rotated to landscape, or a desktop window dragged narrow.
+    const wide = window.matchMedia("(min-width: 640px)");
+    if (!wide.matches) return;
+
+    const load = () => {
+      fetchTrending({ time_window: "week", media_type: "movie" })
+        .then((items: StreamMovie[]) => {
+          if (!mounted) return;
+          const withArt = items.filter(i => i.backdrop_url);
+          const pick = withArt[Math.floor(Math.random() * withArt.length)];
+          if (pick?.backdrop_url) {
+            // `w1280`, not `original`. The image sits behind a 22%-opacity blur
+            // across the whole viewport, so the difference between the 1280px
+            // rendition and the ~1920px one is invisible -- but the original is
+            // several hundred kilobytes spent on a login form. Re-point the size
+            // segment rather than trusting the stored url; the backend bakes
+            // w1280 in, so a `startsWith("http")` bail-out would silently pin
+            // whatever it was handed.
+            setBackdrop(tmdbImage(pick.backdrop_url, "w1280"));
+          }
+        })
+        .catch(() => {
+          /* keep the lamp */
+        });
+    };
+
+    load();
+    // A phone rotated into landscape, or a desktop window dragged narrow, is the
+    // case that used to leave a permanently empty booth.
+    wide.addEventListener("change", load);
     return () => {
       mounted = false;
+      wide.removeEventListener("change", load);
     };
   }, []);
 
@@ -247,8 +268,17 @@ export default function AuthPage({ mode }: AuthPageProps) {
   // while staying the faintest thing in the field, which is what a placeholder
   // is supposed to be, and staying well under the 19.9:1 of the value you
   // actually type.
+  //
+  // 16px, not 15px, and not only on mobile. iOS Safari zooms the viewport on
+  // focus for any control whose computed font-size is under 16px, and it does
+  // not zoom back out until something else takes focus — so a 15px field means
+  // every sign-in on a phone ends with the page magnified and the password field
+  // off-screen. There is no font size at which 15px is worth that.
   const fieldWrap = (delay?: string) =>
-    cn("px-3.5 py-2.5 text-[15px] text-white placeholder:text-white/50", delay);
+    cn(
+      "px-3.5 py-3 text-base text-white placeholder:text-white/50 sm:py-2.5 sm:text-[15px]",
+      delay
+    );
 
   const submitLabel = submitting
     ? isSignup
@@ -260,23 +290,47 @@ export default function AuthPage({ mode }: AuthPageProps) {
 
   return (
     <div className="relative min-h-dvh overflow-hidden bg-[var(--booth-void)] text-white">
-      {/* The film on the wall behind the booth, held well back so it reads as
-          atmosphere and never competes with the form. */}
+      {/*
+        The film on the wall behind the booth.
+
+        `sm:` and up only, and that is the whole mobile optimisation. At 22%
+        opacity through `blur-2xl` the image contributes nothing a person can
+        name — but the browser still downloads it, decodes a full-viewport-sized
+        bitmap and then runs a large-radius blur on the CPU on every repaint of
+        the page beneath it. On a mid-range phone that is the most expensive
+        thing on the login screen, spent on an effect nobody would miss, and it
+        competes directly with the form for the frame budget while the keyboard
+        is animating open. Above `sm` there is room for it to read as depth and
+        the machine can afford it, so it stays.
+
+        The fetch side matches: the `useEffect` above checks the same breakpoint
+        before asking for the URL, so a phone never even requests it.
+      */}
       {backdrop ? (
         <img
           src={backdrop}
           alt=""
           aria-hidden
-          className="absolute inset-0 h-full w-full scale-110 object-cover object-center opacity-[0.22] blur-2xl"
+          className="absolute inset-0 hidden h-full w-full scale-110 object-cover object-center opacity-[0.22] blur-2xl sm:block"
         />
       ) : null}
-      {/* The lamp. A cold room with one warm source in it. */}
+      {/*
+        The lamp. A cold room with one warm source in it.
+
+        The base of this gradient is now translucent where it used to be opaque.
+        An opaque `linear-gradient(#0d0d10 -> #08080a)` painted on top of the
+        backdrop above hid it completely — the ambient film had never once been
+        visible, because the layer meant to *tint* it was a lid. The booth's own
+        `--booth-void` background on the wrapper is already the base colour, so
+        alpha here loses nothing and lets the film through at the ~22% it was
+        always meant to sit at.
+      */}
       <div
         aria-hidden
         className="absolute inset-0"
         style={{
           background:
-            "radial-gradient(ellipse 62% 48% at 50% 4%, rgba(255,174,92,0.20), transparent 62%), radial-gradient(ellipse 90% 70% at 50% 106%, rgba(255,231,194,0.07), transparent 60%), linear-gradient(180deg, #0d0d10 0%, #08080a 46%, #08080a 100%)",
+            "radial-gradient(ellipse 62% 48% at 50% 4%, rgba(255,174,92,0.20), transparent 62%), radial-gradient(ellipse 90% 70% at 50% 106%, rgba(255,231,194,0.07), transparent 60%), linear-gradient(180deg, rgba(13,13,16,0.88) 0%, rgba(8,8,10,0.72) 46%, rgba(8,8,10,0.92) 100%)",
         }}
       />
 
@@ -292,13 +346,31 @@ export default function AuthPage({ mode }: AuthPageProps) {
         on a landscape phone. It is robustness rather than a repair — the
         previous fixed-centre wrapper grew to fit its content and did not clip —
         but it is the arrangement that stays correct as this page gets taller.
+
+        The `env(safe-area-inset-*)` padding is the other half of `dvh`. `dvh`
+        tracks the *visual* viewport, which on a notched phone extends under the
+        status bar and the home indicator, so a `min-h-dvh` column centres itself
+        partly underneath both. Adding the insets to the padding is what keeps the
+        submit button clear of the swipe bar and the heading clear of the clock —
+        the two places on this page a thumb never reaches comfortably anyway.
+
+        Below `sm` the vertical padding drops to `py-8`: with the backdrop gone
+        there is less to look at, and every pixel the form gets back is a pixel
+        between the top field and the submit button, which is what decides whether
+        a short phone shows the whole gate at once.
       */}
-      <div className="relative z-10 mx-auto flex min-h-dvh w-full max-w-[30rem] flex-col justify-center px-5 py-12 sm:px-8 sm:py-16">
+      <div
+        className={
+          "relative z-10 mx-auto flex min-h-dvh w-full max-w-[30rem] flex-col " +
+          "justify-center px-5 pt-[max(2rem,env(safe-area-inset-top))] " +
+          "pb-[max(2rem,env(safe-area-inset-bottom))] sm:px-8 sm:py-16"
+        }
+      >
         <div className="my-auto w-full">
           {/* Beat 1 — the brand, the way every product signs its own account
               pages. Non-interactive: the way back out is already the one link
               at the foot of the page, and two ways home is one too many. */}
-          <div className="mb-9 sm:mb-11">
+          <div className="mb-7 sm:mb-11">
             <BrandLockup size="lg" className="text-white" label="Lenium" />
           </div>
 
@@ -310,7 +382,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
             <span aria-hidden>{code}</span>
           </div>
 
-          <header className="mb-8">
+          <header className="mb-6 sm:mb-8">
             <h1 className="font-display text-[2.05rem] leading-[1.12] tracking-[-0.015em] text-white">
               {isSignup ? (
                 <>
@@ -337,8 +409,21 @@ export default function AuthPage({ mode }: AuthPageProps) {
             lit along the top edge, which is the cue that actually reads on a
             surface this dark. The blur keeps the backdrop artwork out of the
             type.
+
+            `backdrop-blur-xl` is `sm:` and up only, for the same reason the
+            film behind it is: there is nothing to blur below that width once the
+            backdrop is gone, and a large-radius backdrop filter over a
+            full-height sheet is one of the more expensive things to ask a phone
+            GPU to repaint while its keyboard is sliding.
           */}
-          <div className="ln-gate relative rounded-2xl border border-white/[0.08] bg-[var(--booth-carbon)]/80 p-6 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05),0_28px_70px_-38px_rgba(0,0,0,0.95)] backdrop-blur-xl sm:p-8">
+          <div
+            className={
+              "ln-gate relative rounded-2xl border border-white/[0.08] " +
+              "bg-[var(--booth-carbon)]/80 p-5 " +
+              "shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05),0_28px_70px_-38px_rgba(0,0,0,0.95)] " +
+              "sm:p-8 sm:backdrop-blur-xl"
+            }
+          >
             <form onSubmit={handleSubmit} noValidate>
               {/*
                 Honeypot: a real label tied to a real input, moved off-screen
@@ -363,7 +448,12 @@ export default function AuthPage({ mode }: AuthPageProps) {
                 />
               </div>
 
-              <div className="space-y-5">
+              {/*
+                `space-y-4` rather than `space-y-5` below `sm`. Vertical rhythm is
+                the one thing a short phone is short of, and the gate has to hold
+                a display-name field as well on the signup path.
+              */}
+              <div className="space-y-4 sm:space-y-5">
                 {isSignup && (
                   <Field
                     id="auth-name"
@@ -466,10 +556,16 @@ export default function AuthPage({ mode }: AuthPageProps) {
                       fieldErrors.password,
                       PASSWORD_HINT
                     )}
-                    className="w-full bg-transparent pr-10 outline-none"
+                    className="w-full bg-transparent pr-11 outline-none"
                   />
                   {/* People mistype passwords; making them verify by eye is the
-                      difference between a form that works and one that doesn't. */}
+                      difference between a form that works and one that doesn't.
+
+                      `p-2.5 sm:p-1.5` — the 16px icon plus 10px of padding is a
+                      36px target, under the 44px a thumb reliably lands on, and
+                      this is the control a mistyped-password user is most likely
+                      to be aiming for one-handed. The field's own height grows to
+                      match below `sm`, so the extra padding costs no layout. */}
                   <button
                     type="button"
                     onClick={() => setShowPassword(v => !v)}
@@ -477,7 +573,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
                       showPassword ? "Hide password" : "Show password"
                     }
                     aria-pressed={showPassword}
-                    className="ln-focus-lamp-tight absolute top-1/2 right-2.5 -translate-y-1/2 rounded-md p-1.5 text-white/40 transition-colors hover:text-[var(--lamp)]"
+                    className="ln-focus-lamp-tight absolute top-1/2 right-2 -translate-y-1/2 rounded-md p-2.5 text-white/40 transition-colors hover:text-[var(--lamp)] sm:right-2.5 sm:p-1.5"
                   >
                     {showPassword ? (
                       <EyeOff className="size-4" aria-hidden />
@@ -526,6 +622,9 @@ export default function AuthPage({ mode }: AuthPageProps) {
                 data-state={submitting ? "running" : "idle"}
                 className={cn(
                   "ln-focus-lamp ln-expose relative mt-6 w-full overflow-hidden rounded-lg",
+                  // 13 rather than 11 below `sm`: this is the tap that ends the
+                  // task, and it should not be the smallest target in the gate.
+                  "min-h-13 sm:min-h-11",
                   "disabled:cursor-progress disabled:opacity-100",
                   done
                     ? "bg-[var(--signal)] text-[var(--signal-ink)] hover:bg-[var(--signal)]"
@@ -534,7 +633,8 @@ export default function AuthPage({ mode }: AuthPageProps) {
                       : "bg-[var(--lamp)] text-[var(--lamp-ink)] hover:bg-[var(--lamp-core)]"
                 )}
               >
-                <span className="relative z-10 text-[14px] font-bold tracking-[0.01em]">
+                {/* 16px below `sm`, for the same reason the fields are. */}
+                <span className="relative z-10 text-base font-bold tracking-[0.01em] sm:text-[14px]">
                   {done ? "You're in" : submitLabel}
                 </span>
               </Button>
@@ -559,7 +659,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
             {/* The way across is separated from the form by a hairline rather
                 than by more air: it is a peer of the form, not a footnote to
                 it, and the rule is cheaper than another 24px of space. */}
-            <div className="mt-7 border-t border-white/[0.07] pt-6">
+            <div className="mt-6 border-t border-white/[0.07] pt-5 sm:mt-7 sm:pt-6">
               <p className="text-center text-[13.5px] text-[var(--booth-dust)]">
                 {isSignup ? "Already have an account?" : "New to Lenium?"}{" "}
                 <Link
@@ -572,9 +672,11 @@ export default function AuthPage({ mode }: AuthPageProps) {
             </div>
           </div>
 
+          {/* `py-2` below `sm` so the link clears the home indicator without
+              adding a whole line of air above it. */}
           <Link
             href="/"
-            className="ln-focus-lamp mt-8 inline-flex items-center gap-1.5 rounded-sm font-tech text-[10.5px] tracking-[0.16em] text-white/50 uppercase transition-colors hover:text-white/85"
+            className="ln-focus-lamp mt-6 inline-flex items-center gap-1.5 rounded-sm py-2 font-tech text-[10.5px] tracking-[0.16em] text-white/50 uppercase transition-colors hover:text-white/85 sm:mt-8 sm:py-0"
           >
             <ArrowLeft className="size-3" aria-hidden />
             Browse instead
