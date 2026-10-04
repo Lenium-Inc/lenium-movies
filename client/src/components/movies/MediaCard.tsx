@@ -3,6 +3,7 @@ import { Play, Star, Film, Tv } from "lucide-react";
 import { Link } from "wouter";
 import type { TrailerInfo } from "@/services/api";
 import { formatRuntime } from "@/lib/format";
+import { resolveTrailer, trailerThumbnail } from "@/lib/tmdbTrailers";
 
 interface MediaCardProps {
   id: string;
@@ -27,20 +28,31 @@ function genresText(genres: readonly string[] | string | null | undefined) {
 export const TrailerEmbed = React.forwardRef<
   HTMLIFrameElement,
   TrailerInfo & { onLoad?: () => void }
->(({ provider, id, onLoad }, ref) => {
-  const src =
-    provider === "dailymotion"
-      ? `https://www.dailymotion.com/embed/video/${id}?autoplay=1&muted=1&loop=1&controls=0`
-      : `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&mute=1&controls=0&loop=1&playlist=${id}&playsinline=1&iv_load_policy=3&modestbranding=1&rel=0`;
+>(({ provider, id, title, onLoad }, ref) => {
+  // The player URL is built by the one resolver, not here. `loop` is on because
+  // this is a hover preview; `controls` is off because the poster underneath is
+  // the interactive layer and a provider's control bar would fight it.
+  const resolved = resolveTrailer(
+    { provider, id, title },
+    { loop: true, controls: false },
+  );
+  const poster = trailerThumbnail({ provider, id });
+
+  // No playable site for this pointer. The caller keeps showing the poster.
+  if (!resolved) return null;
+
   return (
-    <div className="pointer-events-auto absolute left-1/2 top-1/2 aspect-video w-[266%] -translate-x-1/2 -translate-y-1/2">
+    <div
+      className="pointer-events-auto absolute left-1/2 top-1/2 aspect-video w-[266%] -translate-x-1/2 -translate-y-1/2 bg-black bg-cover bg-center"
+      style={poster ? { backgroundImage: `url("${poster}")` } : undefined}
+    >
       <iframe
         ref={ref}
-        src={src}
-        title="Preview trailer"
+        src={resolved.src}
+        title={resolved.label}
         allow="autoplay; encrypted-media"
         sandbox="allow-scripts allow-same-origin allow-forms"
-        // See Spotlight: "no-referrer" is what makes YouTube return 153.
+        // See Spotlight: "no-referrer" is what makes the host answer 153.
         referrerPolicy="strict-origin-when-cross-origin"
         tabIndex={-1}
         aria-hidden

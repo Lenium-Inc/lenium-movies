@@ -36,6 +36,7 @@ import { EpisodeMatrix } from "@/components/movies/EpisodeMatrix";
 import { useEmbedFailure } from "@/hooks/useEmbedFailure";
 import { cancelInFlightPrefetch, prefetchForOpen } from "@/services/prefetch";
 import { tmdbImage, type TmdbImageSize } from "@/lib/tmdbImages";
+import { resolveTrailer } from "@/lib/tmdbTrailers";
 import {
   getProgress,
   progressForTitle,
@@ -142,6 +143,12 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
   const { failed: trailerFailed, frameRef: trailerFrameRef } = useEmbedFailure(
     trailer ? `${trailer.provider}:${trailer.id}` : null
   );
+
+  // Built by the one resolver rather than assembled here. This dialog is a
+  // destination the viewer opened deliberately, so it gets the provider's own
+  // controls -- unlike the hover preview on a card, where they would fight the
+  // poster for the pointer.
+  const trailerSrc = resolveTrailer(trailer, { loop: false, controls: true });
 
   /**
    * Build the playable stream for the selected title/episode and open the player.
@@ -417,9 +424,9 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
       >
         <div className="relative aspect-video w-full bg-[var(--sv-base-deep)]">
           {/*
-            Backdrop first, trailer over it. Previously these were exclusive
-            branches, so an embed that failed to play left YouTube's error card
-            filling this box with nothing behind it. Keeping the artwork
+            Backdrop first, trailer over it. These used to be exclusive
+            branches, so an embed that failed to play left the provider's error
+            card filling this box with nothing behind it. Keeping the artwork
             mounted means dropping a failed iframe is all it takes to recover.
           */}
           {movie.backdrop ? (
@@ -433,23 +440,17 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
           ) : (
             <div className="absolute inset-0 bg-gradient-to-br from-[#1B1B20] to-[#0a0a0c]" />
           )}
-          {trailer && !trailerFailed ? (
+          {trailerSrc && !trailerFailed ? (
             <iframe
               key="trailer-embed"
               ref={trailerFrameRef}
-              src={
-                trailer.provider === "youtube"
-                  ? // `enablejsapi=1` makes an unplayable video reportable; see
-                    // `useEmbedFailure`.
-                    `https://www.youtube-nocookie.com/embed/${trailer.id}?autoplay=1&mute=1&controls=0&loop=1&playlist=${trailer.id}&playsinline=1&modestbranding=1&rel=0&enablejsapi=1`
-                  : `https://www.dailymotion.com/embed/video/${trailer.id}?autoplay=1&muted=1&loop=1&controls=0&enablejsapi=1`
-              }
+              src={trailerSrc.src}
               className="pointer-events-none absolute inset-0 h-full w-full object-cover"
               allow="autoplay; encrypted-media"
               sandbox="allow-scripts allow-same-origin allow-forms"
-              // See Spotlight: "no-referrer" is what makes YouTube return 153.
+              // See Spotlight: "no-referrer" is what makes the host answer 153.
               referrerPolicy="strict-origin-when-cross-origin"
-              title={`${movie.title} trailer`}
+              title={`${movie.title} — ${trailerSrc.label}`}
             />
           ) : null}
           <button
