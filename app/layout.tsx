@@ -1,24 +1,28 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { SITE_DESCRIPTION, SITE_NAME, SITE_URL } from "@/lib/site";
 
 export const metadata: Metadata = {
   title: {
-    default: "Stream Vy — Watch Movies & TV Shows",
-    template: "%s — Stream Vy",
+    default: `${SITE_NAME} — Watch Movies & TV Shows`,
+    template: `%s — ${SITE_NAME}`,
   },
-  description: "High-end minimalist VOD streaming platform.",
-  metadataBase: new URL("https://streamvy.me"),
+  description: SITE_DESCRIPTION,
+  // Shared with sitemap.ts and robots.ts, so the canonical origin the layout
+  // advertises is the same one those two emit.
+  metadataBase: new URL(SITE_URL),
+  alternates: { canonical: "/" },
   openGraph: {
-    title: "Stream Vy — Watch Movies & TV Shows",
-    description: "High-end minimalist VOD streaming platform.",
-    url: "https://streamvy.me",
-    siteName: "Stream Vy",
+    title: `${SITE_NAME} — Watch Movies & TV Shows`,
+    description: SITE_DESCRIPTION,
+    url: SITE_URL,
+    siteName: SITE_NAME,
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Stream Vy — Watch Movies & TV Shows",
-    description: "High-end minimalist VOD streaming platform",
+    title: `${SITE_NAME} — Watch Movies & TV Shows`,
+    description: SITE_DESCRIPTION,
   },
 };
 
