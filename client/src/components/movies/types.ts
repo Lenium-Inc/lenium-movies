@@ -50,6 +50,15 @@ export type Movie = {
   episodes_per_season?: number;
   /** Backdrop URL from TMDB (original size) */
   backdrop_url?: string;
+  /**
+   * Transparent title logo (PNG/SVG) from TMDB's `images` sub-resource.
+   *
+   * Optional and usually absent -- TMDB only has a logo for a minority of
+   * titles. Where it exists it replaces the `h1` in the hero, because a title
+   * rendered in its own lettering is worth more than one set in a substitute
+   * face. Callers must fall back to the text title rather than render a gap.
+   */
+  logo_url?: string | null;
   /** Overview from TMDB */
   overview?: string;
   /** Popularity score from TMDB */
