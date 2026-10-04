@@ -213,9 +213,42 @@ export function renderRobots(
  */
 export const MAX_SITEMAP_URLS = 50_000;
 
+/**
+ * Per-route crawl hints.
+ *
+ * `priority` is how a crawler should spend a finite per-domain crawl budget when
+ * it cannot get to everything, so it is a statement about *this site's* shape
+ * rather than about the pages in isolation. The homepage is the only page whose
+ * absence would mean the site has no front door; the legal pages exist to be
+ * reachable, not to compete for attention.
+ *
+ * `changefreq` is a hint, not a promise -- Google largely ignores it now -- so it
+ * is only ever set to the truth. Nothing here is written `hourly`, because
+ * nothing on this site changes hourly.
+ */
+export const ROUTE_CRAWL_HINTS: Record<
+  string,
+  { changefreq: "daily" | "weekly" | "monthly" | "yearly"; priority: number }
+> = {
+  "/": { changefreq: "daily", priority: 1 },
+  "/terms": { changefreq: "yearly", priority: 0.3 },
+  "/privacy": { changefreq: "yearly", priority: 0.3 },
+  "/dmca": { changefreq: "yearly", priority: 0.3 },
+};
+
+/** Titles change when the catalogue gains one, so `weekly` is honest for them. */
+const WATCH_HINT = { changefreq: "weekly" as const, priority: 0.8 };
+
 /** One `<url>` entry for a title page. */
 function watchEntry(tmdbId: string, origin: string): string {
-  return `  <url>\n    <loc>${escapeXml(`${origin}/watch/${tmdbId}`)}</loc>\n  </url>`;
+  const loc = escapeXml(`${origin}/watch/${tmdbId}`);
+  return [
+    "  <url>",
+    `    <loc>${loc}</loc>`,
+    `    <changefreq>${WATCH_HINT.changefreq}</changefreq>`,
+    `    <priority>${WATCH_HINT.priority}</priority>`,
+    "  </url>",
+  ].join("\n");
 }
 
 export type Fetcher = (url: string) => Promise<unknown>;
@@ -349,9 +382,20 @@ export function renderCatalogueSitemap(
   const entries = INDEXABLE_PATHS.map(path => {
     const loc = `${origin}${path === "/" ? "/" : path}`;
     const lastmod = lastmodByPath[path];
-    return `  <url>\n    <loc>${escapeXml(loc)}</loc>${
-      lastmod ? `\n    <lastmod>${lastmod}</lastmod>` : ""
-    }\n  </url>`;
+    // A path with no entry here is still listed, just without hints -- which
+    // beats dropping it, since an unlisted page is invisible and an unhinted one
+    // is merely unprioritised.
+    const hint = ROUTE_CRAWL_HINTS[path];
+    return [
+      "  <url>",
+      `    <loc>${escapeXml(loc)}</loc>`,
+      lastmod ? `    <lastmod>${lastmod}</lastmod>` : "",
+      hint ? `    <changefreq>${hint.changefreq}</changefreq>` : "",
+      hint ? `    <priority>${hint.priority}</priority>` : "",
+      "  </url>",
+    ]
+      .filter(Boolean)
+      .join("\n");
   });
   entries.push(...ids.map(id => watchEntry(id, origin)));
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${entries.join(
