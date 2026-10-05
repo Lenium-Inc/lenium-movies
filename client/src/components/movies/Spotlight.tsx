@@ -484,7 +484,7 @@ export function Spotlight({
                       type="button"
                       onClick={() => handlePlay(current)}
                       className={
-                        "inline-flex min-h-11 items-center gap-2 rounded-lg px-6 " +
+                        "inline-flex min-h-11 items-center gap-2 rounded-lg bg-white px-6 " +
                         "text-sm font-bold text-neutral-900 transition " +
                         "hover:bg-white/85 focus-visible:outline focus-visible:outline-2 " +
                         "focus-visible:outline-offset-2 focus-visible:outline-white"
