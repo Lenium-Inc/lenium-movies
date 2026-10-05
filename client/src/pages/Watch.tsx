@@ -236,6 +236,29 @@ function classifyError(error: unknown) {
   };
 }
 
+/**
+ * Whether a failed response is worth asking again.
+ *
+ * The backend is hosted on Render's free tier, which spins the instance down
+ * after a period of inactivity and takes tens of seconds to wake. A request that
+ * lands during that window comes back as a gateway error or a 404 from the
+ * platform's edge *before* Flask is serving at all -- which is a completely
+ * different thing from Flask answering 404 because the title genuinely is not in
+ * the catalogue, and far more common.
+ *
+ * Left unhandled, one of those wake-up failures reads as "no such movie": the
+ * page renders no title, stays noindex, shows no error and offers no retry, and
+ * the only way out is a manual reload. Retrying is what distinguishes them, so a
+ * 404 gets the same single retry as a 5xx. A 400 is not retried: Flask answered,
+ * and it answered that the request was wrong.
+ */
+function isWorthRetrying(status: number): boolean {
+  return status === 404 || status === 408 || status === 429 || status >= 500;
+}
+
+/** How long to wait before the one retry. */
+const RETRY_DELAY_MS = 1200;
+
 // Fetch full movie details from TMDB via backend resolve endpoint
 async function fetchMovieDetails(tmdbId: string): Promise<Movie | null> {
   // Bounded and abortable. This pointed at the resolve endpoint, which can
@@ -245,13 +268,28 @@ async function fetchMovieDetails(tmdbId: string): Promise<Movie | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), MOVIE_RESOLVE_TIMEOUT_MS);
   try {
-    const response = await fetch(apiUrl("/api/movies/resolve"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: tmdbId }),
-      signal: controller.signal,
-    });
-    if (!response.ok) return null;
+    /*
+     * Two attempts, not a loop: one retry covers the cold-start case, which is a
+     * single wake, and stops short of hammering an endpoint that is already
+     * scrape-bound. The delay is not a retry budget for the server's sake -- the
+     * sleep ends up bounded by the same `MOVIE_RESOLVE_TIMEOUT_MS` abort as
+     * everything else, so a backend that never wakes still fails on time.
+     */
+    let response: Response | undefined;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      response = await fetch(apiUrl("/api/movies/resolve"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: tmdbId }),
+        signal: controller.signal,
+      });
+      if (response.ok || !isWorthRetrying(response.status)) break;
+      if (attempt === 0) {
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
+      }
+    }
+
+    if (!response?.ok) return null;
     const data = await response.json();
     if (!data.movie) return null;
 
