@@ -19,7 +19,10 @@ import { Top10Row } from "@/components/movies/Top10Row";
 import { useEpisodeResume, useNewEpisodes } from "@/hooks/useNewEpisodes";
 import { buildWatchPath } from "@/lib/watchRoute";
 import { MovieRow } from "@/components/movies/MovieRow";
-import { SkeletonMovieGrid } from "@/components/movies/SkeletonMovieCard";
+import {
+  SkeletonEpisodeShelf,
+  SkeletonMovieGrid,
+} from "@/components/movies/SkeletonMovieCard";
 import { InfiniteMovieGrid } from "@/components/movies/InfiniteMovieGrid";
 import { DiscoverDropdown } from "@/components/DiscoverDropdown";
 import { TopProgressBar } from "@/components/ui/TopProgressBar";
@@ -185,9 +188,8 @@ export default function Home() {
           <div className="relative">
             <Spotlight
               items={heroItems}
-              savedIds={savedIds}
-              onSave={toggleSave}
               onActiveChange={setHeroActive}
+              onMoreInfo={setSelected}
             />
           </div>
         ) : null}
@@ -341,46 +343,68 @@ export default function Home() {
                     page for what you are already following. Columns come from
                     different shows, so nothing is repeated within the shelf.
                     */}
-                    {isHomeView && episodeColumns.length ? (
-                      <section className="mb-8">
-                        <h2 className="mb-3 px-1 text-lg font-semibold text-white">
-                          New Episodes
-                        </h2>
-                        <RowScroller label="New Episodes">
-                          {episodeColumns.map(column => (
-                            <div key={column.showId} className="w-64 shrink-0">
-                              <h3 className="mb-2 line-clamp-1 text-xs font-semibold text-zinc-400">
-                                {column.showName}
-                              </h3>
-                              <div className="flex flex-col gap-3">
-                                {column.items.map(item => (
-                                  <EpisodeCard
-                                    key={`${item.showId}-${item.episode.season}-${item.episode.number}`}
-                                    episode={item.episode}
-                                    showName={item.showName}
-                                    resume={item.resume}
-                                    onPlay={() => {
-                                      // Same route contract as every other TV
-                                      // link on the site: the episode travels in
-                                      // the query string, never in the path
-                                      // segment.
-                                      window.location.href = buildWatchPath(
-                                        item.showId,
-                                        {
-                                          mediaType: "tv",
-                                          season: item.episode.season,
-                                          episode: item.episode.number ?? 1,
-                                        }
-                                      );
-                                    }}
-                                  />
-                                ))}
+                    {isHomeView &&
+                      (episodeColumns.length ? (
+                        <section className="mb-8">
+                          <h2 className="mb-3 px-1 text-lg font-semibold text-white">
+                            New Episodes
+                          </h2>
+                          <RowScroller label="New Episodes">
+                            {episodeColumns.map(column => (
+                              <div
+                                key={column.showId}
+                                className="w-64 shrink-0"
+                              >
+                                <h3 className="mb-2 line-clamp-1 text-xs font-semibold text-zinc-400">
+                                  {column.showName}
+                                </h3>
+                                <div className="flex flex-col gap-3">
+                                  {column.items.map(item => (
+                                    <EpisodeCard
+                                      key={`${item.showId}-${item.episode.season}-${item.episode.number}`}
+                                      episode={item.episode}
+                                      showName={item.showName}
+                                      resume={item.resume}
+                                      onPlay={() => {
+                                        // Same route contract as every other TV
+                                        // link on the site: the episode travels in
+                                        // the query string, never in the path
+                                        // segment.
+                                        window.location.href = buildWatchPath(
+                                          item.showId,
+                                          {
+                                            mediaType: "tv",
+                                            season: item.episode.season,
+                                            episode: item.episode.number ?? 1,
+                                          }
+                                        );
+                                      }}
+                                    />
+                                  ))}
+                                </div>
                               </div>
-                            </div>
-                          ))}
-                        </RowScroller>
-                      </section>
-                    ) : null}
+                            ))}
+                          </RowScroller>
+                        </section>
+                      ) : /*
+                         A loading placeholder rather than nothing. This shelf used
+                         to render only once its columns existed, so for the length
+                         of the request the page appeared to have no such
+                         category -- and then grew one underneath the viewer,
+                         pushing every row below it down. The heading is rendered
+                         too, for the same reason: a category that arrives with its
+                         own title reads as loaded, where a block of shimmer
+                         appearing from nowhere reads as a glitch.
+                       */ loading ? (
+                        <section className="mb-8" aria-busy="true">
+                          <h2 className="mb-3 px-1 text-lg font-semibold text-white">
+                            New Episodes
+                          </h2>
+                          <RowScroller label="New Episodes">
+                            <SkeletonEpisodeShelf />
+                          </RowScroller>
+                        </section>
+                      ) : null)}
                     {rows.map((row, index) =>
                       row.kind === "top10" ? (
                         <Top10Row

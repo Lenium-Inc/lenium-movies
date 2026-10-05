@@ -112,6 +112,10 @@ function params(site: TrailerSite, id: string, opts: PreviewOptions): string {
       // keeps the iframe out of the page's viewability metrics. `rel=0` drops
       // the end-screen suggestions. `playsinline` stops iOS from hijacking the
       // card into fullscreen on autoplay.
+      //
+      // `enablejsapi=1` is what makes the hero trailer controllable by
+      // `postMessage` without loading the IFrame API script -- see
+      // `useTrailerPlayback`. It is required, not optional, for that path.
       const query = new URLSearchParams({
         autoplay: "1",
         mute: "1",
@@ -123,6 +127,12 @@ function params(site: TrailerSite, id: string, opts: PreviewOptions): string {
         modestbranding: "1",
         rel: "0",
         enablejsapi: "1",
+        // Retained because the hero spec calls for it. YouTube deprecated
+        // `showinfo` years ago and ignores it -- the title overlay it once
+        // suppressed is now cropped out with `scale-125` instead, which is the
+        // only thing that actually removes it. Kept as a defence in depth for
+        // any embed that still honours it.
+        showinfo: "0",
       });
       if (origin) query.set("origin", origin);
       return query.toString();

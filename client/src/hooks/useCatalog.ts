@@ -203,6 +203,67 @@ interface SearchCacheEntry {
 
 const SEARCH_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
+/**
+ * Genre shelves, and the genre spellings each one accepts.
+ *
+ * Matched case-insensitively against a set rather than by string equality because
+ * the catalogue carries TMDB's own labels, which do not match the filter options
+ * above exactly: `Sci-fi` there, `Science Fiction` from TMDB. A shelf that only
+ * recognised one spelling would silently show nothing, and a shelf showing
+ * nothing looks like a broken feature rather than a mismatch.
+ *
+ * `aliases` is the union of every spelling seen, so a shelf keeps working when
+ * the upstream label changes. This is a name-based match and nothing more: it
+ * cannot tell an anime series from a Western animated film, so "Anime & Donghua"
+ * is filtered further by `animeKinds` below rather than being trusted to
+ * "Animation" alone.
+ */
+export const GENRE_SHELVES = [
+  {
+    title: "Action & Adventure",
+    aliases: ["action", "adventure", "war", "western"],
+  },
+  {
+    title: "Sci-Fi & Fantasy",
+    aliases: ["sci-fi", "science fiction", "scifi", "fantasy"],
+  },
+  {
+    title: "Anime & Donghua Highlights",
+    aliases: ["anime", "donghua", "animation"],
+    // Animation is a genre; "anime" is a format. TMDB tags a few donghua and a
+    // large number of theatrical animation with the same word, so the format
+    // words are preferred when present and the genre is only the fallback.
+    formatAliases: ["anime", "donghua"],
+  },
+] as const;
+
+/** Below this a shelf is omitted rather than padded with weak matches. */
+const MIN_SHELF_ITEMS = 8;
+
+/** The genre labels a movie carries, lowercased, from either field. */
+function genreKeys(movie: Movie): string[] {
+  const list = movie.genres?.length ? movie.genres : movie.genre;
+  return (list ?? []).map(value => value.toLowerCase().trim());
+}
+
+/**
+ * Whether a title belongs on one of the {@link GENRE_SHELVES}.
+ *
+ * Format shelves (`formatAliases`) need an exact genre-label hit, because
+ * "Animation" is a genre tag shared by works that are not anime in any sense
+ * a viewer would recognise. Everything else is an ordinary genre intersection.
+ */
+export function matchesGenreShelf(
+  movie: Movie,
+  shelf: (typeof GENRE_SHELVES)[number]
+): boolean {
+  const keys = genreKeys(movie);
+  if ("formatAliases" in shelf && shelf.formatAliases) {
+    return shelf.formatAliases.some(alias => keys.includes(alias));
+  }
+  return shelf.aliases.some(alias => keys.includes(alias));
+}
+
 export function useCatalog(): UseCatalog {
   // The server is the source of truth for taste; the session cache below stays
   // so a click re-ranks the visible grid immediately instead of after a
@@ -515,9 +576,7 @@ export function useCatalog(): UseCatalog {
       case "new":
         return [{ title: "Recently Added", items: byYearDesc.slice(0, cap) }];
       case "popular":
-        return [
-          { title: "Popular on Lenium", items: filtered.slice(0, cap) },
-        ];
+        return [{ title: "Popular on Lenium", items: filtered.slice(0, cap) }];
       case "trending":
         return [{ title: "Trending Now", items: filtered.slice(0, cap) }];
       case "tv":
@@ -533,8 +592,20 @@ export function useCatalog(): UseCatalog {
         /*
          * The home page is artwork, in this order and nothing in front of it:
          * pick up where you left off, then something to start tonight, then
-         * something to commit to a series of. "Recently Added" used to sit
-         * between the last two, which is the one shelf nobody browses by.
+         * something to commit to a series of, then the shelves someone browses by
+         * mood. "Recently Added" used to sit between the first two, which is the
+         * one shelf nobody browses by, so it goes last where it can still be
+         * scrolled to.
+         *
+         * Everything below pushes through one `add` closure, which is what makes
+         * the no-repeat guarantee hold. The shelves used to be disjoint by
+         * construction -- partitioned by media type, so they could not name the
+         * same title. Genre shelves overlap each other and overlap "Trending
+         * Movies" by nature, and a poster repeated in four rows reads as four
+         * titles when it is one, so `seen` is now explicit rather than implied by
+         * how the rows happen to be partitioned. It also means the *order* of
+         * the shelves decides which one keeps a contested title, which is why
+         * the ranked rows are pushed first.
          */
         const cap2 = cap;
         // Every catalog item is typed on the way in, so this partition is
@@ -542,16 +613,37 @@ export function useCatalog(): UseCatalog {
         const movies = filtered.filter(movie => movie.mediaType !== "tv");
         const series = filtered.filter(movie => movie.mediaType === "tv");
         const out: CatalogRows[] = [];
+
+        const seen = new Set<string>();
+        /**
+         * Push a shelf, dropping anything an earlier shelf already claimed.
+         *
+         * Returns without pushing when too few survive the dedupe. This is the
+         * rule the file already followed for "For You" and "Top 10" -- an empty
+         * or near-empty row reads as a broken feature, so it is omitted rather
+         * than padded with titles that did not qualify.
+         */
+        const add = (
+          title: string,
+          items: Movie[],
+          kind?: CatalogRows["kind"],
+          minimum = MIN_SHELF_ITEMS
+        ) => {
+          const fresh = items.filter(movie => {
+            const key = movie.providerId || String(movie.id);
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+          if (fresh.length >= Math.min(minimum, items.length)) {
+            out.push({ title, items: fresh, ...(kind ? { kind } : {}) });
+          }
+        };
+
         if (continueItems.length) {
-          out.push({ title: "Continue Watching", items: continueItems });
+          add("Continue Watching", continueItems, undefined, 1);
         }
-        out.push({
-          title: "Trending Movies",
-          items: movies.slice(0, cap),
-          // Rated-first cards, because this shelf is ordered by what people are
-          // watching and the rating is the only quality signal on a tile.
-          kind: "score",
-        });
+        add("Trending Movies", movies.slice(0, cap), "score");
 
         /*
          * Top 10, ranked rather than sliced.
@@ -567,9 +659,6 @@ export function useCatalog(): UseCatalog {
          * this data: it can rank by reception, and it cannot claim to rank by
          * significance.
          */
-        const onOtherShelves = new Set(
-          out.flatMap(row => row.items.map(movie => movie.providerId))
-        );
         const ranked = movies
           .filter(
             movie =>
@@ -582,21 +671,37 @@ export function useCatalog(): UseCatalog {
               (b.score ?? 0) - (a.score ?? 0) ||
               (b.popularity ?? 0) - (a.popularity ?? 0)
           )
-          .filter(movie => !onOtherShelves.has(movie.providerId))
           .slice(0, TOP_ROW_SIZE);
         // A chart with three entries is a broken chart, so the row is omitted
         // rather than topped up with titles that did not qualify.
-        if (ranked.length >= Math.min(6, movies.length)) {
-          out.push({ title: "Top 10 Rated", items: ranked, kind: "top10" });
+        add("Top 10 Rated", ranked, "top10", 6);
+
+        add("Popular Series", series.slice(0, cap));
+
+        /*
+         * Genre shelves, ranked by reception before they are cut, because a
+         * genre match alone is a weak ordering: it returns "Action" sorted
+         * alphabetically, which is not a recommendation. Taking the best-rated
+         * slice of each genre makes the shelf answer "what action is worth
+         * watching", which is the question someone opening it actually has.
+         */
+        const byReception = (a: Movie, b: Movie) =>
+          (b.score ?? 0) - (a.score ?? 0) ||
+          (b.popularity ?? 0) - (a.popularity ?? 0);
+
+        for (const shelf of GENRE_SHELVES) {
+          const matches = [...filtered]
+            .filter(movie => matchesGenreShelf(movie, shelf))
+            .sort(byReception);
+          add(shelf.title, matches.slice(0, cap2));
         }
 
-        // No cross-shelf dedupe is needed below this point: the rows are
-        // partitioned by media type, so they cannot name the same title.
-        out.push({ title: "Popular Series", items: series.slice(0, cap) });
+        // Newest last, as the fallback for anything the shelves above skipped.
+        add("Recently Added", byYearDesc.slice(0, cap2));
+
         // Last, and only when the server actually ranked it. An empty "For You"
         // row reads as a broken feature, so it is omitted rather than padded.
-        if (forYou)
-          out.push({ title: "For You", items: forYou.slice(0, cap2) });
+        if (forYou) add("For You", forYou.slice(0, cap2));
         return out;
       }
     }

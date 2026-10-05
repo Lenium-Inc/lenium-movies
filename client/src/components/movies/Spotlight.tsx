@@ -1,13 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Check,
   ChevronLeft,
   ChevronRight,
   Info,
   Link2,
-  Pause,
   Play,
-  Plus,
   Star,
 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
@@ -17,20 +14,28 @@ import type { Movie } from "./types";
 import { formatRuntime } from "@/lib/format";
 import { tmdbImage } from "@/lib/tmdbImages";
 import { absoluteUrl } from "@/lib/siteUrl";
+import { resolveTrailer } from "@/lib/tmdbTrailers";
+import { useTrailerPlayback } from "@/hooks/useTrailerPlayback";
+import { fetchTrailerByTmdbId, type TrailerInfo } from "@/services/api";
 
 export interface SpotlightProps {
   items: readonly Movie[];
-  savedIds?: ReadonlyArray<Movie["id"]>;
-  onSave?: (movie: Movie) => void;
   rotateSeconds?: number;
   /** Called whenever the active featured title changes (for page-level ambient). */
   onActiveChange?: (movie: Movie) => void;
+  /**
+   * Opens details for a title.
+   *
+   * This used to navigate to `/watch/{id}`, which was wrong twice over: it
+   * started playback when the viewer asked for information, and it took the
+   * viewer off the home page to get it. The hero now only reports the intent
+   * and the page decides what details means, so the same button can open a
+   * panel here and navigate on the watch page later.
+   */
+  onMoreInfo?: (movie: Movie) => void;
 }
 
 const EASE = [0.32, 0.72, 0, 1] as const;
-
-/** How many slides the dot strip is willing to show before it collapses to a count. */
-const MAX_DOTS = 10;
 
 /**
  * A TMDB backdrop at `original` is a real ~1920px file, which is what covers a
@@ -96,10 +101,9 @@ const BADGE =
  */
 export function Spotlight({
   items,
-  savedIds = [],
-  onSave,
   rotateSeconds = 8,
   onActiveChange,
+  onMoreInfo,
 }: SpotlightProps) {
   const [, navigate] = useLocation();
   const count = items.length;
@@ -124,8 +128,70 @@ export function Spotlight({
   }, [count, paused, rotateSeconds, index]);
 
   const current: Movie | undefined = count > 0 ? items[index] : undefined;
-  const saved = current ? savedIds.includes(current.id) : false;
   const art = backdropUrl(current?.backdrop ?? current?.backdrop_url);
+
+  /*
+   * Trailer, on click only.
+   *
+   * Nothing is fetched until the viewer asks for it. The obvious alternative --
+   * fetch every hero title's trailer up front and play the lot as the carousel
+   * rotates -- costs one request per slide every eight seconds and, worse, makes
+   * the first impression of the page a video that nobody asked to watch. So the
+   * frame stays unmounted until a click, and `activated` gates it.
+   *
+   * `null` while a title has no trailer is the normal case, not an error: most
+   * TMDB titles have no playable official trailer, and the artwork behind is a
+   * perfectly good hero. There is no toast and no error state, because the
+   * spec explicitly forbids telling the viewer anything about it.
+   */
+  const [trailerFor, setTrailerFor] = useState<TrailerInfo | null>(null);
+  const [trailerForId, setTrailerForId] = useState<Movie["id"] | null>(null);
+  const [lookingUp, setLookingUp] = useState(false);
+
+  // Drop a trailer that belongs to a title we have since rotated away from.
+  useEffect(() => {
+    setTrailerForId(null);
+    setTrailerFor(null);
+    setLookingUp(false);
+  }, [current?.id]);
+
+  const startTrailer = useCallback(
+    (movie: Movie) => {
+      if (lookingUp || trailerForId) return;
+      const tmdbId = movie.providerId;
+      if (!tmdbId) return;
+      setLookingUp(true);
+      void fetchTrailerByTmdbId(
+        tmdbId,
+        movie.mediaType === "tv" ? "tv" : "movie"
+      )
+        .then(info => {
+          if (info) {
+            setTrailerFor(info);
+            setTrailerForId(movie.id);
+          }
+        })
+        .catch(() => {
+          // Swallowed on purpose. The hero has nothing to fall back to other
+          // than the artwork it is already showing, and announcing a missing
+          // trailer would be noise.
+        })
+        .finally(() => setLookingUp(false));
+    },
+    [lookingUp, trailerForId]
+  );
+
+  const resolvedTrailer = useMemo(
+    () => resolveTrailer(trailerFor, { loop: false, controls: false }),
+    [trailerFor]
+  );
+  const playback = useTrailerPlayback(resolvedTrailer?.site ?? null);
+
+  // A paused-on-hold carousel should not rotate away the trailer mid-watch, so
+  // engaging one also halts the rotation.
+  useEffect(() => {
+    if (playback.engaged) setPaused(true);
+  }, [playback.engaged]);
   const titleLogoUrl =
     current && failedLogo !== current.id ? logoUrl(current) : null;
 
@@ -188,8 +254,6 @@ export function Spotlight({
     }
   };
 
-  const dots = count <= MAX_DOTS;
-
   return (
     <section
       ref={rootRef}
@@ -204,7 +268,8 @@ export function Spotlight({
     >
       <div
         className={
-          "relative isolate h-[70vh] min-h-[520px] w-full overflow-hidden " +
+          // `group` so the edge arrows can reveal themselves on card hover.
+          "group relative isolate h-[80vh] min-h-[600px] w-full overflow-hidden " +
           "rounded-2xl border border-white/10 bg-neutral-900 shadow-2xl"
         }
       >
@@ -268,8 +333,81 @@ export function Spotlight({
           className="absolute inset-0 bg-[radial-gradient(ellipse_55%_45%_at_88%_18%,rgba(139,92,246,0.16),transparent_68%)]"
         />
 
-        {/* Copy, docked bottom-left inside the card's own gutter. */}
-        <div className="absolute inset-x-0 bottom-0 z-10 px-6 pb-24 sm:px-10 sm:pb-14 lg:px-14 lg:pb-16">
+        {/* The trailer frame, once the viewer has asked for it.
+         *
+         * Rendered above the artwork and given `pointer-events-none` so the
+         * provider never sees a click: the overlay below is the only thing
+         * the pointer can reach, which is what makes "click anywhere to
+         * toggle" possible without the embed's own chrome appearing.
+         *
+         * `scale-125` is not decoration. A YouTube embed letterboxes with a
+         * title bar in the top-left, and at 16:9 inside this wider-than-16:9
+         * frame that bar sits fully visible over the artwork. Overscaling
+         * pushes the bar outside the crop box, so the title is removed by
+         * the frame's `overflow-hidden` rather than by a parameter YouTube
+         * deprecated and now ignores.
+         */}
+        {resolvedTrailer && playback.commandable ? (
+          <div
+            key={trailerForId}
+            className="absolute inset-0 z-[5] overflow-hidden"
+          >
+            <iframe
+              ref={playback.frameRef}
+              src={resolvedTrailer.src}
+              title={`${current?.title ?? "Featured title"} — ${resolvedTrailer.label}`}
+              allow="autoplay; encrypted-media"
+              // Same reason as `Details`: this origin has to be sent, or the host
+              // answers 153 and the frame renders blank.
+              referrerPolicy="strict-origin-when-cross-origin"
+              className="pointer-events-none absolute left-1/2 top-1/2 h-full w-full max-w-none -translate-x-1/2 -translate-y-1/2 scale-125 border-0"
+            />
+          </div>
+        ) : null}
+
+        {/* The click surface.
+         *
+         * Sits at z-6, between the trailer (z-5) and the copy (z-10), so it
+         * catches every click on the artwork while the action row and the
+         * arrows still win where they sit. Deliberately not a `<button>`:
+         * it covers the whole card, and nesting it around the action row
+         * would put a button inside a button.
+         *
+         * First click resolves the trailer, later clicks toggle it. The
+         * `aria-hidden` div is pointer-only by design -- it would otherwise
+         * be an unlabelled region covering everything -- so keyboard users
+         * get the `sr-only` button below instead. That is invisible, which
+         * keeps the "no visible play/pause state" rule intact while not
+         * leaving the feature mouse-only.
+         */}
+        <div
+          aria-hidden
+          onClick={() => {
+            if (!playback.engaged) {
+              if (current) startTrailer(current);
+              return;
+            }
+            playback.toggle();
+          }}
+          className="absolute inset-0 z-[6] cursor-pointer"
+        />
+
+        {playback.engaged ? (
+          <button
+            type="button"
+            onClick={() => playback.toggle()}
+            className="sr-only"
+          >
+            {playback.playing ? "Pause trailer" : "Play trailer"}
+          </button>
+        ) : null}
+
+        {/* Copy, docked bottom-left inside the card's own gutter.
+         *
+         * `pb-24` used to clear the bottom control strip. That strip is gone,
+         * so the padding drops to the arrow height and the actions sit closer
+         * to the edge of the frame. */}
+        <div className="absolute inset-x-0 bottom-0 z-10 px-6 pb-12 sm:px-10 sm:pb-14 lg:px-14 lg:pb-16">
           <div className="max-w-xl">
             <AnimatePresence initial={false} mode="popLayout">
               {current ? (
@@ -286,10 +424,15 @@ export function Spotlight({
                       src={titleLogoUrl}
                       alt={current.title}
                       onError={() => setFailedLogo(current.id)}
-                      className="max-h-24 w-auto max-w-full object-contain object-left drop-shadow-[0_4px_20px_rgba(0,0,0,0.7)] sm:max-h-28"
+                      className="max-h-20 w-auto max-w-full object-contain object-left drop-shadow-[0_4px_20px_rgba(0,0,0,0.7)] sm:max-h-24"
                     />
                   ) : (
-                    <h1 className="text-4xl font-black leading-[0.95] tracking-tight text-white drop-shadow-[0_2px_18px_rgba(0,0,0,0.8)] sm:text-5xl lg:text-6xl">
+                    /* Six lines of 60px display type was the largest object on the
+                       page by a wide margin, and it pushed the synopsis below the
+                       fold on a 700px card. Capped two steps down: the title now
+                       reads as a label on the artwork instead of competing with
+                       it. */
+                    <h1 className="text-3xl font-black leading-[1] tracking-tight text-white drop-shadow-[0_2px_18px_rgba(0,0,0,0.8)] sm:text-4xl lg:text-5xl">
                       {current.title}
                     </h1>
                   )}
@@ -322,13 +465,20 @@ export function Spotlight({
                   </div>
 
                   {/* Hidden rather than truncated on the shortest screens: three
-                      clamped lines at 375px is a paragraph of fragments. */}
+                      clamped lines at 375px is a paragraph of fragments. Two lines,
+                      not three, so the block ends on a full sentence instead of
+                      stopping mid-word partway down a third line. */}
                   {current.synopsis ? (
-                    <p className="hidden max-w-lg text-sm leading-relaxed text-white/80 sm:line-clamp-3 sm:block">
+                    <p className="hidden max-w-lg text-sm leading-relaxed text-white/80 sm:line-clamp-2 sm:block">
                       {current.synopsis}
                     </p>
                   ) : null}
 
+                  {/* Exactly three actions. My List was demoted out of the hero:
+                      it is a second-tier intent, and it used to sit between Play
+                      and Share at the same weight, which made the row read as
+                      three peers rather than one primary action and two
+                      affordances. It is still one tap away inside More Info. */}
                   <div className="flex flex-wrap items-center gap-2.5 pt-1 sm:gap-3">
                     <button
                       type="button"
@@ -346,15 +496,7 @@ export function Spotlight({
 
                     <button
                       type="button"
-                      onClick={() => {
-                        toast.success(
-                          saved
-                            ? "Removed from your list"
-                            : "Added to your list!"
-                        );
-                        onSave?.(current);
-                      }}
-                      aria-pressed={saved}
+                      onClick={() => onMoreInfo?.(current)}
                       className={
                         "inline-flex min-h-11 items-center gap-2 rounded-lg px-5 " +
                         "text-sm font-semibold text-white backdrop-blur-md transition " +
@@ -363,44 +505,14 @@ export function Spotlight({
                         "focus-visible:outline-white/70"
                       }
                     >
-                      {saved ? (
-                        <Check className="h-4 w-4" aria-hidden />
-                      ) : (
-                        <Plus className="h-4 w-4" aria-hidden />
-                      )}
-                      <span>{saved ? "In My List" : "My List"}</span>
+                      <Info className="h-4 w-4" aria-hidden />
+                      More Info
                     </button>
 
                     <button
                       type="button"
                       onClick={() => void handleShare(current)}
-                      className={
-                        "inline-flex min-h-11 items-center gap-2 rounded-lg px-5 " +
-                        "text-sm font-semibold text-white backdrop-blur-md transition " +
-                        "bg-white/15 hover:bg-white/25 focus-visible:outline " +
-                        "focus-visible:outline-2 focus-visible:outline-offset-2 " +
-                        "focus-visible:outline-white/70"
-                      }
-                    >
-                      <Link2 className="h-4 w-4" aria-hidden />
-                      Share
-                    </button>
-
-                    {/* There is no standalone detail route in this app; the
-                        title's page carries its own details section, so "More
-                        info" is a deep link into it rather than a new screen. */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const tmdbId = parseInt(current.providerId, 10);
-                        if (isNaN(tmdbId)) return;
-                        const suffix =
-                          current.mediaType === "tv"
-                            ? "?type=tv&season=1&episode=1"
-                            : "";
-                        navigate(`/watch/${tmdbId}${suffix}#details`);
-                      }}
-                      aria-label={`More info about ${current.title}`}
+                      aria-label={`Share ${current.title}`}
                       className={
                         "grid h-11 w-11 shrink-0 place-items-center rounded-full text-white " +
                         "backdrop-blur-md transition bg-white/15 hover:bg-white/25 " +
@@ -408,7 +520,7 @@ export function Spotlight({
                         "focus-visible:outline-offset-2 focus-visible:outline-white/70"
                       }
                     >
-                      <Info className="h-4 w-4" aria-hidden />
+                      <Link2 className="h-4 w-4" aria-hidden />
                     </button>
                   </div>
                 </motion.div>
@@ -417,76 +529,37 @@ export function Spotlight({
           </div>
         </div>
 
-        {/* Controls. One frosted cluster, bottom-right on desktop and a
-            full-width strip on phones, so the arrows are a real 44px target
-            instead of the two 36px buttons the previous version hid entirely
-            below `sm`. */}
+        {/* Arrows, pinned to the vertical middle of each edge.
+         *
+         * This replaces a bottom strip that carried a `1/5` counter, a
+         * progress-adjacent pause button and a row of dots. All four are gone:
+         * the counter duplicates what the top progress bar already says, the
+         * pause button was the only way to stop a rotation that also stops
+         * whenever the pointer enters the card, and the dots were a
+         * second, redundant answer to "which slide is this". A carousel
+         * indicator that duplicates the artwork underneath it is noise.
+         *
+         * Vertically centred rather than bottom-aligned so they do not fight
+         * the action row for the same corner, and `opacity-0` until hover so
+         * the frame stays clean when nobody is driving it. They stay solid on
+         * coarse pointers, which never hover. */}
         {count > 1 ? (
-          <div
-            className={
-              "absolute inset-x-0 bottom-0 z-20 flex items-center gap-3 " +
-              "border-t border-white/10 bg-neutral-900/50 px-4 py-3 " +
-              "backdrop-blur-md sm:inset-x-auto sm:right-6 sm:bottom-6 " +
-              "sm:rounded-full sm:border sm:px-3"
-            }
-          >
+          <>
             <button
               type="button"
               aria-label="Previous featured title"
               onClick={() => step(-1)}
               className={
-                "grid h-9 w-9 shrink-0 place-items-center rounded-full text-white " +
-                "transition hover:bg-white/20 focus-visible:outline focus-visible:outline-2 " +
-                "focus-visible:outline-offset-2 focus-visible:outline-white/80"
+                "group absolute left-2 top-1/2 z-20 grid h-11 w-11 -translate-y-1/2 " +
+                "place-items-center rounded-full text-white transition " +
+                "bg-black/40 backdrop-blur-md hover:bg-black/65 focus-visible:outline " +
+                "focus-visible:outline-2 focus-visible:outline-offset-2 " +
+                "focus-visible:outline-white/80 " +
+                "opacity-0 focus-visible:opacity-100 group-hover:opacity-100 " +
+                "max-[1023px]:opacity-100 sm:left-4"
               }
             >
-              <ChevronLeft className="h-4 w-4" aria-hidden />
-            </button>
-
-            {/* Live position, so the viewer knows how long the shelf is. */}
-            <p className="shrink-0 text-xs font-semibold tabular-nums text-white/70">
-              <span className="text-white">{index + 1}</span>
-              <span className="mx-1 text-white/40">/</span>
-              {count}
-            </p>
-
-            <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:flex-none">
-              {dots
-                ? Array.from({ length: count }, (_, dot) => (
-                    <button
-                      key={dot}
-                      type="button"
-                      aria-label={`Show featured title ${dot + 1}`}
-                      aria-current={index === dot}
-                      onClick={() => setIndex(dot)}
-                      className={`h-1.5 rounded-full transition-all duration-300 ${
-                        index === dot
-                          ? "w-6 bg-white"
-                          : "w-1.5 bg-white/35 hover:bg-white/70"
-                      }`}
-                    />
-                  ))
-                : // Past MAX_DOTS a strip of ten indistinguishable pills is
-                  // noise; the counter above carries the position instead.
-                  null}
-            </div>
-
-            <button
-              type="button"
-              aria-label={paused ? "Resume rotation" : "Pause rotation"}
-              aria-pressed={paused}
-              onClick={() => setPaused(p => !p)}
-              className={
-                "grid h-9 w-9 shrink-0 place-items-center rounded-full text-white " +
-                "transition hover:bg-white/20 focus-visible:outline focus-visible:outline-2 " +
-                "focus-visible:outline-offset-2 focus-visible:outline-white/80"
-              }
-            >
-              {paused ? (
-                <Play className="h-3.5 w-3.5 fill-current" aria-hidden />
-              ) : (
-                <Pause className="h-3.5 w-3.5 fill-current" aria-hidden />
-              )}
+              <ChevronLeft className="h-5 w-5" aria-hidden />
             </button>
 
             <button
@@ -494,14 +567,18 @@ export function Spotlight({
               aria-label="Next featured title"
               onClick={() => step(1)}
               className={
-                "grid h-9 w-9 shrink-0 place-items-center rounded-full text-white " +
-                "transition hover:bg-white/20 focus-visible:outline focus-visible:outline-2 " +
-                "focus-visible:outline-offset-2 focus-visible:outline-white/80"
+                "group absolute right-2 top-1/2 z-20 grid h-11 w-11 -translate-y-1/2 " +
+                "place-items-center rounded-full text-white transition " +
+                "bg-black/40 backdrop-blur-md hover:bg-black/65 focus-visible:outline " +
+                "focus-visible:outline-2 focus-visible:outline-offset-2 " +
+                "focus-visible:outline-white/80 " +
+                "opacity-0 focus-visible:opacity-100 group-hover:opacity-100 " +
+                "max-[1023px]:opacity-100 sm:right-4"
               }
             >
-              <ChevronRight className="h-4 w-4" aria-hidden />
+              <ChevronRight className="h-5 w-5" aria-hidden />
             </button>
-          </div>
+          </>
         ) : null}
 
         {/* Per-slide progress, riding the top edge of the control strip. */}
