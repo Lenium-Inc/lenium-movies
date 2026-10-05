@@ -282,7 +282,13 @@ export function EmbedPlayer({
         className="absolute inset-0 h-full w-full border-0 rounded-2xl border-white/10 shadow-2xl bg-black"
         sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
         allow={EMBED_ALLOW}
-        allowFullScreen
+        /*
+          No `allowFullScreen` alongside this. `EMBED_ALLOW` already carries
+          `fullscreen`, and when both are present the browser warns that `Allow`
+          takes precedence -- so the attribute was never doing anything except
+          printing a console warning on every player mount. `allow` is the current
+          spelling and is enough on its own.
+        */
         // No referrer is sent to the provider at all. Several third-party
         // hosts reject a framed handshake with 403 Forbidden based on the
         // referring origin, and withholding this page's URL from ad networks
