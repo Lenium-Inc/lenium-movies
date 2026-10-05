@@ -274,6 +274,60 @@ _probe_lock = threading.Lock()
 _probe_cache: dict[str, tuple[float, bool]] = {}
 
 
+def _is_cross_origin_framable(headers) -> bool:
+    """Whether the response permits being framed by a different origin.
+
+    Reachability is not the same question as framability, and for an embed
+    provider only the second one matters: a host that answers a perfectly good
+    `200` while declaring `X-Frame-Options: SAMEORIGIN` will render nothing at
+    all inside our `<iframe>`, and the viewer sees a black rectangle with no
+    error and no way to tell it from a slow page.
+
+    That is not hypothetical. `vidsrc.cc` answers `403` *and*
+    `X-Frame-Options: SAMEORIGIN`, and the old scoring rule counted `403` as
+    healthy -- so the chain deterministically elected, as its winner, the one
+    host the browser is guaranteed to refuse. Every other provider in the
+    manifest had already gone to NXDOMAIN, so the whole player died on a host
+    that could never have worked.
+
+    Both headers are honoured because they are independent and both are common:
+
+    * `X-Frame-Options: SAMEORIGIN` / `DENY` blocks all cross-origin framing.
+      `ALLOW-FROM` is long dead and ignored by browsers, so it is not honoured.
+    * CSP `frame-ancestors` supersedes `X-Frame-Options` where they disagree,
+      and a directive that is present at all narrows who may embed. Only `*` is
+      treated as permitting us: anything else names specific allowed ancestors,
+      and this probe does not know our own origin to check them against. That is
+      a deliberate refusal to guess -- an allowlist we cannot evaluate is not
+      one we may assume we satisfy, and admitting the provider on the hope that
+      it works is exactly the failure this function exists to prevent.
+
+    Returns True when no framing restriction is declared at all, which is the
+    common case and must not be treated as a failure.
+    """
+    try:
+        xfo = (headers.get("X-Frame-Options") or "").strip().upper()
+        if xfo in ("SAMEORIGIN", "DENY"):
+            return False
+
+        csp = headers.get("Content-Security-Policy") or ""
+        for directive in csp.split(";"):
+            name, _, value = directive.partition(" ")
+            if name.strip().lower() != "frame-ancestors":
+                continue
+            allowed = {token.strip().lower() for token in value.split()}
+            # '*' allows any embedding origin. Anything narrower cannot be
+            # matched against our origin without knowing it, and an allowlist we
+            # cannot satisfy is, from the frame's point of view, a refusal.
+            if "*" not in allowed:
+                return False
+            return True
+    except Exception:  # noqa: BLE001 - odd header objects must not break a probe
+        return True
+
+    return True
+
+
 def probe_embed(url: str, timeout: float = EMBED_PROBE_TIMEOUT_SECONDS) -> bool:
     """One shallow liveness check against a provider's embed page.
 
@@ -283,6 +337,11 @@ def probe_embed(url: str, timeout: float = EMBED_PROBE_TIMEOUT_SECONDS) -> bool:
     liveness signal, not a content guarantee. That is the same guarantee the
     frontend's iframe watchdog gives, and it is enough to keep a dead host out
     of the chain.
+
+    What it *does* check is that the host is willing to be framed at all
+    (`_is_cross_origin_framable`), because a reachable-but-unframable provider
+    is worse than an unreachable one: it is elected, served to the client, and
+    then fails in the browser where nothing can retry it.
 
     No caching and no health accounting here. Both belong to `probe_provider`,
     which is the seam the resolver uses, so a chain can be driven without a
@@ -300,10 +359,13 @@ def probe_embed(url: str, timeout: float = EMBED_PROBE_TIMEOUT_SECONDS) -> bool:
             # A 4xx/5xx still means the host is up. Treating a rate-limit as a
             # dead host would bench a provider that is merely throttling us.
             status = getattr(response, "status", None) or response.getcode()
-            return 200 <= status < 400 or status in (401, 403, 429)
+            reachable = 200 <= status < 400 or status in (401, 403, 429)
+            return reachable and _is_cross_origin_framable(response.headers)
     except urllib.error.HTTPError as exc:
         # An HTTP error is a response, not a transport failure: the host is up.
-        return exc.code in (401, 403, 429)
+        # It still has to be willing to be framed.
+        reachable = exc.code in (401, 403, 429)
+        return reachable and _is_cross_origin_framable(exc.headers)
     except Exception:  # noqa: BLE001 - any transport error means "not up"
         return False
 

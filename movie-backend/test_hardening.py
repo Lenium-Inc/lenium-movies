@@ -805,3 +805,92 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+# ---------------------------------------------------------------------------
+# Embed framability
+#
+# A provider that responds but forbids being framed is worse than one that is
+# simply down: it gets elected as the chain winner, served to the browser, and
+# then renders nothing inside the iframe, where no retry can reach it. These
+# tests pin that distinction so the scoring rule cannot drift back to treating
+# any HTTP response as playable.
+# ---------------------------------------------------------------------------
+
+
+def test_unframable_host_is_not_a_healthy_provider():
+    """The exact `vidsrc.cc` shape: 403 plus `SAMEORIGIN`.
+
+    The old rule counted 403 as healthy without reading the framing headers, so
+    this response elected the one provider the browser always refuses.
+    """
+    import stream_providers
+
+    class _Headers(dict):
+        def get(self, key, default=None):
+            return dict.get(self, key, default)
+
+    headers = _Headers({"X-Frame-Options": "SAMEORIGIN"})
+    assert not stream_providers._is_cross_origin_framable(headers), (
+        "a host declaring X-Frame-Options: SAMEORIGIN must never be scored "
+        "playable -- it renders nothing inside our iframe"
+    )
+
+
+def test_csp_frame_ancestors_without_wildcard_is_not_framable():
+    """`frame-ancestors` naming specific hosts is evaluated against our origin,
+    which the probe does not know. Anything but `*` is therefore refused rather
+    than optimistically admitted."""
+    import stream_providers
+
+    class _Headers(dict):
+        def get(self, key, default=None):
+            return dict.get(self, key, default)
+
+    narrow = _Headers({"Content-Security-Policy": "frame-ancestors https://vidsrc.example"})
+    assert not stream_providers._is_cross_origin_framable(narrow)
+
+    wide = _Headers({"Content-Security-Policy": "frame-ancestors *"})
+    assert stream_providers._is_cross_origin_framable(wide)
+
+
+def test_host_without_framing_restrictions_stays_playable():
+    """The common case. A missing header must not be read as a refusal, or every
+    provider would be benched and nothing would ever play."""
+    import stream_providers
+
+    class _Headers(dict):
+        def get(self, key, default=None):
+            return dict.get(self, key, default)
+
+    assert stream_providers._is_cross_origin_framable(_Headers({}))
+    assert stream_providers._is_cross_origin_framable(
+        _Headers({"Content-Type": "text/html"})
+    )
+    assert stream_providers._is_cross_origin_framable(
+        _Headers({"X-Frame-Options": "ALLOWALL"})
+    )
+
+
+def test_probe_embed_requires_framability_on_error_responses():
+    """A 403 is still a response rather than a transport failure, so it stays
+    "the host is up" -- but it is no longer sufficient on its own."""
+    import io
+    import urllib.error
+    import stream_providers
+
+    def _boom(*_args, **_kwargs):
+        raise urllib.error.HTTPError(
+            "https://vidsrc.cc/v2/embed/movie/603",
+            403,
+            "Forbidden",
+            {"X-Frame-Options": "SAMEORIGIN"},
+            io.BytesIO(b""),
+        )
+
+    original = stream_providers.urllib.request.urlopen
+    stream_providers.urllib.request.urlopen = _boom
+    try:
+        assert not stream_providers.probe_embed("https://vidsrc.cc/v2/embed/movie/603")
+    finally:
+        stream_providers.urllib.request.urlopen = original
