@@ -1,55 +1,21 @@
-import {
-  int,
-  mysqlEnum,
-  mysqlTable,
-  text,
-  timestamp,
-  varchar,
-  uniqueIndex,
-  index,
-} from "drizzle-orm/mysql-core";
-
-export const users = mysqlTable("users", {
-  id: int("id").autoincrement().primaryKey(),
-  openId: varchar("openId", { length: 64 }).notNull().unique(),
-  name: text("name"),
-  email: varchar("email", { length: 320 }),
-  loginMethod: varchar("loginMethod", { length: 64 }),
-  role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-  lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
-});
-
-export const videoAssets = mysqlTable(
-  "videoAssets",
-  {
-    id: int("id").autoincrement().primaryKey(),
-    movieId: varchar("movieId", { length: 128 }).notNull(),
-    provider: mysqlEnum("provider", ["youtube"]).notNull(),
-    providerVideoId: varchar("providerVideoId", { length: 128 }).notNull(),
-    type: varchar("type", { length: 64 }).notNull(),
-    name: varchar("name", { length: 512 }).notNull(),
-    official: int("official").notNull().default(0),
-    language: varchar("language", { length: 16 }),
-    country: varchar("country", { length: 16 }),
-    thumbnailUrl: text("thumbnailUrl"),
-    publishedAt: timestamp("publishedAt"),
-    duration: int("duration"),
-    embedUrl: text("embedUrl").notNull(),
-    sourceUrl: text("sourceUrl").notNull(),
-    createdAt: timestamp("createdAt").defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-  },
-  table => ({
-    movieProviderVideoUnique: uniqueIndex(
-      "videoAssets_movie_provider_video_unique"
-    ).on(table.movieId, table.provider, table.providerVideoId),
-    movieLookup: index("videoAssets_movie_id_idx").on(table.movieId),
-  })
-);
-
-export type User = typeof users.$inferSelect;
-export type InsertUser = typeof users.$inferInsert;
-export type VideoAsset = typeof videoAssets.$inferSelect;
-export type InsertVideoAsset = typeof videoAssets.$inferInsert;
+/**
+ * Neon Postgres schema for the Next.js server.
+ *
+ * This was written against `drizzle-orm/mysql-core` while `DATABASE_URL` has
+ * always been a `postgresql://` Neon connection string, so the driver, the
+ * dialect, and the URL described three different databases. Every query failed
+ * at the driver rather than at the schema, which is why it presented as "the
+ * database is not available".
+ *
+ * The database is not empty, so ownership is the organizing principle here:
+ *
+ * * `webTables.ts` -- tables this layer owns, in the `web` schema. Generated
+ *   into migrations by `drizzle.config.ts`.
+ * * `pgOwnedTables.ts` -- tables `movie-backend/authdb.py` owns in `public`.
+ *   Mapped for reading, excluded from migrations.
+ *
+ * This module is the single import surface, so `server/db.ts` has one place to
+ * import from regardless of which file a table's ownership puts it in.
+ */
+export * from "./webTables";
+export * from "./pgOwnedTables";
