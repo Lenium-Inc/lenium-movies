@@ -1896,6 +1896,90 @@ def api_delete_account():
 
 
 # ---------------------------------------------------------------------------
+# Admin: account roster
+#
+# Read-only, and deliberately so. `docs/prd.md` records the product decision
+# that there is no catalogue-correction surface, and this endpoint does not
+# reopen it: it answers "who has an account", which is the one operational
+# question that cannot be answered by the product itself, and it writes nothing.
+#
+# The gate is the `ADMIN_EMAILS` allowlist, evaluated here on every request from
+# the token's own user row. Not from a query parameter, not from a role column,
+# and not from anything the client sent.
+# ---------------------------------------------------------------------------
+
+
+@app.route("/api/admin/users", methods=["GET", "OPTIONS"])
+def api_admin_users():
+    """One page of accounts, with per-account counts and database totals."""
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    user = _auth_user()
+    if not user:
+        return _auth_error("Not signed in.")
+
+    # 403, not 401, for a signed-in account that is not on the allowlist. The
+    # client's fetch wrapper treats a 401 on an authenticated request as a dead
+    # session and clears the stored token, so answering "not an admin" with 401
+    # would sign the operator out of their own account the moment they opened
+    # the wrong page. The distinction is also the honest one: the session is
+    # valid, the permission is not.
+    if not authdb.is_admin_email(user.get("email")):
+        return _auth_error("You do not have access to this page.", 403)
+
+    # Clamped rather than validated. `limit` bounds how much of the roster one
+    # request can pull; `offset` is a position, so a negative one is meaningless
+    # rather than dangerous, and both are read as ints because an unparseable
+    # value should page the list, not 500 the endpoint.
+    try:
+        limit = max(1, min(200, int(request.args.get("limit", 50))))
+    except (TypeError, ValueError):
+        limit = 50
+    try:
+        offset = max(0, int(request.args.get("offset", 0)))
+    except (TypeError, ValueError):
+        offset = 0
+    search = (request.args.get("q") or "").strip()[:200]
+
+    try:
+        store = authdb.get_store()
+        rows = store.admin_users(search=search, limit=limit, offset=offset)
+        totals = store.admin_user_totals()
+    except Exception:
+        # A driver error must not reach the client as a SQL string. The detail
+        # goes to the log, which is where the operator debugging this is.
+        app.logger.exception("admin user list failed")
+        return _auth_error("Could not load the account list. Try again.", 500)
+
+    return jsonify(
+        {
+            "users": [
+                {
+                    "id": str(row.get("id")),
+                    "email": row.get("email"),
+                    "name": row.get("display_name") or "",
+                    # Normalized the same way as `/api/auth/me`, because the same
+                    # value is shown in two places and a raw driver datetime next
+                    # to an ISO string reads as two different accounts.
+                    "created_at": authdb._to_iso(row.get("created_at")),
+                    "profile_count": int(row.get("profile_count") or 0),
+                    "history_count": int(row.get("history_count") or 0),
+                    "saved_count": int(row.get("saved_count") or 0),
+                    "active_sessions": int(row.get("active_sessions") or 0),
+                    "last_active": authdb._to_iso(row.get("last_active")),
+                }
+                for row in rows
+            ],
+            "totals": totals,
+            "limit": limit,
+            "offset": offset,
+            "search": search,
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
 # Profiles (a home is the signed-in account; max 4)
 # ---------------------------------------------------------------------------
 

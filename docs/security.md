@@ -74,7 +74,8 @@ downgraded to accept-any-certificate.
 | **No CSP, HSTS, or `Referrer-Policy`** | Headers are scrubbed, not added. Set them at the Vercel or Render edge. |
 | **No rights enforcement**              | There is no rights model. See [content and playback](content-rights.md). |
 | **No upload surface**                  | Nothing accepts a file, so the entire upload threat model is moot today. If one is added, the quarantined-scanning state machine in the old documentation was never built. |
-| **No admin surface**                   | Nothing to authorize, so no admin auth, MFA, or audit log. Catalogue corrections are direct database edits. |
+| **Admin auth is an env allowlist, not a role** | `ADMIN_EMAILS` is a comma-separated list checked on every `/api/admin/*` call against the token's own user row. There is no `role` column, no second factor, and no admin-specific session. Compromise of an allowlisted account is full roster access, and the allowlist is only as good as the env var holding it. |
+| **No admin surface beyond a read-only roster** | `GET /api/admin/users` lists accounts with per-account counts. That is the whole surface: no catalogue editing, no role management, no account mutation. So there is still no admin MFA and no audit log of operator actions. Catalogue corrections remain direct database edits. |
 | **No audit log**                       | No record of who changed what, because there are no operator mutations. |
 | **No monitoring or alerting**          | No error tracking, no uptime check, no log aggregation. |
 | **No backups or restore drill**       | Postgres backups are whatever the provider does by default. Nobody has tested a restore. |

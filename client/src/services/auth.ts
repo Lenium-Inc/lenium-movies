@@ -13,6 +13,12 @@ export interface ApiUser {
   email: string;
   name: string;
   created_at?: string;
+  /**
+   * Server-computed from the `ADMIN_EMAILS` allowlist. Absent on responses from
+   * a backend predating the admin roster, so it is read as strictly `true` or
+   * not at all rather than truthy.
+   */
+  is_admin?: boolean;
 }
 
 export interface RemoteHistoryItem {
@@ -128,7 +134,16 @@ export class AuthNetworkError extends Error {
   }
 }
 
-async function request<T>(
+/**
+ * The shared `fetch` wrapper: JSON in, JSON out, bearer attached when `auth`.
+ *
+ * Exported for `admin.ts`, which hits the same backend and needs the same two
+ * behaviours this already gets right -- a network failure distinguished from a
+ * rejected request, and a 401 on an authenticated call clearing the dead token
+ * instead of leaving a signed-out UI that still looks signed in. Duplicating it
+ * for one more caller is how the two paths drift.
+ */
+export async function request<T>(
   path: string,
   options: { method?: string; body?: unknown; auth?: boolean } = {}
 ): Promise<T> {

@@ -59,6 +59,11 @@ specifications for several of them exist in the historical audits; those documen
 describe a system nobody has built, and are kept as records rather than as
 requirements.
 
+"An admin surface" here means a mutation surface — catalogue correction, account
+suspension, role management. The read-only account roster at `/admin/users` does
+exist, and is not on this list: answering "who has an account" needs no budget and
+no legal decision, only the read access an operator already has.
+
 ## Verified gaps worth naming
 
 `gunicorn.conf.py` sets `forwarded_allow_ips = "*"`, which trusts

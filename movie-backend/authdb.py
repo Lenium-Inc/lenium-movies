@@ -106,6 +106,47 @@ def _expires_at() -> str:
     return future.strftime(_ISO)
 
 
+def admin_emails() -> set[str]:
+    """The addresses allowed to read the admin API, lowercased.
+
+    Read from the environment on *every* call rather than captured at import,
+    for the same reason `Store.__init__` reads `SQLITE_PATH` per instantiation:
+    a value fixed by whichever module imported first cannot be changed by a
+    test, or by a deploy that rotates the allowlist without a restart.
+    """
+    raw = os.environ.get("ADMIN_EMAILS") or ""
+    return {part.strip().lower() for part in raw.split(",") if part.strip()}
+
+
+def is_admin_email(email) -> bool:
+    """True when `email` is on the `ADMIN_EMAILS` allowlist.
+
+    An unset or empty allowlist denies everyone, and that is the only safe
+    default. An unset variable that defaulted to permissive would hand the admin
+    API -- and through it every account's email address, join date and activity
+    counts -- to anyone who could register an account, which is the one thing
+    this function exists to prevent.
+
+    Address comparison is exact and case-insensitive. There is deliberately no
+    wildcard form: an allowlist that matches `*@example.com` is one careless
+    entry away from authorising a domain nobody controls.
+    """
+    if not email:
+        return False
+    return str(email).strip().lower() in admin_emails()
+
+
+def _like_needle(raw: str) -> str:
+    """Wrap `raw` in `%` with LIKE metacharacters escaped.
+
+    Without the escaping, searching for `50%` matches every account, because the
+    `%` reads as "any run of characters" rather than as the character the
+    operator typed.
+    """
+    escaped = raw.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
 def _is_expired(value) -> bool:
     """True when a stored expiry has passed.
 
@@ -1534,6 +1575,83 @@ class Store:
             (user_id,),
         )
 
+    def admin_users(
+        self,
+        *,
+        search: str = "",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict]:
+        """One page of accounts, newest first, each with per-account counts.
+
+        Every count is a correlated subquery rather than a JOIN. The four tables
+        hang off `users` independently, so joining them together multiplies the
+        rows: an account with three profiles and ten history rows yields thirty
+        rows, and every `COUNT` in the SELECT then counts that product rather
+        than the thing it names. `DISTINCT` would repair the counts but not the
+        page -- the multiplication happens before `LIMIT`, so a handful of
+        chatty accounts would crowd every later user off the first page.
+
+        Password columns are not in the SELECT list and must not be added. This
+        is the one query in the codebase that reads across every account at
+        once, so it is the one place a future edit could start shipping
+        `password_hash` to a browser.
+        """
+        # SQLite compares `expires_at` as TEXT, so a same-format ISO string is
+        # the right operand. Postgres wants a real timestamptz, which psycopg
+        # adapts from a datetime; handing it a string makes it parse the
+        # literal, which is slower and drops the index.
+        cutoff = datetime.now(timezone.utc) if self.pg else _now()
+        needle = _like_needle(search.strip().lower()) if search.strip() else "%"
+
+        return self._query(
+            "SELECT u.id, u.email, u.display_name, u.created_at, "
+            "  (SELECT COUNT(*) FROM watch_profiles p WHERE p.user_id = u.id) "
+            "    AS profile_count, "
+            "  (SELECT COUNT(*) FROM watch_history h WHERE h.user_id = u.id) "
+            "    AS history_count, "
+            "  (SELECT COUNT(*) FROM saved_media m WHERE m.user_id = u.id) "
+            "    AS saved_count, "
+            "  (SELECT COUNT(*) FROM sessions s "
+            "     WHERE s.user_id = u.id AND s.expires_at > ?) "
+            "    AS active_sessions, "
+            "  (SELECT MAX(h.updated_at) FROM watch_history h "
+            "     WHERE h.user_id = u.id) AS last_active "
+            "FROM users u "
+            "WHERE LOWER(u.email) LIKE ? ESCAPE '\\' "
+            "   OR LOWER(u.display_name) LIKE ? ESCAPE '\\' "
+            "ORDER BY u.created_at DESC, u.id DESC "
+            "LIMIT ? OFFSET ?",
+            (cutoff, needle, needle, limit, offset),
+            fetch_all=True,
+        ) or []
+
+    def admin_user_totals(self) -> dict:
+        """Whole-database counts, independent of the current page.
+
+        Returned beside the page so the header can say "1,204 accounts" while
+        showing fifty of them. Derived from the same tables as `admin_users`
+        but with no filter, so a search cannot make the totals describe the
+        search instead of the database.
+        """
+        cutoff = datetime.now(timezone.utc) if self.pg else _now()
+        row = self._query(
+            "SELECT (SELECT COUNT(*) FROM users) AS users, "
+            "  (SELECT COUNT(*) FROM watch_profiles) AS profiles, "
+            "  (SELECT COUNT(*) FROM watch_history) AS history, "
+            "  (SELECT COUNT(*) FROM saved_media) AS saved, "
+            "  (SELECT COUNT(*) FROM sessions WHERE expires_at > ?) "
+            "    AS active_sessions",
+            (cutoff,),
+        ) or {}
+        return {
+            "users": int(row.get("users") or 0),
+            "profiles": int(row.get("profiles") or 0),
+            "history": int(row.get("history") or 0),
+            "saved": int(row.get("saved") or 0),
+            "active_sessions": int(row.get("active_sessions") or 0),
+        }
+
     def create_user(self, email: str, name: str, password: str) -> dict | None:
         salt = secrets.token_hex(16)
         digest = self._hash(password, salt)
@@ -2102,4 +2220,11 @@ def serialize_user(user: dict | None) -> dict | None:
         "email": user.get("email"),
         "name": user.get("display_name") or user.get("name") or "",
         "created_at": _to_iso(user.get("created_at")),
+        # Whether to show the admin link in the chrome. This is a display hint
+        # and nothing more: it is computed here from the allowlist, so it
+        # reflects the environment the response was generated in, and every
+        # `/api/admin/*` route still makes its own decision server-side. Trusting
+        # this flag to grant access would put the only access control in a field
+        # the client can read and ignore.
+        "is_admin": is_admin_email(user.get("email")),
     }

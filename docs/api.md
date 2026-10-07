@@ -118,6 +118,31 @@ capability, which is why the client accepts two URL shapes
 (`/list/share/:token` and `/share/:token`) for links minted outside the app.
 Member removal and revoke are owner-only and return 403 otherwise.
 
+## Operator
+
+| Route               | Method | Notes                       |
+| ------------------- | ------ | --------------------------- |
+| `/api/admin/users`  | GET    | Read-only account roster.   |
+
+`GET /api/admin/users` returns one page of accounts, newest first, each with
+profile, history, saved and live-session counts plus a last-active timestamp,
+alongside whole-database totals that are independent of the page and of any
+search. Query parameters: `q` (case-insensitive substring of email or display
+name, `%`/`_` escaped), `limit` (1–200, default 50), `offset` (default 0).
+Unparseable `limit`/`offset` fall back to the defaults rather than erroring.
+
+Authorization is the `ADMIN_EMAILS` allowlist, evaluated per request against the
+address on the token's own user row. An unset or empty allowlist denies
+everyone. The two rejections are distinct and mean different things: **401** when
+there is no valid session, **403** when the session is valid but the address is
+not on the list. That split is load-bearing on the client, which clears the
+stored token on a 401 and would otherwise sign an operator out for opening a page
+they are not allowed to see.
+
+No password hash is ever selected. The response carries `is_admin` on
+`/api/auth/me` and the signup/login payloads, purely so the client can decide
+whether to draw the link — it grants nothing.
+
 ## Gaps
 
 - No rate limiting, idempotency keys, or signed cursors at the API layer. The
@@ -125,4 +150,7 @@ Member removal and revoke are owner-only and return 403 otherwise.
   it. This is a real exposure, not a design choice.
 - No request IDs or structured error codes.
 - No webhooks.
-- No admin routes.
+- One admin route, and it is read-only: `GET /api/admin/users` lists accounts
+  with per-account counts, gated on the `ADMIN_EMAILS` allowlist and answering
+  403 to anyone not on it. There are no admin mutations to authorize, so there is
+  no audit log for them.

@@ -20,10 +20,15 @@ external claim is made.
 | Household viewer  | Several people with separate tastes     | Profiles, per-profile recommendations      |
 | Returning viewer  | Their history, list, and ratings        | My List, history, profile                  |
 | Sharer            | Watch a list with someone else          | Invite tokens, shared lists, member removal |
-| Operator          | Keep the deployment running and honest  | Env config, deploy, DMCA takedown          |
+| Operator          | Keep the deployment running and honest  | Env config, deploy, account roster, DMCA takedown |
 
 There is no creator, partner, moderator, or administrator persona. Those surfaces
 do not exist and are not in scope until someone builds and staffs them.
+
+The Operator is not one of those. It is the person who already has server
+credentials, and the roster at `/admin/users` is the one question they could not
+answer from the product itself. It is read-only and gated on the `ADMIN_EMAILS`
+allowlist; see "No admin surface" below for what that deliberately leaves out.
 
 ## What the product does
 
@@ -91,7 +96,11 @@ These are gaps, not backlog items in progress:
 - **No SSR, sitemap, robots policy, or structured data.** It is a client-rendered
   SPA. `vercel.json` rewrites all routes to `index.html`.
 - **No creator portal, uploads, reviews, ratings-by-others, or moderation.**
-- **No admin surface.** Catalogue correction is a database edit.
+- **No admin surface, except one read-only roster.** `GET /api/admin/users`
+  lists accounts and their counts, and `/admin/users` renders it. There is no
+  catalogue correction UI — that is still a database edit — and no way to
+  promote, suspend, or delete an account from the product. Authorization is the
+  `ADMIN_EMAILS` allowlist, not a role column.
 - **No analytics.** There is no product event pipeline, by choice — see
   [security](security.md).
 - **No CI.** Every check in [testing](testing.md) is run by hand.

@@ -20,6 +20,16 @@ export interface User {
   name: string;
   email: string;
   avatar_url?: string;
+  /**
+   * Whether to show the admin link in the profile menu.
+   *
+   * Server-computed from the `ADMIN_EMAILS` allowlist and refreshed by every
+   * `apiMe` call. Display only -- `/api/admin/*` makes its own decision, so
+   * flipping this in localStorage changes which link is drawn and nothing else.
+   * Optional because a session cached by an older build has no such field, and
+   * an absent flag must read as "not an admin" rather than crash the menu.
+   */
+  is_admin?: boolean;
 }
 
 export interface AuthContextType {
@@ -42,6 +52,7 @@ function toUser(api: ApiUser): User {
     name: api.name,
     email: api.email,
     avatar_url: undefined,
+    is_admin: api.is_admin === true,
   };
 }
 

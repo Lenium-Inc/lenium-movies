@@ -15,6 +15,7 @@ import { RouteSeo } from "./components/layout/RouteSeo";
 import Terms from "./pages/Terms";
 import Dmca from "./pages/Dmca";
 import Privacy from "./pages/Privacy";
+import AdminUsers from "./pages/AdminUsers";
 
 function Router() {
   return (
@@ -46,6 +47,14 @@ function Router() {
         <Route path="/share/shared/:ownerId" component={SharedList} />
         <Route path="/share/:token" component={ShareInvite} />
         <Route path="/watch/:id" component={WatchPage} />
+        {/*
+          The account roster. Publicly routed, because the page itself is the
+          gate: it renders a signed-out or not-allowed state rather than
+          redirecting, so the reason is visible instead of the operator being
+          bounced to a login page with no explanation. `/api/admin/users` makes
+          its own server-side decision regardless of what this route allows.
+        */}
+        <Route path="/admin/users" component={AdminUsers} />
         <Route path="/terms" component={Terms} />
         <Route path="/privacy" component={Privacy} />
         <Route path="/dmca" component={Dmca} />

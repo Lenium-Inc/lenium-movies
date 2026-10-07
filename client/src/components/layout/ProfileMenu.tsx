@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { LogOut, Lock, Plus, Settings, Users } from "lucide-react";
+import { LogOut, Lock, Plus, Settings, ShieldCheck, Users } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/context/AuthContext";
 import { useActiveProfile } from "@/context/ActiveProfileContext";
@@ -217,6 +217,20 @@ export function ProfileMenu() {
               <Plus className="h-4 w-4" />
               Add Profile
             </button>
+            {/* Shown only to accounts on the backend's ADMIN_EMAILS allowlist,
+                computed server-side and carried on the signed-in user. Purely a
+                convenience: hiding it keeps the link out of a viewer's menu, and
+                the endpoint refuses a viewer either way. */}
+            {user.is_admin && (
+              <Link
+                href="/admin/users"
+                onClick={() => setOpen(false)}
+                className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-zinc-800 hover:text-white"
+              >
+                <ShieldCheck className="h-4 w-4" />
+                Accounts
+              </Link>
+            )}
           </nav>
 
           <div className="my-1 border-t border-zinc-800" />

@@ -100,7 +100,7 @@ Renaming them to `stream-vy-*` would orphan every existing user's saved data.
 | Creator portal, uploads   | No submission, no media pipeline, no quarantine.                   |
 | Reviews, ratings by others| Only the viewer's own local ratings exist.                        |
 | Moderation, reporting     | Nothing to moderate.                                               |
-| Admin surface             | No routes, no pages, no roles.                                     |
+| Admin surface             | One read-only route, `GET /api/admin/users`, and the `/admin/users` page that reads it. No roles, no mutations, no catalogue editing. Gated by the `ADMIN_EMAILS` allowlist. |
 | Analytics                 | Deliberately none; see [security](security.md).                   |
 | Rate limiting at the API  | Only in the Express wrapper; see [security](security.md).         |
 | Notifications             | No event model.                                                    |
