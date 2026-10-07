@@ -51,6 +51,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Iterable
 
+from cachetools import TTLCache
+
 import catalog_lib
 from runtime_config import load_env_file, ssl_context
 
@@ -268,10 +270,58 @@ def is_embed_host(host: str) -> bool:
 # ---------------------------------------------------------------------------
 
 _probe_lock = threading.Lock()
-#: provider id -> (probed_at, reachable). Keyed by provider rather than by URL
-#: because a provider is a host, and one reachability answer covers every title
-#: it is asked about.
-_probe_cache: dict[str, tuple[float, bool]] = {}
+#: provider id -> liveness verdict, split by polarity because the two verdicts
+#: have to expire on different clocks.
+#:
+#: Keyed by provider rather than by URL because a provider is a host, and one
+#: reachability answer covers every title it is asked about.
+#:
+#: The split is the point. A cached *negative* is only trusted for as long as the
+#: provider would have stayed benched anyway. If it outlived the cooldown, the
+#: chain would keep re-benching a provider on the strength of an answer that is
+#: now older than the timeout it was meant to be benched for, and it would never
+#: re-probe -- so a provider that came back would stay invisible until the full
+#: TTL elapsed. A cached positive can safely live longer, since being optimistic
+#: only costs a failed frame that the client watchdog handles.
+#:
+#: One dict with a single TTL cannot express that, and picking either TTL makes
+#: the other verdict wrong. Both are `TTLCache`s, so both are bounded and both
+#: expire themselves -- there is no timestamp bookkeeping left to get wrong.
+#: The bound is generous: the key space is the provider manifest, not titles.
+_PROBE_CACHE_MAX_SIZE = 1000
+_probe_healthy: TTLCache = TTLCache(
+    maxsize=_PROBE_CACHE_MAX_SIZE, ttl=EMBED_PROBE_TTL_SECONDS
+)
+_probe_failed: TTLCache = TTLCache(
+    maxsize=_PROBE_CACHE_MAX_SIZE, ttl=COOLDOWN_SECONDS
+)
+
+
+def _probe_cached(provider_id: str) -> bool | None:
+    """The cached verdict for a provider, or None if there is a live one.
+
+    Caller must hold `_probe_lock`.
+    """
+    if provider_id in _probe_healthy:
+        return True
+    if provider_id in _probe_failed:
+        return False
+    return None
+
+
+def _probe_record(provider_id: str, ok: bool) -> None:
+    """Store a verdict, dropping any opposite one.
+
+    Caller must hold `_probe_lock`. Clearing the other container matters: with
+    one dict the write overwrote the previous value, and here a leftover positive
+    would keep answering for a provider that has just been recorded as dead.
+    """
+    if ok:
+        _probe_failed.pop(provider_id, None)
+        _probe_healthy[provider_id] = True
+    else:
+        _probe_healthy.pop(provider_id, None)
+        _probe_failed[provider_id] = False
 
 
 def _is_cross_origin_framable(headers) -> bool:
@@ -385,25 +435,16 @@ def probe_provider(provider: EmbedProvider, url: str, timeout: float) -> bool:
     would be decorative. A cached negative is still evidence the provider is
     down, and each request that observes it is a genuine independent attempt.
     """
-    now = time.time()
     with _probe_lock:
-        cached = _probe_cache.get(provider.id)
+        cached = _probe_cached(provider.id)
 
-    # A cached *negative* is only trusted for as long as the provider would
-    # have stayed benched anyway. If it outlived the cooldown, the chain would
-    # keep re-benching a provider on the strength of an answer that is now
-    # older than the timeout it was meant to be benched for, and it would never
-    # re-probe -- so a provider that came back would stay invisible until the
-    # full TTL elapsed. A cached positive can safely live longer, since being
-    # optimistic only costs a failed frame that the client watchdog handles.
-    ttl = EMBED_PROBE_TTL_SECONDS if (cached and cached[1]) else COOLDOWN_SECONDS
-    if cached and (now - cached[0]) < ttl:
-        ok = cached[1]
+    if cached is not None:
+        ok = cached
         # Fall through to accounting, but skip the network call.
     else:
         ok = probe_embed(url, timeout=timeout)
         with _probe_lock:
-            _probe_cache[provider.id] = (now, ok)
+            _probe_record(provider.id, ok)
 
     record = HEALTH.get(provider.id)
     if ok:
@@ -424,7 +465,8 @@ def _provider_for_url(url: str) -> str:
 def clear_probe_cache() -> None:
     """Drop cached liveness. Exposed for tests and for a manual provider reset."""
     with _probe_lock:
-        _probe_cache.clear()
+        _probe_healthy.clear()
+        _probe_failed.clear()
 
 
 # ---------------------------------------------------------------------------

@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import urllib.request
 import urllib.parse
 from typing import Optional, Dict, Any, List
@@ -372,10 +373,125 @@ def _trailer_rank(video: Dict[str, Any]) -> tuple:
     holder. The previous code ignored `official` entirely and fell back to
     "first YouTube video of any type", which is what made some titles embed a
     Behind the Scenes clip while others played a real trailer.
+
+    `iso_639_1` is the language of the *audio track*, not the language the video
+    is titled in, so it is a fair proxy for "is this watchable by the audience
+    asking". It is ranked below type on purpose: a dubbed trailer is a worse
+    experience than an undubbed one, but it is not the wrong video, and a
+    foreign-language trailer is sometimes the only official upload that exists.
+
+    The tuple's last element is negated so that `min` sorts newest-first on
+    `published_at`; an undated upload therefore sorts last instead of first,
+    which is what an empty string would otherwise do.
     """
     is_official = 0 if video.get("official") else 1
     type_rank = _TRAILER_TYPE_RANK.get(video.get("type"), _UNRANKED_TRAILER_TYPE)
-    return (is_official, type_rank)
+    is_foreign_audio = 0 if (video.get("iso_639_1") or "en") == "en" else 1
+    published = video.get("published_at") or ""
+    # A missing date has to sort as "oldest", not "newest".
+    neg_stamp = -_published_sort_key(published)
+    return (is_official, type_rank, is_foreign_audio, neg_stamp)
+
+
+def _published_sort_key(published: str) -> int:
+    """A sortable integer for an ISO-8601 date, or 0 when it is unusable."""
+    match = re.match(r"(\d{4})-(\d{2})-(\d{2})", published or "")
+    if not match:
+        return 0
+    year, month, day = (int(part) for part in match.groups())
+    return year * 10000 + month * 100 + day
+
+
+#: Providers whose embed pages can be framed by another origin. A site outside
+#: this set is dropped at ranking time rather than handed to an <iframe> that
+#: will render nothing -- which is the failure this table exists to prevent.
+#: Keys are lower-cased because TMDB spells the site `"YouTube"` while the
+#: embed builders below key off `"youtube"`, and comparing those directly
+#: silently drops every trailer.
+FRAMABLE_TRAILER_SITES = frozenset({"youtube", "vimeo", "dailymotion"})
+
+_TRAILER_EMBED_ORIGINS = {
+    "youtube": "https://www.youtube-nocookie.com",
+    "vimeo": "https://player.vimeo.com",
+    "dailymotion": "https://www.dailymotion.com",
+}
+
+
+def normalise_trailer_site(video: Dict[str, Any]) -> str:
+    return str(video.get("site") or "").strip().lower()
+
+
+def rank_trailers(videos: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    """Usable trailer candidates, best first.
+
+    A candidate is a video whose site can be framed and which carries a provider
+    key. Anything else is dropped rather than ranked, because a record with no
+    key cannot be played and returning it would only push the failure to the
+    browser, where it surfaces as a blank rectangle.
+    """
+    if not videos:
+        return []
+    candidates = [
+        video
+        for video in videos
+        if normalise_trailer_site(video) in FRAMABLE_TRAILER_SITES and video.get("key")
+    ]
+    return sorted(candidates, key=_trailer_rank)
+
+
+def trailer_descriptor(video: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize one TMDB video into the payload the player consumes.
+
+    `embed_url` is built here rather than in the browser so the provider URL
+    shape lives in exactly one module. The client used to assemble this from its
+    own provider table, which meant a provider added to TMDB support had to be
+    added again on the frontend or the trailer silently resolved to nothing.
+    """
+    site = normalise_trailer_site(video)
+    key = str(video.get("key") or "")
+    embed_url = build_embed_url(site, key)
+    descriptor: Dict[str, Any] = {
+        "provider": site,
+        "id": key,
+        # `title` is what the client's TrailerInfo reads for the frame's label.
+        "title": str(video.get("name") or video.get("type") or "Trailer"),
+        "type": str(video.get("type") or ""),
+        "official": bool(video.get("official")),
+        "language": str(video.get("iso_639_1") or "und"),
+        "published_at": str(video.get("published_at") or ""),
+    }
+    if embed_url:
+        descriptor["embed_url"] = embed_url
+    thumb = trailer_thumbnail(site, key)
+    if thumb:
+        descriptor["thumb_url"] = thumb
+    return descriptor
+
+
+def build_embed_url(site: str, key: str) -> Optional[str]:
+    """The frameable embed URL for a provider key, or None if unsupported."""
+    origin = _TRAILER_EMBED_ORIGINS.get(site)
+    if not origin or not key:
+        return None
+    if site == "vimeo":
+        return f"{origin}/video/{key}"
+    if site == "dailymotion":
+        return f"{origin}/embed/video/{key}"
+    # `youtube-nocookie` rather than the bare YouTube domain: it serves the same
+    # frames without setting the tracking cookies a trailer view would otherwise
+    # drop on a visitor who never asked to be measured.
+    return f"{origin}/embed/{key}"
+
+
+def trailer_thumbnail(site: str, key: str) -> Optional[str]:
+    """A poster frame for a trailer, or None when the site exposes none."""
+    if not key:
+        return None
+    if site == "youtube":
+        return f"https://i.ytimg.com/vi/{key}/hqdefault.jpg"
+    if site == "dailymotion":
+        return f"https://www.dailymotion.com/thumbnail/video/{key}"
+    return None
 
 
 def select_trailer_key(videos: Optional[List[Dict[str, Any]]]) -> Optional[str]:
@@ -391,6 +507,34 @@ def select_trailer_key(videos: Optional[List[Dict[str, Any]]]) -> Optional[str]:
         return None
     best = min(candidates, key=_trailer_rank)
     return best.get("key")
+
+
+def resolve_trailers(
+    media_id: int, media_type: str, limit: int = 5
+) -> List[Dict[str, Any]]:
+    """Server-side trailer resolution for a title, best first.
+
+    This is the whole trailer path server-side: one `/videos` call, ranked, with
+    every player URL already built. The frontend used to receive a bare key and
+    reconstruct the provider URL from its own table, which meant TMDB answering
+    with a Vimeo upload produced a broken frame rather than a working one.
+
+    Returns an empty list when TMDB is unreachable, has no key configured, or the
+    title has no playable video -- all of which the caller renders as "no
+    trailer", which is the correct answer for most titles.
+    """
+    if media_type not in ("movie", "tv"):
+        media_type = "movie"
+    data = _tmdb_get(f"/{media_type}/{media_id}/videos", {})
+    if not data:
+        return []
+    ranked = rank_trailers(data.get("results", []))
+    descriptors = [
+        trailer_descriptor(video)
+        for video in ranked[: max(1, limit)]
+        if video.get("site")
+    ]
+    return [descriptor for descriptor in descriptors if descriptor.get("embed_url")]
 
 
 def get_trailer_key(media_id: int, media_type: str) -> Optional[str]:

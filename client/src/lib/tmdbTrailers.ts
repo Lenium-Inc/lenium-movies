@@ -178,6 +178,13 @@ export interface PreviewOptions {
  *
  * Returns null when the provider is not one we can frame, so a caller can fall
  * back to artwork instead of mounting an iframe with a broken src.
+ *
+ * When the backend has already built a base URL (`embed_url`) it wins. That
+ * keeps the provider table in one module rather than two: the backend knows
+ * which sites can be framed and how each is spelled, while this file knows only
+ * what this particular embed is doing -- autoplay, mute, loop, `enablejsapi`.
+ * The base is used and the playback parameters are appended, because they are a
+ * property of the embed, not of the site.
  */
 export function resolveTrailer(
   trailer: TrailerInfo | null | undefined,
@@ -187,19 +194,41 @@ export function resolveTrailer(
   const site = toSite(trailer.provider);
   if (!site) return null;
 
-  const base =
-    site === "vimeo"
-      ? `${TRAILER_ORIGINS.vimeo}/video/${trailer.id}`
-      : site === "dailymotion"
-        ? `${TRAILER_ORIGINS.dailymotion}/embed/video/${trailer.id}`
-        : `${TRAILER_ORIGINS.youtube}/embed/${trailer.id}`;
-
   const options: PreviewOptions = { loop: true, controls: false, ...opts };
+  const query = params(site, trailer.id, options);
+  const base = serverBase(trailer, site);
+
   return {
-    src: `${base}?${params(site, trailer.id, options)}`,
+    src: appendQuery(base, query),
     site,
     label: trailer.title?.trim() || "Official trailer",
   };
+}
+
+/**
+ * The site's embed URL, preferring the backend's spelling.
+ *
+ * The backend's URL carries no query string today, but appending with `&` when
+ * one appears is cheaper than trusting that detail to stay true -- otherwise a
+ * future `?rel=0` from the server would silently drop every parameter set here,
+ * including the autoplay the hero depends on.
+ */
+function serverBase(trailer: TrailerInfo, site: TrailerSite): string {
+  const fromServer = trailer.embed_url?.trim();
+  if (fromServer) return fromServer;
+  switch (site) {
+    case "vimeo":
+      return `${TRAILER_ORIGINS.vimeo}/video/${trailer.id}`;
+    case "dailymotion":
+      return `${TRAILER_ORIGINS.dailymotion}/embed/video/${trailer.id}`;
+    case "youtube":
+      return `${TRAILER_ORIGINS.youtube}/embed/${trailer.id}`;
+  }
+}
+
+function appendQuery(base: string, query: string): string {
+  if (!query) return base;
+  return `${base}${base.includes("?") ? "&" : "?"}${query}`;
 }
 
 /**
@@ -207,15 +236,23 @@ export function resolveTrailer(
  *
  * Used as the frame's `background-image` so the black letterbox of a loading
  * embed is never what the viewer sees first.
+ *
+ * The backend's `thumb_url` wins when present. Beyond keeping one table, it
+ * corrects a mistake the fallback still has to carry: `TRAILER_ORIGINS` lists
+ * frame origins for the CSP, and `youtube-nocookie.com/vi/...` is not an image
+ * host, so the legacy fallback can produce a URL that never resolves.
  */
 export function trailerThumbnail(
   trailer: TrailerInfo | null | undefined
 ): string | null {
+  const fromServer = trailer?.thumb_url?.trim();
+  if (fromServer) return fromServer;
+
   const site = toSite(trailer?.provider);
   if (!site || !trailer?.id) return null;
   switch (site) {
     case "youtube":
-      return `${TRAILER_ORIGINS.youtube}/vi/${trailer.id}/hqdefault.jpg`;
+      return `https://i.ytimg.com/vi/${trailer.id}/hqdefault.jpg`;
     case "dailymotion":
       return `https://www.dailymotion.com/thumbnail/video/${trailer.id}`;
     case "vimeo":

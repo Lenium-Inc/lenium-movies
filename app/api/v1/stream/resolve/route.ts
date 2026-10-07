@@ -2,11 +2,13 @@ import { NextResponse } from "next/server";
 import {
   createProxyToken,
   findVodTitle,
+  parseMasterAudio,
   parseMasterQualities,
+  parseMasterSubtitles,
   readBoundedText,
   RequestInputError,
 } from "@/lib/proxy-utils";
-import type { StreamPayload, SubtitleTrack } from "@/types/stream";
+import type { StreamPayload } from "@/types/stream";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -58,26 +60,21 @@ export async function GET(request: Request) {
     if (!response.ok) {
       return jsonError("The authorized stream is temporarily unavailable.", 502);
     }
+    // Bounded: the manifest is capped, so a hostile or broken origin cannot turn
+    // this endpoint into an unbounded allocation.
     const manifestText = await readBoundedText(response);
     const qualities = parseMasterQualities(manifestText, masterPlaylist);
-    const subtitleTracks: SubtitleTrack[] = [];
-    for (const match of manifestText.matchAll(/#EXT-X-MEDIA:([^\r\n]+)/g)) {
-      const attributes = Object.fromEntries(
-        Array.from(match[1].matchAll(/([A-Z0-9-]+)=("(?:[^"\\]|\\.)*"|[^,]*)/g))
-          .map(attribute => [
-            attribute[1],
-            attribute[2].replace(/^"|"$/g, ""),
-          ])
-      );
-      if (attributes.TYPE !== "SUBTITLES" || !attributes.URI) continue;
-      const upstreamSubtitle = new URL(attributes.URI, masterPlaylist).href;
-      subtitleTracks.push({
-        id: attributes["GROUP-ID"] || attributes.LANGUAGE || `subtitle-${subtitleTracks.length}`,
-        label: attributes.NAME || attributes.LANGUAGE || "Subtitle",
-        language: attributes.LANGUAGE || "und",
-        url: `/api/v1/proxy/segment?token=${encodeURIComponent(createProxyToken(upstreamSubtitle))}`,
-      });
-    }
+    // Audio renditions are parsed here rather than left to the player. An HLS
+    // master carries them as `EXT-X-MEDIA` entries on sub-playlists, and an
+    // English dub for a foreign-language release exists only as one of those --
+    // so a resolver that reads only `EXT-X-STREAM-INF` resolves the video ladder
+    // perfectly and silently offers no way to hear the film in English.
+    const audio = parseMasterAudio(
+      manifestText,
+      masterPlaylist,
+      item.originalLanguage
+    );
+    const subtitleTracks = parseMasterSubtitles(manifestText, masterPlaylist);
 
     const payload: StreamPayload = {
       titleId: item.titleId,
@@ -89,6 +86,7 @@ export async function GET(request: Request) {
         return `/api/v1/proxy/m3u8?token=${encodeURIComponent(token)}`;
       }),
       subtitles: subtitleTracks,
+      audio,
       qualities,
       episodes: item.episodes ?? [],
       downloadableQualities: Object.keys(

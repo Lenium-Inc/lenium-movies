@@ -836,6 +836,20 @@ export interface TrailerInfo {
   provider: string;
   id: string;
   title?: string;
+  /**
+   * The player URL, built by the backend.
+   *
+   * Present when the trailer came from `/api/v1/media/trailer`, where the site
+   * table and the framing check live. `resolveTrailer` prefers it over building
+   * its own base so that a site the backend knows and the client does not still
+   * plays, and a site neither knows is dropped before an iframe is mounted.
+   *
+   * It is the *base* URL with no playback parameters. Autoplay, mute, loop and
+   * `enablejsapi` are per-embed decisions, so they are still appended here.
+   */
+  embed_url?: string;
+  /** Provider thumbnail, when the provider exposes one. */
+  thumb_url?: string;
 }
 
 function isTrailerPayload(value: unknown): value is { trailer?: TrailerInfo } {
@@ -874,17 +888,59 @@ export async function fetchTrailer(
 }
 
 /**
+ * Fetch the ranked trailer list by TMDB ID, best candidate first.
+ *
+ * The backend does the ranking and the URL construction, so this is the one
+ * call a title-detail view should make. It returns 200 with `trailer: null` for
+ * a title with no playable upload and for an unknown id alike, which is right:
+ * "nothing to show" is the useful answer either way, and a `404` would have
+ * made callers distinguish an id typo from an empty catalog to produce the same
+ * artwork fallback.
+ */
+async function fetchRankedTrailer(
+  tmdbId: string | number,
+  mediaType: "movie" | "tv"
+): Promise<TrailerInfo | null> {
+  const params = new URLSearchParams({
+    id: String(tmdbId),
+    media_type: mediaType,
+    limit: "5",
+  });
+  const response = await fetch(
+    `${MOVIE_API_BASE_URL}/api/v1/media/trailer?${params.toString()}`
+  );
+  if (!response.ok) {
+    throw new Error(`Movie backend responded with status ${response.status}`);
+  }
+  const payload: unknown = await response.json();
+  if (!isTrailerPayload(payload)) {
+    throw new Error("Movie backend returned an unexpected trailer shape");
+  }
+  return payload.trailer ?? null;
+}
+
+/**
  * Fetch trailer by TMDB ID directly from TMDB via backend.
- * Uses append_to_response=videos to get YouTube trailer key.
  *
  * `mediaType` defaults to `movie` to match the backend, but callers have to pass
  * the real one: a TMDB id is only meaningful against its own type, and relying
  * on the default asked for the wrong title's trailer for every series.
+ *
+ * Tries the ranked endpoint first and falls back to the older key-only route.
+ * The fallback is not defensive busywork: the two routes are answered by
+ * different functions in the same backend, and a title that resolves to nothing
+ * should go unnoticed rather than taking a hover preview down with it.
  */
 export async function fetchTrailerByTmdbId(
   tmdbId: string | number,
   mediaType: "movie" | "tv" = "movie"
 ): Promise<TrailerInfo | null> {
+  try {
+    return await fetchRankedTrailer(tmdbId, mediaType);
+  } catch (error) {
+    console.warn("[Trailer] Ranked endpoint failed, falling back:", error);
+  }
+
   const params = new URLSearchParams({
     id: String(tmdbId),
     media_type: mediaType,

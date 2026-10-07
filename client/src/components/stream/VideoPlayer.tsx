@@ -189,6 +189,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const videoRef = useRef<HTMLVideoElement>(null);
 
+  // Deep link: `#audio-subtitles` opens the track menu on arrival.
+  //
+  // The hero's "Audio & subtitles" action uses it, so the viewer lands on the
+  // choice itself instead of a paused player they then have to hunt through.
+  //
+  // Mount effect rather than a `useState` initializer: the hash makes the
+  // client's first render differ from the server's, and hydration would warn
+  // about the mismatch. The hash is cleared after opening so the state is
+  // consumed once and a reload does not reopen a menu the viewer has since
+  // dismissed.
+  useEffect(() => {
+    if (window.location.hash !== "#audio-subtitles") return;
+    setSubtitleMenuOpen(true);
+    window.history.replaceState(
+      null,
+      "",
+      `${window.location.pathname}${window.location.search}`
+    );
+  }, []);
+
   // Enabling a track is a property of the loaded media element, so it has to be
   // reapplied whenever the element, the track list, or the selection changes --
   // and again after `loadedmetadata`, because a source swap discards the modes

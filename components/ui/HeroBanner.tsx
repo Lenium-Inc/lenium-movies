@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowDown, Download, Play, Plus } from "lucide-react";
+import { ArrowDown, Download, Languages, Play, Plus } from "lucide-react";
 import type { MediaKind, StreamQuality } from "@/types/stream";
 
 export interface FeaturedTitle {
@@ -14,7 +14,25 @@ export interface FeaturedTitle {
   downloadableQualities: StreamQuality[];
 }
 
+/**
+ * Best first, so the badge strip reads the way a viewer ranks it rather than
+ * the way an object happened to be keyed.
+ */
+const QUALITY_ORDER: Record<StreamQuality, number> = {
+  "1080p": 3,
+  "720p": 2,
+  "480p": 1,
+};
+
+function bestQualities(qualities: StreamQuality[]): StreamQuality[] {
+  return [...qualities].sort(
+    (a, b) => (QUALITY_ORDER[b] ?? 0) - (QUALITY_ORDER[a] ?? 0)
+  );
+}
+
 export function HeroBanner({ title }: { title: FeaturedTitle }) {
+  const qualities = bestQualities(title.downloadableQualities);
+
   return (
     <section className="relative isolate flex min-h-[600px] items-end overflow-hidden lg:min-h-[82vh]">
       {title.backdropUrl ? (
@@ -91,6 +109,48 @@ export function HeroBanner({ title }: { title: FeaturedTitle }) {
             >
               <ArrowDown className="h-4 w-4" />
             </a>
+          </div>
+
+          {/*
+            The track bar.
+
+            The one thing this hero can say that a stock streaming banner cannot
+            is what the title actually offers: the bitrates that will download
+            and the point where a viewer chooses a dub or a caption track. That
+            is real information about this catalog, so it gets the page's only
+            frosted surface instead of another badge over the artwork.
+          */}
+          <div className="mt-7 flex max-w-full flex-wrap items-center gap-x-5 gap-y-3 rounded-xl border border-white/15 bg-white/[0.07] px-4 py-3 backdrop-blur-2xl sm:px-5">
+            {qualities.length ? (
+              <>
+                <div className="flex items-center gap-2.5">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/55">
+                    Quality
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {qualities.map(quality => (
+                      <span
+                        key={quality}
+                        className="rounded-md border border-white/15 bg-white/[0.06] px-2 py-0.5 font-mono text-[11px] font-semibold tabular-nums text-white/90"
+                      >
+                        {quality}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <span
+                  aria-hidden
+                  className="hidden h-6 w-px bg-white/15 sm:block"
+                />
+              </>
+            ) : null}
+            <Link
+              href={`/watch/${encodeURIComponent(title.titleId)}#audio-subtitles`}
+              className="inline-flex items-center gap-2 text-xs font-semibold tracking-wide text-white/80 transition hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white"
+            >
+              <Languages className="h-4 w-4" aria-hidden />
+              Audio &amp; subtitles
+            </Link>
           </div>
         </div>
       </div>

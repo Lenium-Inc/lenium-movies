@@ -3,7 +3,9 @@ import {
   assertAuthorizedMediaUrl,
   createProxyToken,
   getVodCatalog,
+  parseMasterAudio,
   parseMasterQualities,
+  parseMasterSubtitles,
   readProxyToken,
   RequestInputError,
   rewriteManifest,
@@ -109,6 +111,88 @@ describe("authorized HLS proxy utilities", () => {
 
     expect(options.map(option => option.height)).toEqual([1080, 480]);
     expect(options[0].url).toContain("/api/v1/proxy/m3u8?token=");
+  });
+
+  it("keeps every declared rung instead of collapsing to a fixed ladder", () => {
+    // A 4K release and a low-bandwidth rung both have to survive, because a
+    // selector that reports both as 1080p/480p cannot offer either.
+    configureProxy();
+    const options = parseMasterQualities(
+      [
+        "#EXTM3U",
+        "#EXT-X-STREAM-INF:BANDWIDTH=2400000,RESOLUTION=1280x720",
+        "720.m3u8",
+        "#EXT-X-STREAM-INF:BANDWIDTH=500000,RESOLUTION=640x360",
+        "360.m3u8",
+        "#EXT-X-STREAM-INF:BANDWIDTH=18000000,RESOLUTION=3840x2160",
+        "2160.m3u8",
+      ].join("\n"),
+      "https://media.example.org/hls/title/master.m3u8"
+    );
+
+    expect(options.map(option => option.height)).toEqual([2160, 720, 360]);
+    expect(options[0].label).toBe("4K");
+    expect(options[2].label).toBe("360p");
+  });
+
+  it("surfaces the English dub of a foreign-language title", () => {
+    configureProxy();
+    const audio = parseMasterAudio(
+      [
+        "#EXTM3U",
+        '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",NAME="Korean",LANGUAGE="ko",DEFAULT=YES,URI="audio/ko.m3u8"',
+        '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",NAME="English",LANGUAGE="en",URI="audio/en.m3u8"',
+      ].join("\n"),
+      "https://media.example.org/hls/title/master.m3u8",
+      "ko"
+    );
+
+    expect(audio.map(track => track.language)).toEqual(["ko", "en"]);
+    expect(audio[0].isDefault).toBe(true);
+    expect(audio[0].isDub).toBe(false);
+    // The English rendition on a Korean title is the dub, and the URL has to be
+    // a proxied playlist -- a rendition is media, not a single segment.
+    expect(audio[1].isDub).toBe(true);
+    expect(audio[1].url).toContain("/api/v1/proxy/m3u8?token=");
+  });
+
+  it("does not call an English original track a dub", () => {
+    configureProxy();
+    const audio = parseMasterAudio(
+      [
+        "#EXTM3U",
+        '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",NAME="English",LANGUAGE="en-US",DEFAULT=YES,URI="audio/en.m3u8"',
+      ].join("\n"),
+      "https://media.example.org/hls/title/master.m3u8",
+      "en"
+    );
+
+    expect(audio[0].isDub).toBe(false);
+    expect(audio[0].channels).toBeUndefined();
+  });
+
+  it("assumes no original language rather than guessing one", () => {
+    configureProxy();
+    const audio = parseMasterAudio(
+      '#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",NAME="English",LANGUAGE="eng",URI="audio/en.m3u8"',
+      "https://media.example.org/hls/title/master.m3u8"
+    );
+
+    expect(audio).toHaveLength(1);
+    expect(audio[0].isDub).toBe(false);
+  });
+
+  it("routes subtitle renditions through the segment route", () => {
+    configureProxy();
+    const tracks = parseMasterSubtitles(
+      '#EXTM3U\n#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="s",NAME="English SDH",LANGUAGE="en",URI="cap/en.vtt"',
+      "https://media.example.org/hls/title/master.m3u8"
+    );
+
+    expect(tracks).toHaveLength(1);
+    expect(tracks[0].url).toContain("/api/v1/proxy/segment?token=");
+    expect(readProxyToken(new URL(tracks[0].url, "https://x.test").searchParams.get("token")!))
+      .toBe("https://media.example.org/hls/title/cap/en.vtt");
   });
 
   it("requires explicit verified ownership or distribution rights", () => {

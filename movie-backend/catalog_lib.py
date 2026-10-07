@@ -273,6 +273,190 @@ def clean_title(raw: str | None) -> str:
     return title.strip() or "Untitled"
 
 
+# ---------------------------------------------------------------------------
+# HLS master manifests
+# ---------------------------------------------------------------------------
+#
+# Why this lives here rather than in `app.py`
+# ------------------------------------------
+# Most of the direct catalog is progressive MP4, which `choose_streams` already
+# resolves into quality tiers from Archive.org's file metadata. But a direct
+# source can also be an HLS master playlist, and a master carries two things a
+# file listing cannot: a genuine adaptive bitrate ladder, and alternate audio
+# renditions. The renditions are the important half -- an English dub of a
+# Korean or Chinese release exists *only* as an `#EXT-X-MEDIA:TYPE=AUDIO` entry
+# pointing at a sub-playlist, so a resolver that reads nothing else will
+# resolve the video ladder perfectly and never once offer the dub.
+#
+# Parsing is kept pure (text in, inventory out) so it is testable without a
+# socket, and so the route layer can decide what to do about a manifest it
+# could not fetch.
+
+#: Ceiling on a master manifest fetch. Masters are kilobytes; anything near this
+#: is not a manifest, and an unbounded read here would be an allocation
+#: primitive reachable from a client-supplied URL.
+MANIFEST_MAX_BYTES = 2 * 1024 * 1024
+MANIFEST_TIMEOUT_SECONDS = 12.0
+
+_ATTRIBUTE_PATTERN = re.compile(r'([A-Za-z0-9-]+)=("(?:[^"\\]|\\.)*"|[^,]*)')
+#: ISO-639-2 codes a packager may use where the RFC-5646 2-letter form is expected.
+_ENGLISH_LANGUAGE_CODES = {"en", "eng", "en-us", "en-gb", "english"}
+
+
+def parse_manifest_attributes(value: str) -> dict[str, str]:
+    """Parse an HLS attribute list into a dict.
+
+    Quoted values may contain commas (`NAME="English, 5.1"`), which is exactly
+    why this cannot be a `split(",")`. The leading `#EXT-X-TAG:` is the
+    caller's to strip, so the same helper serves every tag type.
+    """
+    attributes: dict[str, str] = {}
+    for match in _ATTRIBUTE_PATTERN.finditer(value):
+        attributes[match.group(1).upper()] = match.group(2).strip('"')
+    return attributes
+
+
+def _is_english(language: str) -> bool:
+    normalised = (language or "").strip().lower()
+    if normalised in _ENGLISH_LANGUAGE_CODES:
+        return True
+    return normalised.split("-")[0].split("_")[0] in {"en", "eng"}
+
+
+def _base_language(language: str) -> str:
+    return (language or "").strip().lower().split("-")[0].split("_")[0]
+
+
+def _manifest_line_kind(line: str) -> tuple[str, str]:
+    """Return (tag, attribute-list) for a tag line, else ("", "") for a URI."""
+    if not line.startswith("#"):
+        return "", ""
+    tag, _, rest = line.partition(":")
+    return tag.strip().upper(), rest.strip()
+
+
+def parse_hls_master(
+    manifest: str, base_url: str = "", original_language: str | None = None
+) -> dict:
+    """Inventory an HLS master playlist: video rungs, audio dubs, subtitles.
+
+    Returns a dict with `variants`, `audio` and `subtitles`. An empty
+    `variants` list means this is a media playlist rather than a master, which
+    is not an error -- it just has no ladder to advertise.
+
+    URIs are resolved against `base_url` when one is supplied, so a relative
+    `variant/1080.m3u8` becomes absolute. They are returned as parsed; the
+    caller is responsible for putting them on an authorized, same-origin route
+    before they reach a browser.
+    """
+    variants: list[dict] = []
+    audio: list[dict] = []
+    subtitles: list[dict] = []
+    pending: dict | None = None
+
+    def absolute(uri: str) -> str:
+        if not base_url:
+            return uri
+        try:
+            return urllib.parse.urljoin(base_url, uri)
+        except ValueError:
+            return uri
+
+    for raw_line in manifest.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        if not line.startswith("#"):
+            # The URI line that follows `#EXT-X-STREAM-INF` names a variant.
+            if pending is not None:
+                pending["url"] = absolute(line)
+                variants.append(pending)
+                pending = None
+            continue
+
+        tag, attributes_text = _manifest_line_kind(line)
+
+        if tag == "#EXT-X-STREAM-INF":
+            attributes = parse_manifest_attributes(attributes_text)
+            match = re.search(r"x(\d+)", attributes.get("RESOLUTION", ""), re.I)
+            height = int(match.group(1)) if match else 0
+            pending = {
+                "height": height,
+                # "4K" rather than "2160p": that is the label a viewer reads on
+                # the quality badge, and it matches what the TS resolver emits.
+                "quality": "4K" if height >= 2000 else (f"{height}p" if height else "Adaptive"),
+                "bandwidth": int(
+                    attributes.get("AVERAGE-BANDWIDTH") or attributes.get("BANDWIDTH") or 0
+                ),
+                "url": "",
+            }
+            continue
+
+        if tag not in ("#EXT-X-MEDIA",):
+            continue
+
+        attributes = parse_manifest_attributes(attributes_text)
+        kind = attributes.get("TYPE", "").upper()
+        uri = attributes.get("URI", "")
+        # A rendition with no URI is muxed into the variant rather than shipped
+        # separately, so it is not selectable and there is nothing to point at.
+        if kind not in ("AUDIO", "SUBTITLES") or not uri:
+            continue
+
+        language = attributes.get("LANGUAGE", "und").strip() or "und"
+        name = attributes.get("NAME", "").strip() or language
+        group_id = attributes.get("GROUP-ID", "").strip()
+        descriptor = {
+            "id": f"{group_id}:{language}:{name}",
+            "label": name,
+            "language": language,
+            "name": name,
+            "group_id": group_id,
+            "url": absolute(uri),
+        }
+
+        if kind == "SUBTITLES":
+            subtitles.append(descriptor)
+            continue
+
+        descriptor["is_default"] = attributes.get("DEFAULT", "").upper() == "YES"
+        # An English rendition is a *dub* only on a title that was not made in
+        # English. Without a declared original language nothing is labelled a
+        # dub, because on an English film English audio is the primary track and
+        # labelling it otherwise would misreport most of the catalog.
+        descriptor["is_dub"] = bool(
+            _is_english(language)
+            and original_language
+            and _base_language(original_language) not in {"en", "eng"}
+        )
+        channels = attributes.get("CHANNELS", "")
+        if channels.isdigit():
+            descriptor["channels"] = int(channels)
+        audio.append(descriptor)
+
+    variants.sort(key=lambda item: (-item["height"], item["bandwidth"]))
+    audio.sort(key=lambda item: (not item["is_default"], item["label"]))
+    return {"variants": variants, "audio": audio, "subtitles": subtitles}
+
+
+def fetch_hls_master(url: str, original_language: str | None = None) -> dict | None:
+    """Fetch and inventory an HLS master, or None when it cannot be read.
+
+    Returns None rather than raising for every failure: an unreadable manifest
+    is an ordinary outcome on this path (the origin is down, the URL was a media
+    playlist rather than a master, the body was not an `#EXTM3U`), and the
+    caller's correct response to all of them is the same -- fall back.
+    """
+    try:
+        text = fetch_bounded_text(url, MANIFEST_TIMEOUT_SECONDS, MANIFEST_MAX_BYTES)
+    except Exception:  # noqa: BLE001 - any fetch failure degrades to "no manifest"
+        return None
+    if not text.lstrip("﻿").lstrip().startswith("#EXTM3U"):
+        return None
+    return parse_hls_master(text, base_url=url, original_language=original_language)
+
+
 STOPWORDS = {"the", "a", "an", "and", "of", "for"}
 
 

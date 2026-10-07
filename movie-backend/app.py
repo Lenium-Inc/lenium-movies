@@ -28,6 +28,8 @@ from datetime import datetime, timedelta, timezone
 from flask import Flask, Response, jsonify, request
 from werkzeug.exceptions import HTTPException
 
+from cachetools import TTLCache
+
 # Imported first so the dotenv file is loaded before any module reads a secret.
 from runtime_config import load_env_file, ssl_context, tmdb_api_key
 
@@ -72,50 +74,78 @@ _DIRECT_CATALOG = _load_direct_catalog()
 # cannot multiply the work, and collapse concurrent lookups of the same title
 # onto one in-flight scrape instead of one per viewer.
 _MISS_TTL_SECONDS = 300
-_direct_source_cache: dict[str, tuple[float, dict | None]] = {}
+#: Every module-level cache below is a `TTLCache` with this `maxsize`. The
+#: service is capped at 512 MB of RAM on Render, and these caches are keyed by
+#: something a client controls (a normalised title), so an unbounded dict is a
+#: slow OOM: one entry per distinct title anyone ever asked for, each holding a
+#: nested payload, for the life of the worker. The bound plus a TTL makes the
+#: worst case a fixed number of entries regardless of traffic.
+CACHE_MAX_SIZE = 1000
+#: TTL for a cache entry whose staleness is harmless if it lingers.
+CACHE_TTL_SECONDS = 3600
+_direct_hit_cache: TTLCache = TTLCache(maxsize=CACHE_MAX_SIZE, ttl=CACHE_TTL_SECONDS)
+_direct_miss_cache: TTLCache = TTLCache(maxsize=CACHE_MAX_SIZE, ttl=_MISS_TTL_SECONDS)
 _direct_source_locks: dict[str, threading.Lock] = {}
 _direct_source_globals = threading.Lock()
 
 
-# Both dicts below are keyed by normalised title, so a long-lived worker
-# accumulates one entry per distinct title anyone ever searched. Left unbounded
-# that is a slow leak on a popular title, so the caches are capped and the
-# oldest half is dropped once the cap is hit. (The lock map is small next to
-# the cache, but the same reasoning applies and it shares the eviction.)
-_CACHE_MAX_ENTRIES = 2048
-
-
-def _evict_direct_caches() -> None:
-    """Caller must hold `_direct_source_globals`."""
-    if len(_direct_source_cache) <= _CACHE_MAX_ENTRIES:
-        return
-    for key in list(_direct_source_cache)[: len(_direct_source_cache) // 2]:
-        _direct_source_cache.pop(key, None)
-        _direct_source_locks.pop(key, None)
+# A hit and a miss are cached in separate containers because they have opposite
+# expiry requirements. A miss must be short-lived: it is a claim that this title
+# has no direct source, and the frontend's fallback loop retries with
+# refresh=True precisely because it expects that answer to change. A hit can be
+# long-lived, because an archive item that resolved once keeps resolving.
+#
+# A single dict -- which is what this was -- can only carry one TTL, and the
+# longer of the two was the one being paid. Negative caching is the reason the
+# refresh storm was ever bounded in the first place, so it keeps the short TTL.
+#
 
 
 def _direct_lock_for(key: str) -> threading.Lock:
     with _direct_source_globals:
         lock = _direct_source_locks.get(key)
         if lock is None:
+            # The lock map is keyed by the same titles as the caches, so it needs
+            # the same bound. `TTLCache` cannot own it -- the lock has to outlive
+            # the cache entry it guards, because a scrape in progress must finish
+            # even if its result is evicted -- so it is capped directly, and only
+            # when it is actually over. A lock is ~50 bytes against a ~92 MB
+            # memory budget, so the cap is set generously above the cache's.
+            if len(_direct_source_locks) > 2 * CACHE_MAX_SIZE:
+                for stale in list(_direct_source_locks)[: CACHE_MAX_SIZE]:
+                    _direct_source_locks.pop(stale, None)
             lock = threading.Lock()
             _direct_source_locks[key] = lock
         return lock
 
 
 def _direct_cache_get(key: str, refresh: bool) -> tuple[bool, dict | None]:
-    """Return (hit, value). A refresh bypasses a live entry but not a
-    just-recorded miss -- otherwise the refresh storm is unbounded again."""
+    """Return (hit, value). A refresh bypasses a live hit but not a
+    just-recorded miss -- otherwise the refresh storm is unbounded again.
+
+    Membership is tested rather than truthiness so that a recorded miss counts
+    as a hit in both modes: a caller that is not refreshing has no reason to
+    re-scrape a title it has already been told is unavailable, and it certainly
+    has no reason to do the scrape twice concurrently.
+    """
     with _direct_source_globals:
-        record = _direct_source_cache.get(key)
-    if record is None:
-        return False, None
-    stored_at, value = record
-    if not refresh:
-        return True, value
-    if value is None and (time.time() - stored_at) < _MISS_TTL_SECONDS:
-        return True, None
+        if refresh:
+            if key in _direct_miss_cache:
+                return True, None
+        else:
+            if key in _direct_hit_cache:
+                return True, _direct_hit_cache[key]
+            if key in _direct_miss_cache:
+                return True, None
     return False, None
+
+
+def _direct_cache_put(key: str, value: dict | None) -> None:
+    with _direct_source_globals:
+        if value is None:
+            _direct_miss_cache[key] = None
+        else:
+            _direct_hit_cache[key] = value
 
 
 # Season payloads, keyed by "id:season" (or "id:latest"). A season's episode list
@@ -125,29 +155,16 @@ def _direct_cache_get(key: str, refresh: bool) -> tuple[bool, dict | None]:
 # same handful of lookups. Misses are never cached, which matters most for the
 # "latest" key: a show with no aired season yet has to start resolving the
 # moment its season drops rather than at the end of a TTL.
-_SEASON_TTL_SECONDS = 6 * 3600
-_season_cache: dict[str, tuple[float, dict | None]] = {}
+_season_cache: TTLCache = TTLCache(maxsize=CACHE_MAX_SIZE, ttl=CACHE_TTL_SECONDS)
+#: `TTLCache` is not internally synchronised, and gunicorn runs this app with
+#: more than one worker thread. A read-modify-write on the underlying dict can
+#: interleave two writers into a lost entry, so every access to the season cache
+#: is made under this. (The direct-source caches have their own lock, below.)
+_season_cache_lock = threading.Lock()
 
 
 def _image_url(path, size: str) -> str:
     return f"https://image.tmdb.org/t/p/{size}{path}" if path else ""
-
-
-def _season_cache_get(key: str) -> tuple[dict | None, bool]:
-    record = _season_cache.get(key)
-    if record is None:
-        return None, False
-    stored_at, value = record
-    if (time.time() - stored_at) >= _SEASON_TTL_SECONDS:
-        return None, False
-    return value, True
-
-
-def _season_cache_put(key: str, value: dict | None) -> None:
-    if len(_season_cache) >= _CACHE_MAX_ENTRIES:
-        for stale in list(_season_cache)[: len(_season_cache) // 2]:
-            _season_cache.pop(stale, None)
-    _season_cache[key] = (time.time(), value)
 
 
 def _find_catalog_entry(title: str, year) -> dict | None:
@@ -200,9 +217,10 @@ def _direct_source_for(title: str, year=None, refresh: bool = False) -> dict | N
             except Exception as error:  # noqa: BLE001
                 print(f"[Catalog] on-demand scrape failed for {title!r}: {error}")
                 entry = None
-        with _direct_source_globals:
-            _direct_source_cache[key] = (time.time(), entry)
-            _evict_direct_caches()
+        # Records the hit or the miss; the cache routes it to the container whose
+        # TTL matches what kind of answer this is. `TTLCache` evicts on its own,
+        # so there is no size check to keep in step here.
+        _direct_cache_put(key, entry)
         return entry
 
 
@@ -941,6 +959,18 @@ def get_stream_direct():
     # though `/api/movies/resolve` reported it.
     if direct and direct.get("subtitles"):
         payload["subtitles"] = direct["subtitles"]
+    # Pointed at, not inlined. The quality ladder and the audio renditions need a
+    # second bounded upstream fetch, and resolve is on the critical path to first
+    # frame -- so the player asks for this only once it is already playing, and
+    # a slow manifest costs the selector its contents rather than the video.
+    payload["manifest_endpoint"] = "/api/v1/stream/manifest"
+    payload["manifest_params"] = {
+        "tmdb_id": tmdb_id,
+        "type": media_type,
+        "title": title,
+        "season": season_number,
+        "episode": episode_number,
+    }
     return jsonify(payload)
 
 
@@ -970,6 +1000,115 @@ def stream_relay():
     response.headers["Accept-Ranges"] = "bytes"
     response.headers["Cache-Control"] = "public, max-age=3600"
     return response
+
+
+def _manifest_inventory(entry: dict | None, original_language: str | None = None) -> dict:
+    """Quality/audio inventory for one resolved direct source.
+
+    Two very different sources have to answer the same question -- "what can the
+    player offer?" -- so both shapes are normalised here.
+
+    An HLS master is read for real: its ladder and its `#EXT-X-MEDIA` audio
+    renditions are parsed server-side, because the English dub of a foreign
+    release exists nowhere else. A progressive MP4 has no renditions at all, so
+    its file tiers from the archive listing are reported as variants with a
+    single (empty) audio list -- which is the truth, and is why the player must
+    treat an absent audio list as "no switcher" rather than as an error.
+    """
+    if not entry:
+        return {"variants": [], "audio": [], "subtitles": [], "source": None}
+
+    stream_url = entry.get("stream_url") or ""
+    if stream_url and ".m3u8" in urllib.parse.urlparse(stream_url).path.lower():
+        inventory = catalog_lib.fetch_hls_master(stream_url, original_language)
+        if inventory is not None:
+            inventory["source"] = "hls"
+            return inventory
+
+    variants = [
+        {
+            "quality": stream.get("quality"),
+            "height": int(stream.get("height") or 0),
+            "bandwidth": 0,
+            "url": stream.get("url") or "",
+            "size": int(stream.get("size") or 0),
+        }
+        for stream in (entry.get("streams") or [])
+        if stream.get("url")
+    ]
+    variants.sort(key=lambda item: (-item["height"], -item["size"]))
+    return {
+        "variants": variants,
+        "audio": [],
+        "subtitles": entry.get("subtitles") or [],
+        "source": "progressive",
+    }
+
+
+@app.route("/api/v1/stream/manifest", methods=["GET", "OPTIONS"])
+@app.route("/api/movies/manifest", methods=["GET", "OPTIONS"])
+def stream_manifest():
+    """Quality ladder and audio/subtitle renditions for one title.
+
+    Separate from `/api/movies/resolve` on purpose. Resolve has to be fast and
+    has to answer even when the source is merely reachable, whereas this answer
+    is only useful when it is complete -- and the cost of making it complete is
+    a second, bounded upstream fetch. Splitting them means a slow manifest costs
+    the quality selector its contents, not the video its playback.
+
+    Answers 200 with empty lists when the title resolves but its manifest cannot
+    be read, because "playable, one quality, no audio switcher" is a state the
+    player handles and an error is not.
+    """
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    parsed = _parse_tmdb_id(request.args.get("tmdb_id"))
+    if parsed is None:
+        return _json_error("Invalid ID", 400)
+
+    title = (request.args.get("title") or "").strip()
+    if not title:
+        tmdb_type = (request.args.get("type") or "movie").strip().lower()
+        details = _tmdb_get(f"/{tmdb_type}/{parsed}", {}) or {}
+        title = str(details.get("title") or details.get("name") or "").strip()
+    if not title:
+        return _json_error("A title is required to resolve a manifest", 400)
+
+    # Optional, and only used to decide whether an English audio rendition is a
+    # dub. Unvalidated beyond being non-empty and short: it is compared against
+    # a parsed manifest and never placed in a URL or a header.
+    original_language = (request.args.get("original_language") or "").strip()[:16] or None
+
+    try:
+        season = max(1, request.args.get("season", default=1, type=int))
+        episode = max(1, request.args.get("episode", default=1, type=int))
+    except (TypeError, ValueError):
+        season, episode = 1, 1
+
+    tmdb_type = (request.args.get("type") or "movie").strip().lower()
+    if tmdb_type not in ("movie", "tv"):
+        tmdb_type = "movie"
+
+    entry = _direct_source_for(
+        title,
+        year=request.args.get("year", type=int),
+        refresh=request.args.get("refresh") in ("1", "true", "yes"),
+    )
+    inventory = _manifest_inventory(entry, original_language)
+
+    return jsonify(
+        {
+            "success": True,
+            "tmdb_id": parsed,
+            "media_type": tmdb_type,
+            "title": title,
+            "season": season,
+            "episode": episode,
+            "available": bool(entry),
+            **inventory,
+        }
+    )
 
 
 # `Content-Disposition` is the only reliable way to make a browser save a
@@ -1149,7 +1288,9 @@ def get_season_details():
             return _json_error("Invalid season", 400)
 
     cache_key = f"{parsed}:{'latest' if season is None else season}"
-    payload, hit = _season_cache_get(cache_key)
+    with _season_cache_lock:
+        payload = _season_cache.get(cache_key)
+        hit = payload is not None
     if not hit:
         payload = _build_season_payload(parsed, season)
         # Only a resolved season is pinned. A cached miss would freeze the
@@ -1157,7 +1298,8 @@ def get_season_details():
         # new season keeps serving the old one for hours after it does -- which
         # is the one thing this route is asked for.
         if payload and not payload.get("error"):
-            _season_cache_put(cache_key, payload)
+            with _season_cache_lock:
+                _season_cache[cache_key] = payload
 
     if payload is None:
         return _json_error("Season not found", 404)
@@ -1430,6 +1572,51 @@ def get_trailer_by_tmdb_id():
         return jsonify({"trailer": None})
 
     return jsonify({"trailer": {"provider": "youtube", "id": trailer_key}})
+
+
+@app.route("/api/v1/media/trailer", methods=["GET", "OPTIONS"])
+def media_trailer():
+    """Ranked trailers for a title, resolved server-side.
+
+    The player used to receive a bare `{provider, id}` and build the embed URL
+    from its own provider table. That made two server answers look identical --
+    "no trailer" and "a trailer from a site this build has no builder for" --
+    and the second rendered as a blank frame. Every player URL is constructed
+    here now, so an unsupported site is dropped before the client ever sees it,
+    and a ranker can be improved without a frontend change.
+
+    `200` with `trailer: null` is the normal answer for most titles: TMDB has no
+    playable upload for a large share of the catalog, and that is not an error.
+    It is also answered for an unknown id, because "we could not find a trailer
+    for that" is true regardless of whether the id exists.
+    """
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    parsed = _parse_tmdb_id(request.args.get("id") or request.args.get("tmdb_id"))
+    if parsed is None:
+        return _json_error("Invalid id", 400)
+
+    media_type = request.args.get("media_type") or request.args.get("type") or "movie"
+    if media_type not in ("movie", "tv"):
+        media_type = "movie"
+
+    try:
+        limit = min(5, max(1, request.args.get("limit", default=5, type=int)))
+    except (TypeError, ValueError):
+        limit = 5
+
+    trailers = tmdb.resolve_trailers(parsed, media_type, limit=limit)
+
+    return jsonify(
+        {
+            "success": True,
+            "tmdb_id": parsed,
+            "media_type": media_type,
+            "trailer": trailers[0] if trailers else None,
+            "alternatives": trailers[1:],
+        }
+    )
 
 
 def extract_year(date_str: str | None) -> str:

@@ -47,7 +47,8 @@ _PATCHED = (
     # it has to be restored with the rest or every later test in this file runs
     # against a stub that returns nothing.
     ("_direct_source_for",),
-    ("_direct_source_cache",),
+    ("_direct_hit_cache",),
+    ("_direct_miss_cache",),
     ("_direct_source_locks",),
     ("stream_providers", "probe_embed"),
 )
@@ -378,7 +379,8 @@ def test_negative_result_is_cached_and_survives_refresh():
     The client calls with refresh=True up to three times in a row. Before the
     miss TTL, each of those triggered a full multi-minute Archive.org scrape."""
     app, _ = _client()
-    app._direct_source_cache.clear()
+    app._direct_hit_cache.clear()
+    app._direct_miss_cache.clear()
     app._direct_source_locks.clear()
 
     calls = []
@@ -395,7 +397,8 @@ def test_concurrent_lookups_collapse_to_one_scrape():
     import threading
 
     app, _ = _client()
-    app._direct_source_cache.clear()
+    app._direct_hit_cache.clear()
+    app._direct_miss_cache.clear()
     app._direct_source_locks.clear()
 
     started = []
@@ -425,16 +428,17 @@ def test_concurrent_lookups_collapse_to_one_scrape():
 def test_cache_is_bounded():
     """One entry per distinct title would grow without limit on a busy worker."""
     app, _ = _client()
-    app._direct_source_cache.clear()
+    app._direct_hit_cache.clear()
+    app._direct_miss_cache.clear()
     app._direct_source_locks.clear()
     app._find_catalog_entry = lambda *a, **k: {"id": f"id-{i}", "stream_url": "x"}
     app.catalog_lib.scrape_title = lambda *a, **k: None
 
-    for i in range(app._CACHE_MAX_ENTRIES + 200):
+    for i in range(app.CACHE_MAX_SIZE + 200):
         app._direct_source_for(f"Bounded Title {i}")
 
-    assert len(app._direct_source_cache) <= app._CACHE_MAX_ENTRIES, (
-        f"cache grew to {len(app._direct_source_cache)}"
+    assert len(app._direct_hit_cache) <= app.CACHE_MAX_SIZE, (
+        f"hit cache grew to {len(app._direct_hit_cache)}"
     )
 
 

@@ -506,14 +506,14 @@ def test_a_provider_that_recovers_is_probed_again_and_clears_its_record():
     assert not record.available(time.time()), "the provider was never benched"
 
     # Let the whole cooldown elapse: both the circuit and the cached negative
-    # are on the same clock, so a real expiry re-probes.
+    # are on the same clock, so a real expiry re-probes. Expiring the cache entry
+    # is what the TTL does on its own here, so dropping it is the honest way to
+    # stand in for waiting -- rewinding a stored timestamp is no longer
+    # possible now that the cache owns its own expiry.
     record.open_until = 0.0
     with stream_providers._probe_lock:
-        stamp, ok = stream_providers._probe_cache["vidsrc-pro"]
-        stream_providers._probe_cache["vidsrc-pro"] = (
-            stamp - stream_providers.COOLDOWN_SECONDS - 1.0,
-            ok,
-        )
+        assert "vidsrc-pro" in stream_providers._probe_failed
+        stream_providers._probe_failed.pop("vidsrc-pro")
     resolution = _resolve(_Chain({"vidsrc-pro": True}), direct=None)
 
     assert resolution.ok

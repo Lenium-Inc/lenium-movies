@@ -1,11 +1,18 @@
 import { NextResponse } from "next/server";
 import {
+  cancelBodyOnAbort,
+  memoryGuardResponse,
+  upstreamSignal,
+} from "@/lib/memory-guard";
+import {
   readProxyToken,
   RequestInputError,
 } from "@/lib/proxy-utils";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+const UPSTREAM_TIMEOUT_MS = 30_000;
 
 const FORWARDED_RESPONSE_HEADERS = [
   "accept-ranges",
@@ -17,7 +24,18 @@ const FORWARDED_RESPONSE_HEADERS = [
 ] as const;
 
 export async function GET(request: Request) {
+  // Checked before the token is even decrypted. This is the hottest route in
+  // the app -- one request per media segment, so a two-hour film is a few
+  // thousand of them -- and the work below (AES-GCM decryption, a DNS lookup, a
+  // TLS handshake, an upstream socket) is exactly the kind that pushes an
+  // already-loaded process over the line. Refusing here costs one cheap call.
+  const shed = memoryGuardResponse(
+    (body, init) => NextResponse.json(body, init)
+  );
+  if (shed) return shed;
+
   const token = new URL(request.url).searchParams.get("token") ?? "";
+  const { signal, release } = upstreamSignal(request.signal, UPSTREAM_TIMEOUT_MS);
   try {
     const upstreamUrl = readProxyToken(token);
     const range = request.headers.get("range");
@@ -25,7 +43,7 @@ export async function GET(request: Request) {
       headers: range ? { Range: range } : undefined,
       cache: "no-store",
       redirect: "error",
-      signal: AbortSignal.timeout(30_000),
+      signal,
     });
     if (!response.ok && response.status !== 206) {
       const status = [401, 403, 404, 416].includes(response.status)
@@ -51,7 +69,19 @@ export async function GET(request: Request) {
       const value = response.headers.get(name);
       if (value) headers.set(name, value);
     }
-    return new Response(response.body, { status: response.status, headers });
+    // Zero-buffer pass-through. The upstream body stream is handed to the
+    // response as-is: no `arrayBuffer()`, no `text()`, no chunk accumulation,
+    // no string concatenation. A 4-8 MB segment is therefore never resident
+    // here as a JS value -- it is relayed chunk by chunk under backpressure,
+    // which is what keeps this route's footprint flat regardless of bitrate.
+    //
+    // The `cancelBodyOnAbort` wrapper is what ties the socket to the tab:
+    // without it the fetch has already resolved by this point, so the client
+    // going away cannot reach the upstream connection at all.
+    return new Response(cancelBodyOnAbort(response.body, request.signal), {
+      status: response.status,
+      headers,
+    });
   } catch (error) {
     if (error instanceof RequestInputError) {
       return NextResponse.json({ error: error.message }, { status: error.status });
@@ -61,5 +91,10 @@ export async function GET(request: Request) {
       { error: "The media segment could not be loaded." },
       { status: 502 }
     );
+  } finally {
+    // Detaches the client-abort listener and clears the deadline timer on every
+    // path, including the error paths. Leaving either attached retains a closure
+    // over the request for as long as the process lives.
+    release();
   }
 }

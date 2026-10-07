@@ -5,8 +5,9 @@ import {
   randomBytes,
 } from "node:crypto";
 import type {
+  AudioTrack,
   QualityOption,
-  StreamQuality,
+  SubtitleTrack,
   VodTitle,
 } from "@/types/stream";
 
@@ -362,12 +363,33 @@ export async function readBoundedText(
   return new TextDecoder().decode(all);
 }
 
-const QUALITY_HEIGHTS: Record<StreamQuality, number> = {
-  "1080p": 1080,
-  "720p": 720,
-  "480p": 480,
-};
+/**
+ * The label a variant rung gets in the quality selector.
+ *
+ * 2160 is written "4K" because that is what a viewer recognises; everything
+ * else is labelled by its own height so that a 360p rung stays labelled 360p
+ * instead of being promoted into a rung it never claimed to be.
+ */
+function qualityLabel(height: number): string {
+  if (height >= 2000) return "4K";
+  return `${height}p`;
+}
 
+/**
+ * Every distinct video quality declared by a master playlist, best first.
+ *
+ * Each `#EXT-X-STREAM-INF` URI is rewritten onto the manifest proxy route, so
+ * the returned URLs are directly loadable by HLS.js and no origin outside the
+ * allowlist reaches the browser.
+ *
+ * Heights are reported as declared rather than snapped to a fixed ladder of
+ * 1080/720/480. Snapping was lossy in both directions: a 2160p variant was
+ * reported as 1080p, so a 4K badge could not be shown and a 4K viewer had no
+ * way to ask for one, while a 360p variant was reported as 480p and the selector
+ * advertised a resolution the stream does not carry. Variants that declare no
+ * `RESOLUTION` at all are kept too, under their bandwidth, because dropping them
+ * would hide a genuinely distinct rung from a packager that omits the attribute.
+ */
 export function parseMasterQualities(
   manifest: string,
   manifestUrl: string
@@ -385,22 +407,128 @@ export function parseMasterQualities(
         bandwidth: Number(attrs["AVERAGE-BANDWIDTH"] || attrs.BANDWIDTH || 0),
       };
     } else if (line && !line.startsWith("#") && pending) {
-      const height = pending.height;
-      const quality: StreamQuality =
-        height >= 900 ? "1080p" : height >= 600 ? "720p" : "480p";
       variants.push({
-        id: `${quality}-${variants.length}`,
-        label: height ? `${height}p` : quality,
-        height: height || QUALITY_HEIGHTS[quality],
+        id: `q${variants.length}`,
+        label: pending.height ? qualityLabel(pending.height) : "Adaptive",
+        height: pending.height,
         bandwidth: pending.bandwidth,
         url: proxyUrl(new URL(line, manifestUrl).href, true),
       });
       pending = null;
     }
   }
+  // Two rungs at the same height with different bitrates are one choice to a
+  // viewer, so the first (and, at equal height, the cheaper) wins.
   return variants
-    .sort((a, b) => b.height - a.height)
+    .sort((a, b) => b.height - a.height || a.bandwidth - b.bandwidth)
     .filter((item, index, all) => all.findIndex(other => other.height === item.height) === index);
+}
+
+/**
+ * Language subtags that identify English, including the regional and
+ * script-tagged forms a packager may declare ("en-US", "eng", "en-GB").
+ */
+const ENGLISH_TAGS = new Set(["en", "eng", "en-us", "en-gb", "english"]);
+
+function baseLanguage(tag: string): string {
+  return tag.trim().toLowerCase().split(/[-_]/)[0] ?? "";
+}
+
+function isEnglish(tag: string): boolean {
+  const normalised = tag.trim().toLowerCase();
+  return ENGLISH_TAGS.has(normalised) || ENGLISH_TAGS.has(baseLanguage(normalised));
+}
+
+/**
+ * Every alternate audio rendition declared by a master playlist.
+ *
+ * `#EXT-X-MEDIA:TYPE=AUDIO` entries are how a foreign-language release carries
+ * its English dub, and they are the reason an HLS master can play the same film
+ * in Korean with an English dub track rather than requiring a second manifest.
+ * They are also the only part of a master playlist a plain quality parser never
+ * looks at, which is how dub support tends to go missing: the video ladder
+ * resolves fine and the audio switcher is simply never populated.
+ *
+ * Renditions without a `URI` are muxed into the variant rather than shipped
+ * separately and are therefore not selectable; they are skipped rather than
+ * emitted with an unusable URL.
+ *
+ * `originalLanguage` decides which English track counts as a dub. Without it
+ * nothing is labelled a dub, because for an English film English audio is not
+ * a dub and relabelling it would put a false "English dub" badge on the primary
+ * track of most of the catalog.
+ */
+export function parseMasterAudio(
+  manifest: string,
+  manifestUrl: string,
+  originalLanguage?: string
+): AudioTrack[] {
+  const knownOriginal = originalLanguage ? baseLanguage(originalLanguage) : "";
+  const tracks: AudioTrack[] = [];
+  const seen = new Set<string>();
+  for (const match of manifest.matchAll(/^#EXT-X-MEDIA:([^\r\n]*)$/gm)) {
+    const attrs = parseAttributeList(match[1]);
+    if (attrs.TYPE !== "AUDIO" || !attrs.URI) continue;
+    const upstream = new URL(attrs.URI, manifestUrl).href;
+    const language = (attrs.LANGUAGE || "und").trim();
+    const name = (attrs.NAME || language).trim();
+    const groupId = (attrs["GROUP-ID"] || "audio").trim();
+    const id = `${groupId}:${language}:${name}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const english = isEnglish(language);
+    tracks.push({
+      id,
+      label: name,
+      language,
+      name,
+      groupId,
+      url: proxyUrl(upstream, true),
+      isDefault: (attrs.DEFAULT || "").toUpperCase() === "YES",
+      isDub: english && knownOriginal !== "" && knownOriginal !== "en",
+      ...(attrs.CHANNELS && Number.isFinite(Number(attrs.CHANNELS))
+        ? { channels: Number(attrs.CHANNELS) }
+        : {}),
+    });
+  }
+  // Default renditions first so the selector opens on the mix the packager
+  // intended, then alphabetical so the list does not shuffle between loads.
+  return tracks.sort(
+    (a, b) => Number(b.isDefault) - Number(a.isDefault) || a.label.localeCompare(b.label)
+  );
+}
+
+/**
+ * Every subtitle rendition declared by a master playlist.
+ *
+ * A `SUBTITLES` rendition is a WebVTT file, not a playlist, so its `URI` is
+ * rewritten onto the segment route -- the same route media segments use -- which
+ * also means the track URL is authorized and CORS-clean without the player
+ * having to know anything about the upstream origin.
+ */
+export function parseMasterSubtitles(
+  manifest: string,
+  manifestUrl: string
+): SubtitleTrack[] {
+  const tracks: SubtitleTrack[] = [];
+  const seen = new Set<string>();
+  for (const match of manifest.matchAll(/^#EXT-X-MEDIA:([^\r\n]*)$/gm)) {
+    const attrs = parseAttributeList(match[1]);
+    if (attrs.TYPE !== "SUBTITLES" || !attrs.URI) continue;
+    const language = (attrs.LANGUAGE || "und").trim();
+    const name = (attrs.NAME || language).trim();
+    const groupId = (attrs["GROUP-ID"] || "subs").trim();
+    const id = `${groupId}:${language}:${name}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    tracks.push({
+      id,
+      label: name,
+      language,
+      url: proxyUrl(new URL(attrs.URI, manifestUrl).href, false),
+    });
+  }
+  return tracks;
 }
 
 export function sanitizeFilename(value: string): string {

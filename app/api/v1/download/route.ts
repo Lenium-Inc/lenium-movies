@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
 import {
+  cancelBodyOnAbort,
+  memoryGuardResponse,
+  upstreamSignal,
+} from "@/lib/memory-guard";
+import {
   assertAuthorizedMediaUrl,
   findVodTitle,
   RequestInputError,
@@ -12,8 +17,18 @@ export const dynamic = "force-dynamic";
 
 const ALLOWED_EXTENSIONS = new Set([".mp4", ".m4v", ".webm", ".mkv", ".mov"]);
 const QUALITY_OPTIONS: StreamQuality[] = ["1080p", "720p", "480p"];
+const UPSTREAM_TIMEOUT_MS = 30_000;
 
 export async function GET(request: Request) {
+  // A whole-file download is the largest single response this service emits, so
+  // it is the most likely to be what tips a loaded instance over. Shedding it
+  // costs a 503 and a retry; being OOM-killed costs every concurrent viewer on
+  // the process, including the segment traffic that was still healthy.
+  const shed = memoryGuardResponse(
+    (body, init) => NextResponse.json(body, init)
+  );
+  if (shed) return shed;
+
   const params = new URL(request.url).searchParams;
   const titleId = params.get("titleId") ?? "";
   const quality = params.get("quality") as StreamQuality | null;
@@ -26,6 +41,7 @@ export async function GET(request: Request) {
     );
   }
 
+  const { signal, release } = upstreamSignal(request.signal, UPSTREAM_TIMEOUT_MS);
   try {
     const title = findVodTitle(titleId);
     if (!title) {
@@ -63,7 +79,7 @@ export async function GET(request: Request) {
       headers: range ? { Range: range } : undefined,
       cache: "no-store",
       redirect: "error",
-      signal: AbortSignal.timeout(30_000),
+      signal,
     });
     if (!upstream.ok && upstream.status !== 206) {
       return NextResponse.json(
@@ -97,7 +113,14 @@ export async function GET(request: Request) {
       const value = upstream.headers.get(name);
       if (value) headers.set(name, value);
     }
-    return new Response(upstream.body, { status: upstream.status, headers });
+    // Zero-buffer relay of the file body: the upstream stream is handed straight
+    // to the response rather than collected, so a multi-gigabyte 1080p file is
+    // never held in this process. Aborting with the client closes the upstream
+    // socket instead of leaving it to drain into a dead tab.
+    return new Response(cancelBodyOnAbort(upstream.body, request.signal), {
+      status: upstream.status,
+      headers,
+    });
   } catch (error) {
     if (error instanceof RequestInputError) {
       return NextResponse.json({ error: error.message }, { status: error.status });
@@ -107,5 +130,7 @@ export async function GET(request: Request) {
       { error: "Could not start the authorized download." },
       { status: 500 }
     );
+  } finally {
+    release();
   }
 }
