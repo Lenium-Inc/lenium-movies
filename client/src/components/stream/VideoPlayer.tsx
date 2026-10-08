@@ -55,6 +55,69 @@ export const deriveHlsLevels = (
   return rungs.sort((a, b) => b.height - a.height);
 };
 
+/** What one selectable rendition looks like to the menus. */
+export interface PlayerTrack {
+  /** hls.js's index into its own list, not a position in ours. */
+  id: number;
+  label: string;
+  /** BCP-47 code from the manifest, when it carried one. */
+  language: string | null;
+}
+
+const trackLabel = (track: { name?: string; lang?: string }, index: number) =>
+  track.name?.trim() ||
+  (track.lang ? track.lang.toUpperCase() : `Track ${index + 1}`);
+
+/**
+ * The audio renditions a parsed master playlist declares, in manifest order.
+ *
+ * A multi-audio HLS source is a language choice the viewer has to be able to
+ * make, and the only place that choice exists is inside the manifest -- there
+ * is no URL, no resolver field and no metadata call that carries it. Reading it
+ * off the running instance is therefore the only way the menu can list
+ * anything. With a single-audio source (the common case) this returns one
+ * entry, and the menu honestly shows the one language that exists rather than
+ * a button that changes nothing.
+ */
+export const deriveHlsAudioTracks = (
+  instance: Hls | null | undefined
+): PlayerTrack[] => {
+  const tracks = (instance?.audioTracks ?? []) as {
+    id?: number;
+    name?: string;
+    lang?: string;
+  }[];
+  return tracks.map((track, index) => ({
+    id: typeof track.id === "number" ? track.id : index,
+    label: trackLabel(track, index),
+    language: track.lang ?? null,
+  }));
+};
+
+/**
+ * The in-manifest subtitle renditions, in manifest order.
+ *
+ * Distinct from the resolver's WebVTT files: those are external `src` tracks
+ * the player injects, these are text the manifest itself declares. Both appear
+ * in the same menu because they answer the same question -- "can I read this
+ * in my language" -- and they are kept separate internally because turning one
+ * on must turn the other off.
+ */
+export const deriveHlsSubtitleTracks = (
+  instance: Hls | null | undefined
+): PlayerTrack[] => {
+  const tracks = (instance?.subtitleTracks ?? []) as {
+    id?: number;
+    name?: string;
+    lang?: string;
+  }[];
+  return tracks.map((track, index) => ({
+    id: typeof track.id === "number" ? track.id : index,
+    label: trackLabel(track, index),
+    language: track.lang ?? null,
+  }));
+};
+
 /**
  * Turn a resolver subtitle descriptor into the attributes a `<track>` needs.
  *
@@ -172,15 +235,40 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     () => buildSubtitleTracks(subtitles),
     [subtitles]
   );
-  // `currentSubtitles` is a language code; the chip shows the human label.
-  const currentSubtitleLabel = useMemo(
-    () =>
-      currentSubtitles === "Off"
-        ? "Off"
-        : (subtitleTracks.find(t => t.srcLang === currentSubtitles)?.label ??
-          currentSubtitles),
-    [currentSubtitles, subtitleTracks]
-  );
+
+  // Renditions the manifest declares, populated once hls.js has walked it.
+  // Separate from the resolver's WebVTT list above because these are selected
+  // through hls.js and those through the media element's own textTracks -- two
+  // mechanisms that must not be confused for one another, or turning one on
+  // leaves the other showing.
+  const [hlsAudioTracks, setHlsAudioTracks] = useState<PlayerTrack[]>([]);
+  const [currentAudio, setCurrentAudio] = useState<number>(0);
+  const [hlsSubtitleTracks, setHlsSubtitleTracks] = useState<PlayerTrack[]>([]);
+  // `-1` is hls.js's own "no subtitle track" sentinel, held verbatim so the
+  // state never has to be translated on its way to the instance.
+  const [currentHlsSubtitle, setCurrentHlsSubtitle] = useState<number>(-1);
+  // Whether the viewer has clicked a row in either switcher yet. Seeds from
+  // `preferredLanguage` until they do, and never after: a track list that
+  // arrives late would otherwise re-apply the seed on top of a choice they
+  // already made.
+  const [tracksTouched, setTracksTouched] = useState<boolean>(false);
+  // The chip shows the human label of whichever source is actually on: a
+  // resolver WebVTT track (a language code), an in-manifest one (an index), or
+  // neither. Deriving it here rather than at the call sites is what keeps the
+  // chip and the menu's highlighted row from disagreeing.
+  const currentSubtitleLabel = useMemo(() => {
+    if (currentSubtitles !== "Off") {
+      return subtitleTracks.find(t => t.srcLang === currentSubtitles)?.label ??
+        currentSubtitles;
+    }
+    if (currentHlsSubtitle !== -1) {
+      return (
+        hlsSubtitleTracks.find(t => t.id === currentHlsSubtitle)?.label ??
+        "Subtitles"
+      );
+    }
+    return "Off";
+  }, [currentHlsSubtitle, currentSubtitles, hlsSubtitleTracks, subtitleTracks]);
   const [hasUserInteracted, setHasUserInteracted] = useState<boolean>(false);
   const lastProgressRef = useRef<{ seconds: number; duration: number }>({
     seconds: 0,
@@ -533,6 +621,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           initAmbientCanvas();
         });
 
+        // Renditions are parsed *after* the manifest event, and an alternate
+        // audio or text track can be discovered when a level playlist loads
+        // rather than up front. Reading them on their own update event rather
+        // than once after the manifest is what stops a track that arrives late
+        // from being missing from the menu for the rest of the session.
+        //
+        // Each update also mirrors hls.js's own current selection back into
+        // component state, so the highlighted row is what the instance is
+        // actually doing -- including the default the library picks on its own,
+        // which the viewer never chose and must not be shown as chosen.
+        hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => {
+          setHlsAudioTracks(deriveHlsAudioTracks(hls));
+          setCurrentAudio(hls.audioTrack);
+        });
+        hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, () => {
+          setHlsSubtitleTracks(deriveHlsSubtitleTracks(hls));
+          setCurrentHlsSubtitle(hls.subtitleTrack);
+        });
+
         hls.on(
           Hls.Events.ERROR,
           (_event: unknown, data: { fatal?: boolean }) => {
@@ -700,6 +807,106 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       document.exitFullscreen();
     }
   }, []);
+
+  /*
+   * Track selection.
+   *
+   * Subtitles come from two places and only one choice may be on at a time:
+   * the resolver's WebVTT files, selected through `video.textTracks`, and the
+   * in-manifest renditions, selected through hls.js. Leaving both alone is how
+   * the previous "Native Audio" button failed -- it wrote the literal string
+   * "Native" into the *subtitle* selection, matched no track, and as a side
+   * effect silently disabled every caption the viewer had turned on while
+   * changing nothing about the audio.
+   *
+   * Each chooser therefore resets the mechanism it is not using, and state is
+   * written before the instance so a component with no hls.js running (native
+   * HLS, MP4) still moves its own highlight.
+   */
+  const chooseNoSubtitles = useCallback(() => {
+    setTracksTouched(true);
+    setCurrentSubtitles("Off");
+    setCurrentHlsSubtitle(-1);
+    const instance = hlsRef.current;
+    if (instance) instance.subtitleTrack = -1;
+  }, []);
+
+  const chooseExternalSubtitles = useCallback((lang: string) => {
+    setTracksTouched(true);
+    setCurrentHlsSubtitle(-1);
+    const instance = hlsRef.current;
+    if (instance) instance.subtitleTrack = -1;
+    setCurrentSubtitles(lang);
+  }, []);
+
+  const chooseInStreamSubtitles = useCallback((id: number) => {
+    setTracksTouched(true);
+    setCurrentSubtitles("Off");
+    setCurrentHlsSubtitle(id);
+    const instance = hlsRef.current;
+    if (instance) instance.subtitleTrack = id;
+  }, []);
+
+  const chooseAudioTrack = useCallback((id: number) => {
+    setTracksTouched(true);
+    setCurrentAudio(id);
+    const instance = hlsRef.current;
+    if (instance) instance.audioTrack = id;
+  }, []);
+
+  /**
+   * What the Audio section lists.
+   *
+   * A source with no alternate renditions still gets an entry, named "Original"
+   * rather than a language, so the section is never an empty box and never a
+   * button that claims to switch something the manifest did not offer.
+   */
+  const audioOptions = useMemo<PlayerTrack[]>(
+    () =>
+      hlsAudioTracks.length > 0
+        ? hlsAudioTracks
+        : [{ id: 0, label: "Original", language: null }],
+    [hlsAudioTracks]
+  );
+
+  /**
+   * Every subtitle choice, flattened to one list so the menu renders one block.
+   *
+   * "Off" clears both sources at once, which is the only way the list stays
+   * coherent: two independent "off" rows would let a viewer believe they had
+   * turned subtitles off while the other mechanism still had a track on.
+   */
+  const subtitleOptions = useMemo(
+    () => [
+      {
+        key: "off",
+        label: "Off",
+        active: currentSubtitles === "Off" && currentHlsSubtitle === -1,
+        onPick: chooseNoSubtitles,
+      },
+      ...subtitleTracks.map(track => ({
+        key: `file-${track.key}`,
+        label: track.label,
+        active: currentSubtitles === track.srcLang,
+        onPick: () => chooseExternalSubtitles(track.srcLang),
+      })),
+      ...hlsSubtitleTracks.map(track => ({
+        key: `instream-${track.id}`,
+        label: track.label,
+        active: currentHlsSubtitle === track.id,
+        onPick: () => chooseInStreamSubtitles(track.id),
+      })),
+    ],
+    [
+      chooseExternalSubtitles,
+      chooseInStreamSubtitles,
+      chooseNoSubtitles,
+      currentHlsSubtitle,
+      currentSubtitles,
+      hlsSubtitleTracks,
+      subtitleTracks,
+    ]
+  );
 
   const switchQuality = useCallback(
     (quality: string) => {
@@ -997,51 +1204,47 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       Audio Track
                     </p>
                     <div className="space-y-1">
-                      <button
-                        onClick={e => {
-                          e.stopPropagation();
-                          setCurrentSubtitles("Native");
-                          setSubtitleMenuOpen(false);
-                        }}
-                        className="w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors flex items-center gap-2"
-                      >
-                        <Volume2Icon className="w-3 h-3" />
-                        <span>Native Audio</span>
-                      </button>
+                      {audioOptions.map(track => (
+                        <button
+                          key={track.id}
+                          onClick={e => {
+                            e.stopPropagation();
+                            chooseAudioTrack(track.id);
+                            setSubtitleMenuOpen(false);
+                          }}
+                          className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors flex items-center gap-2 ${
+                            currentAudio === track.id
+                              ? "text-violet-500 font-bold"
+                              : "text-white"
+                          }`}
+                        >
+                          <Volume2Icon className="w-3 h-3" />
+                          <span>{track.label}</span>
+                        </button>
+                      ))}
                     </div>
                   </div>
-                  {subtitleTracks.length > 0 && (
+                  {subtitleOptions.length > 1 && (
                     <div className="px-4 py-2">
                       <p className="text-xs font-semibold text-white/60 uppercase tracking-wider mb-2">
                         Subtitles
                       </p>
                       <div className="space-y-1 max-h-48 overflow-y-auto">
-                        {["Off", ...subtitleTracks.map(t => t.srcLang)].map(
-                          sub => {
-                            const label =
-                              sub === "Off"
-                                ? "Off"
-                                : (subtitleTracks.find(t => t.srcLang === sub)
-                                    ?.label ?? sub);
-                            return (
-                              <button
-                                key={sub}
-                                onClick={e => {
-                                  e.stopPropagation();
-                                  setCurrentSubtitles(sub);
-                                  setSubtitleMenuOpen(false);
-                                }}
-                                className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors ${
-                                  currentSubtitles === sub
-                                    ? "text-violet-500 font-bold"
-                                    : "text-white"
-                                }`}
-                              >
-                                {label}
-                              </button>
-                            );
-                          }
-                        )}
+                        {subtitleOptions.map(option => (
+                          <button
+                            key={option.key}
+                            onClick={e => {
+                              e.stopPropagation();
+                              option.onPick();
+                              setSubtitleMenuOpen(false);
+                            }}
+                            className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors ${
+                              option.active ? "text-violet-500 font-bold" : "text-white"
+                            }`}
+                          >
+                            {option.label}
+                          </button>
+                        ))}
                       </div>
                     </div>
                   )}
