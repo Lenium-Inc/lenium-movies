@@ -18,7 +18,6 @@
  * waiting state is a wordless loader, so there is nothing to say while it runs.
  */
 
-export const titleUnavailable =
-  "This title is temporarily unavailable. Please try again later.";
+export const titleUnavailable = "This title is currently unavailable.";
 
 export const tryAgain = "Try again";

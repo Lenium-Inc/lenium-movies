@@ -127,6 +127,20 @@ const RETRY_BASE_DELAY_MS = 1000;
  */
 const MAX_AUTO_RETRY_WINDOW_MS = 2 * 60 * 1000;
 
+/**
+ * The player surface: a black 16:9 panel with the ambient glow behind it.
+ *
+ * Named once because it is drawn in two places -- while metadata is still
+ * arriving and once it has -- and the two must be indistinguishable. A frame
+ * that changes shape when the title lands is a second wait appearing where the
+ * first one was.
+ */
+const PLAYER_FRAME_CLASS =
+  "relative w-full max-w-6xl mx-auto aspect-video rounded-2xl overflow-hidden bg-black shadow-[0_20px_80px_rgba(0,0,0,0.8)] border border-white/10 group";
+
+const PLAYER_GLOW_CLASS =
+  "absolute -inset-4 bg-gradient-to-r from-purple-600/30 via-pink-600/20 to-amber-500/30 rounded-3xl blur-3xl opacity-60 -z-10 pointer-events-none transition-all duration-700";
+
 function classifyError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   const lowerMessage = message.toLowerCase();
@@ -1431,16 +1445,31 @@ export function WatchPage() {
     [resolved?.stream?.subtitles]
   );
 
-  // Metadata is still arriving, so there is no poster to show yet. The same
-  // wordless full-screen loader is used here and for stream resolution: both
-  // are the same wait from the viewer's side, and a skeleton with a label
-  // ("Loading movie details...") that then swaps to a differently-labelled
-  // spinner reads as two unrelated waits.
+  // Metadata is still arriving. The player frame is drawn now rather than after
+  // it lands, so the surface the viewer is waiting on is the surface that will
+  // play: every later wait -- stream resolution, candidate failover -- paints
+  // itself into this same frame, and one that only appears once the title is in
+  // hand reads as a second, unrelated wait arriving out of nowhere.
+  //
+  // Nothing else can render yet: the sidebar, the season controls and every
+  // action button read `movie`. The right column is simply absent, which the
+  // grid handles as an empty track.
   if (movieLoading) {
     return (
       /* The shell owns the background colour; see the note in `Home`. */
-      <div className="relative min-h-screen">
-        <StreamLoader />
+      <div className="min-h-screen text-white">
+        <main className="pt-16 pb-12 px-4 sm:px-6 lg:px-8">
+          <div className="mx-auto max-w-[1400px]">
+            <div className="grid lg:grid-cols-[2fr_1fr] gap-6">
+              <div className="relative">
+                <div aria-hidden className={PLAYER_GLOW_CLASS} />
+                <div className={PLAYER_FRAME_CLASS}>
+                  <StreamLoader />
+                </div>
+              </div>
+            </div>
+          </div>
+        </main>
       </div>
     );
   }
@@ -1479,11 +1508,8 @@ export function WatchPage() {
             {/* LEFT PANEL: Video Player - Theater Mode */}
             <div className="relative">
               {/* Ambient Canvas Glow Effect - Netflix-style backdrop glow behind player */}
-              <div
-                aria-hidden
-                className="absolute -inset-4 bg-gradient-to-r from-purple-600/30 via-pink-600/20 to-amber-500/30 rounded-3xl blur-3xl opacity-60 -z-10 pointer-events-none transition-all duration-700"
-              />
-              <div className="relative w-full max-w-6xl mx-auto aspect-video rounded-2xl overflow-hidden bg-black shadow-[0_20px_80px_rgba(0,0,0,0.8)] border border-white/10 group">
+              <div aria-hidden className={PLAYER_GLOW_CLASS} />
+              <div className={PLAYER_FRAME_CLASS}>
                 {resolved && (
                   <>
                     {/* Top-left overlay: Back button */}
