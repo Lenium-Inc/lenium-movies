@@ -803,10 +803,6 @@ def main() -> int:
     return 1 if failures else 0
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
-
-
 # ---------------------------------------------------------------------------
 # Embed framability
 #
@@ -814,15 +810,17 @@ if __name__ == "__main__":
 # simply down: it gets elected as the chain winner, served to the browser, and
 # then renders nothing inside the iframe, where no retry can reach it. These
 # tests pin that distinction so the scoring rule cannot drift back to treating
-# any HTTP response as playable.
+# any HTTP response as playable. `probe_embed` consults this check for `2xx`
+# responses only -- a WAF `403`'s headers describe its challenge page.
 # ---------------------------------------------------------------------------
 
 
-def test_unframable_host_is_not_a_healthy_provider():
-    """The exact `vidsrc.cc` shape: 403 plus `SAMEORIGIN`.
+def test_unframable_host_is_not_framable():
+    """The `vidsrc.cc` shape: `403` plus `SAMEORIGIN`.
 
-    The old rule counted 403 as healthy without reading the framing headers, so
-    this response elected the one provider the browser always refuses.
+    The headers are only read off a real page now, but the verdict they
+    produce is unchanged: a host declaring SAMEORIGIN renders nothing inside
+    our iframe.
     """
     import stream_providers
 
@@ -872,25 +870,138 @@ def test_host_without_framing_restrictions_stays_playable():
     )
 
 
-def test_probe_embed_requires_framability_on_error_responses():
-    """A 403 is still a response rather than a transport failure, so it stays
-    "the host is up" -- but it is no longer sufficient on its own."""
-    import io
-    import urllib.error
+# ---------------------------------------------------------------------------
+# Embed probing
+#
+# The probe runs server-side but the verdict it returns is about a browser:
+# whether the viewer's iframe will be handed a page. Two mistakes are possible
+# and both have shipped. Reading a WAF's `403` as "dead" benches hosts the
+# browser plays fine; reading the challenge page's headers as framing policy
+# does the same. These tests pin the line: any HTTP response means the host is
+# up, only a transport failure or a `5xx` means it is down, and only a real
+# `2xx` page is judged on whether it may be framed.
+# ---------------------------------------------------------------------------
+
+
+class _FakeResponse:
+    def __init__(self, status, headers=None):
+        self.status_code = status
+        self.headers = dict(headers or {})
+
+
+def _probe(response=None, error=None, url="https://vidsrc.pro/embed/movie/603"):
+    """Run `probe_embed` against a stubbed `requests.get`.
+
+    Returns `(verdict, kwargs)` so a test can assert on both the answer and
+    the request that produced it.
+    """
     import stream_providers
 
-    def _boom(*_args, **_kwargs):
-        raise urllib.error.HTTPError(
-            "https://vidsrc.cc/v2/embed/movie/603",
-            403,
-            "Forbidden",
-            {"X-Frame-Options": "SAMEORIGIN"},
-            io.BytesIO(b""),
-        )
+    captured = {}
 
-    original = stream_providers.urllib.request.urlopen
-    stream_providers.urllib.request.urlopen = _boom
+    def _get(_url, **kwargs):
+        captured.update(kwargs)
+        if error is not None:
+            raise error
+        return response
+
+    original = stream_providers.requests.get
+    stream_providers.requests.get = _get
     try:
-        assert not stream_providers.probe_embed("https://vidsrc.cc/v2/embed/movie/603")
+        verdict = stream_providers.probe_embed(url)
     finally:
-        stream_providers.urllib.request.urlopen = original
+        stream_providers.requests.get = original
+    return verdict, captured
+
+
+def test_probe_presents_a_browser_identity_and_does_not_follow_redirects():
+    """The two halves of not tripping a Cloudflare WAF on the way in.
+
+    A backend-looking `User-Agent` gets challenged before the origin is
+    reached, and following the challenge's redirect server-side is how a
+    probe spends its whole timeout in a loop the client would exit at once.
+    """
+    verdict, kwargs = _probe(response=_FakeResponse(200))
+    assert verdict is True, "a plain 200 must be a healthy probe"
+    assert kwargs["allow_redirects"] is False, (
+        "the probe must not chase redirects: the browser is the party that "
+        "has to survive the WAF's redirect chain, and it does"
+    )
+    user_agent = kwargs["headers"]["User-Agent"]
+    assert user_agent.startswith("Mozilla/5.0 (Windows"), (
+        f"probe User-Agent must look like a browser, got {user_agent!r}"
+    )
+
+
+def test_redirect_statuses_are_a_live_host():
+    """DNS, TLS and HTTP all worked; the origin just moved the request."""
+    for status in (301, 302, 307, 308):
+        verdict, _ = _probe(
+            response=_FakeResponse(status, {"Location": "https://vidsrc.pro/challenge"})
+        )
+        assert verdict is True, f"a {status} from the host must not bench it"
+
+
+def test_waf_challenge_is_a_live_host_even_when_it_forbids_framing():
+    """The exact Cloudflare shape that used to bench a perfectly good provider.
+
+    A `403` proves the host answered. Its headers describe the challenge page,
+    not the page the browser will render once the challenge clears, so they
+    are not framing policy and must not be read as one.
+    """
+    headers = {"X-Frame-Options": "SAMEORIGIN", "Server": "cloudflare"}
+    verdict, _ = _probe(response=_FakeResponse(403, headers))
+    assert verdict is True, "a WAF 403 is a live host, not a dead one"
+
+
+def test_a_real_page_that_forbids_framing_is_not_playable():
+    """The other half: a `2xx` *is* the page that would be framed, so its
+    framing headers govern. Reachable-but-unframable still loses."""
+    verdict, _ = _probe(response=_FakeResponse(200, {"X-Frame-Options": "SAMEORIGIN"}))
+    assert verdict is False, "a 200 declaring SAMEORIGIN renders nothing in our iframe"
+
+    verdict, _ = _probe(
+        response=_FakeResponse(
+            200, {"Content-Security-Policy": "frame-ancestors https://vidsrc.example"}
+        )
+    )
+    assert verdict is False, "a narrow frame-ancestors must not be assumed to include us"
+
+    verdict, _ = _probe(response=_FakeResponse(200, {"Content-Security-Policy": "frame-ancestors *"}))
+    assert verdict is True, "frame-ancestors * permits our origin"
+
+
+def test_server_errors_bench_the_provider():
+    """The origin is up but failing to serve -- what a dead provider looks like."""
+    for status in (500, 502, 503, 504):
+        verdict, _ = _probe(response=_FakeResponse(status))
+        assert verdict is False, f"a {status} must bench the provider"
+
+
+def test_transport_failures_bench_the_provider():
+    """Nothing answered. DNS failures arrive inside ConnectionError."""
+    import socket
+
+    import requests
+
+    failures = [
+        requests.exceptions.ConnectionError("connection refused"),
+        requests.exceptions.ConnectionError(socket.gaierror(-2, "Name or service not known")),
+        requests.exceptions.Timeout("timed out"),
+        requests.exceptions.ReadTimeout("read timed out"),
+        requests.exceptions.SSLError("certificate verify failed"),
+    ]
+    for error in failures:
+        verdict, _ = _probe(error=error)
+        assert verdict is False, f"{type(error).__name__} must bench the provider"
+
+
+def test_probe_embed_rejects_an_empty_url():
+    import stream_providers
+
+    assert stream_providers.probe_embed("") is False
+    assert stream_providers.probe_embed(None) is False
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

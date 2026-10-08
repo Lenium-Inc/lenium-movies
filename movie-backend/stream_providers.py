@@ -46,19 +46,30 @@ import os
 import re
 import threading
 import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass, field
 from typing import Iterable
 
+import requests
 from cachetools import TTLCache
 
 import catalog_lib
-from runtime_config import load_env_file, ssl_context
+from runtime_config import load_env_file
 
 load_env_file()
 
-UA = "Mozilla/5.0 (FreeStream-movie-backend; +http://localhost:5000)"
+#: Identity the health probe presents to a provider.
+#:
+#: The backend's own UA used to go out on this request, and every probe came
+#: back dead while the same URL played fine in a browser. These hosts sit
+#: behind Cloudflare WAFs that fingerprint the client before the origin is
+#: ever reached: a non-browser UA is challenged or dropped outright, so the
+#: probe was reading `403`/`301` off a bot wall and benching a host that
+#: serves a real viewer perfectly. The probe now asks the same question the
+#: player will ask, from the same side of the WAF.
+PROBE_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
 
 #: Character class a TMDB id (or manifest-supplied id) must match before it is
 #: allowed anywhere in a provider URL. Mirrors `safeStreamId` in
@@ -334,11 +345,12 @@ def _is_cross_origin_framable(headers) -> bool:
     error and no way to tell it from a slow page.
 
     That is not hypothetical. `vidsrc.cc` answers `403` *and*
-    `X-Frame-Options: SAMEORIGIN`, and the old scoring rule counted `403` as
-    healthy -- so the chain deterministically elected, as its winner, the one
-    host the browser is guaranteed to refuse. Every other provider in the
-    manifest had already gone to NXDOMAIN, so the whole player died on a host
-    that could never have worked.
+    `X-Frame-Options: SAMEORIGIN`, and a scoring rule that read those headers
+    off the `403` would bench the host for a policy the *challenge page*
+    declared. `probe_embed` therefore applies this check only to a real `2xx`
+    response: a `403` from a WAF is a verdict on the client, not on the page,
+    and the headers describing it say nothing about what the browser will be
+    allowed to frame once the challenge clears.
 
     Both headers are honoured because they are independent and both are common:
 
@@ -388,10 +400,30 @@ def probe_embed(url: str, timeout: float = EMBED_PROBE_TIMEOUT_SECONDS) -> bool:
     frontend's iframe watchdog gives, and it is enough to keep a dead host out
     of the chain.
 
-    What it *does* check is that the host is willing to be framed at all
-    (`_is_cross_origin_framable`), because a reachable-but-unframable provider
-    is worse than an unreachable one: it is elected, served to the client, and
-    then fails in the browser where nothing can retry it.
+    Liveness here means *the host answered*, not *the host answered 200*:
+
+    * `200`/`206` -- the page came back. It is also the only status whose
+      headers describe the page that would actually be framed, so it is the
+      only one put through `_is_cross_origin_framable`.
+    * `301`/`302`/`307`/`308` -- DNS, TLS and HTTP all worked; the origin
+      moved the request somewhere else. The browser follows that chain
+      itself, and this probe deliberately does not (`allow_redirects=False`),
+      because chasing a WAF's challenge redirect server-side is how a probe
+      burns its whole timeout in a loop the client would have exited.
+    * `403` (and `401`/`429`) -- a Cloudflare bot challenge, a rate limit, or
+      a WAF rule that fired on our client class. The host is demonstrably up;
+      it is the *client* it refused, and the viewer's browser is a different
+      client. Its headers describe the challenge page, not the real one, so
+      they are not judged as framing policy.
+    * `5xx` -- the origin is up but failing to serve, which is what a dead
+      provider looks like from here. Benched.
+    * A transport exception (connection refused, timeout, DNS failure, TLS
+      failure) -- nothing answered. Benched.
+
+    In short: any HTTP response is evidence of a live host, and only a
+    transport failure or a server error is evidence of a dead one. The old
+    rule read a WAF handshake as a bench, which is how healthy providers were
+    being benched while the same URLs played in a browser.
 
     No caching and no health accounting here. Both belong to `probe_provider`,
     which is the seam the resolver uses, so a chain can be driven without a
@@ -400,31 +432,42 @@ def probe_embed(url: str, timeout: float = EMBED_PROBE_TIMEOUT_SECONDS) -> bool:
     if not url:
         return False
     try:
-        request = urllib.request.Request(
+        response = requests.get(
             url,
-            method="GET",
-            headers={"User-Agent": UA, "Range": "bytes=0-1023"},
+            headers={
+                "User-Agent": PROBE_UA,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Range": "bytes=0-1023",
+            },
+            timeout=timeout,
+            allow_redirects=False,
         )
-        with urllib.request.urlopen(request, context=ssl_context(), timeout=timeout) as response:
-            # A 4xx/5xx still means the host is up. Treating a rate-limit as a
-            # dead host would bench a provider that is merely throttling us.
-            status = getattr(response, "status", None) or response.getcode()
-            reachable = 200 <= status < 400 or status in (401, 403, 429)
-            return reachable and _is_cross_origin_framable(response.headers)
-    except urllib.error.HTTPError as exc:
-        # An HTTP error is a response, not a transport failure: the host is up.
-        # It still has to be willing to be framed.
-        reachable = exc.code in (401, 403, 429)
-        return reachable and _is_cross_origin_framable(exc.headers)
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+        # ConnectionError is where requests files DNS failures (socket.gaierror),
+        # refused connections and TLS handshake failures: the host never
+        # answered. Timeout is the same verdict reached more slowly.
+        return False
+    except requests.exceptions.RequestException:
+        # Anything else transport-shaped (bad URL, unsupported scheme) is not
+        # a provider that can serve a viewer either.
+        return False
     except Exception:  # noqa: BLE001 - any transport error means "not up"
         return False
+
+    status = response.status_code
+    if status >= 500:
+        return False
+    if 200 <= status < 300:
+        return _is_cross_origin_framable(response.headers)
+    return True
 
 
 def probe_provider(provider: EmbedProvider, url: str, timeout: float) -> bool:
     """Probe a provider, caching the result and recording the outcome.
 
-    Caching matters because the chain is walked on every resolve: without it, a
-    healthy provider would cost a real network request per title per viewer.
+    Caching matters because the chain is walked on every resolve: without it,
+    a healthy provider would cost a real network request per title per viewer.
 
     Health accounting is here rather than in `probe_embed` because the resolver
     needs the provider *id* to attribute the outcome, and because a cached
@@ -434,6 +477,10 @@ def probe_provider(provider: EmbedProvider, url: str, timeout: float) -> bool:
     never reach the threshold, so the circuit would never open and the breaker
     would be decorative. A cached negative is still evidence the provider is
     down, and each request that observes it is a genuine independent attempt.
+
+    By the time a False reaches here it means transport failure or `5xx` --
+    `probe_embed` already decided that a WAF `403` or a redirect is a live
+    host -- so what is recorded as a failure is genuinely a dead provider.
     """
     with _probe_lock:
         cached = _probe_cached(provider.id)
