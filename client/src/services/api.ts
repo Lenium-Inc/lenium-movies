@@ -345,6 +345,13 @@ export async function searchCatalog(query: string): Promise<StreamMovie[]> {
 export interface ResolvedStream {
   stream: StreamMovie;
   exact: boolean;
+  /**
+   * Base language code the backend worked out for this viewer (from their
+   * address, never from anything they typed). Null when the backend could not
+   * place them. The player seeds its track selection from it; see
+   * {@link StreamSource.language}.
+   */
+  language?: string | null;
 }
 
 /** Thrown when the backend has no playable title for the requested search. */
@@ -523,6 +530,7 @@ function normalizeResolvedMovie(value: unknown): StreamMovie | null {
 function isResolvePayload(value: unknown): value is {
   movie: StreamMovie;
   exact: boolean;
+  language?: string | null;
 } {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
@@ -632,7 +640,14 @@ export async function resolveStream(
   const movie = normalizeResolvedMovie(
     (payload as { movie: unknown }).movie
   ) as StreamMovie;
-  return { stream: movie, exact: payload.exact };
+  return {
+    stream: movie,
+    exact: payload.exact,
+    language:
+      typeof payload.language === "string" && payload.language
+        ? payload.language
+        : null,
+  };
 }
 
 /** An id-based direct stream source returned by `/api/get-stream`. */
@@ -655,6 +670,14 @@ export interface StreamSource {
   isEmbed?: boolean;
   /** Id of the provider that served this source. */
   provider?: string;
+  /**
+   * Base language code the backend detected for this viewer (IP plus
+   * `Accept-Language`, never anything they typed). The player opens on a track
+   * matching it so a viewer who speaks something other than English does not
+   * have to hunt for their language on every title. Null when it could not be
+   * determined. Their own pick in the audio/subtitle switchers overrides it.
+   */
+  language?: string | null;
 }
 
 export interface GetStreamRequest {
