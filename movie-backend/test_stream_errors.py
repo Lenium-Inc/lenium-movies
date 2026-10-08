@@ -306,6 +306,11 @@ def test_get_stream_never_reports_exhaustion_while_a_provider_is_working():
     assert body["provider"], "the serving provider was not named"
     assert body["activeSource"], "no source url on a successful resolve"
     assert body["sources"], "no failover chain on a successful resolve"
+    # The locale seed rides on the success payload too, so the player can build
+    # its default audio/subtitle tracks without a second round trip.
+    assert isinstance(body.get("language"), str) and body["language"], (
+        f"no language on a successful resolve: {body!r}"
+    )
 
 
 def test_get_stream_prefers_a_direct_source_over_every_embed():

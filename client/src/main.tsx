@@ -4,6 +4,7 @@ import { applyTheme } from "./services/settings";
 import { AuthProvider } from "./context/AuthContext";
 import { LocalSessionProvider } from "./context/LocalSessionContext";
 import { ActiveProfileProvider } from "./context/ActiveProfileContext";
+import { AppSettingsProvider } from "./contexts/AppSettingsContext";
 import "./index.css";
 
 applyTheme();
@@ -23,7 +24,12 @@ createRoot(document.getElementById("root")!).render(
   <LocalSessionProvider>
     <AuthProvider>
       <ActiveProfileProvider>
-        <App />
+        {/* Language and auto-select preferences. Outside the router because
+            they describe the viewer, not a route, and the player reads them
+            on whichever page it is mounted. */}
+        <AppSettingsProvider>
+          <App />
+        </AppSettingsProvider>
       </ActiveProfileProvider>
     </AuthProvider>
   </LocalSessionProvider>

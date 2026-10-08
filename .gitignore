@@ -117,3 +117,7 @@ movie-backend/data/
 .opencode/
 .agents/
 skills-lock.json
+
+# Geo-IP country database: the gzipped snapshot is committed, the unpacked
+# 8 MB copy is produced on first use.
+movie-backend/geoip/*.mmdb

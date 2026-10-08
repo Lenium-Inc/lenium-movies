@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import Hls from "hls.js";
 import { formatPlayerTime } from "@/lib/format";
+import { baseLanguage, sameLanguage } from "@/lib/language";
 import { subtitleTrackUrl, type StreamSubtitle } from "@/services/api";
 
 export interface StreamVariant {
@@ -185,6 +186,16 @@ export interface VideoPlayerProps {
    * a storage write on the page's side.
    */
   onProgress?: (progress: { seconds: number; durationSeconds: number }) => void;
+  /**
+   * Base language code to open this title on, or null to open on whatever the
+   * manifest declares first.
+   *
+   * The page works it out from the viewer's language preference, falling back
+   * to the language the backend inferred from their address, and it is only a
+   * seed: the first row a viewer clicks in the audio or subtitle switchers
+   * replaces it for the rest of the session.
+   */
+  preferredLanguage?: string | null;
 }
 
 const QUALITY_ORDER = ["4K", "1080p", "720p", "480p", "360p", "Auto"] as const;
@@ -212,6 +223,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   autoPlay = true,
   autoCycling = false,
   onProgress,
+  preferredLanguage = null,
 }) => {
   const [isPlaying, setIsPlaying] = useState<boolean>(autoPlay);
   const [isMuted, setIsMuted] = useState<boolean>(false);
@@ -907,6 +919,72 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       subtitleTracks,
     ]
   );
+
+  /**
+   * Open on the viewer's language, once, before they have touched a switcher.
+   *
+   * Audio wins over subtitles. A rendition in a language someone speaks is a
+   * better default than captions laid over one they do not, so captions are
+   * only reached when the manifest declares its audio languages, none of them
+   * is the viewer's, and a subtitle track in theirs exists -- and never when
+   * the manifest declares no audio languages at all, because the player
+   * cannot then know what language the sound is in and turning captions on
+   * over audio the viewer already follows would be worse than showing none.
+   *
+   * Every branch writes state rather than going through the choosers: this is
+   * the seed, not a choice, and it must not raise `tracksTouched` or a later
+   * track list arriving would look like a decision the viewer never made.
+   */
+  useEffect(() => {
+    if (!preferredLanguage || tracksTouched) return;
+    const wanted = baseLanguage(preferredLanguage);
+    if (!wanted) return;
+
+    const audioMatch = hlsAudioTracks.find(track =>
+      sameLanguage(track.language, wanted)
+    );
+    if (audioMatch) {
+      setCurrentAudio(audioMatch.id);
+      const instance = hlsRef.current;
+      if (instance && instance.audioTrack !== audioMatch.id) {
+        instance.audioTrack = audioMatch.id;
+      }
+      return;
+    }
+
+    // No audio list, or a list that declares no languages: nothing is known
+    // about the sound, so subtitles stay where the player put them.
+    if (!hlsAudioTracks.some(track => track.language)) return;
+
+    const inManifest = hlsSubtitleTracks.find(
+      track => track.id >= 0 && sameLanguage(track.language, wanted)
+    );
+    if (inManifest) {
+      setCurrentSubtitles("Off");
+      setCurrentHlsSubtitle(inManifest.id);
+      const instance = hlsRef.current;
+      if (instance && instance.subtitleTrack !== inManifest.id) {
+        instance.subtitleTrack = inManifest.id;
+      }
+      return;
+    }
+
+    const external = subtitleTracks.find(track =>
+      sameLanguage(track.srcLang, wanted)
+    );
+    if (external) {
+      setCurrentHlsSubtitle(-1);
+      const instance = hlsRef.current;
+      if (instance) instance.subtitleTrack = -1;
+      setCurrentSubtitles(external.srcLang);
+    }
+  }, [
+    preferredLanguage,
+    tracksTouched,
+    hlsAudioTracks,
+    hlsSubtitleTracks,
+    subtitleTracks,
+  ]);
 
   const switchQuality = useCallback(
     (quality: string) => {

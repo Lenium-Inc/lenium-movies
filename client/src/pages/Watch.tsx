@@ -75,6 +75,10 @@ import { progressKey } from "@/lib/progressKey";
 import { absoluteUrl } from "@/lib/siteUrl";
 import { publishWatchSeo, resetWatchSeo } from "@/lib/watchSeo";
 import { useTasteRecorder } from "@/hooks/useTaste";
+import {
+  DEFAULT_PREFERRED_LANGUAGE,
+  useAppSettings,
+} from "@/contexts/AppSettingsContext";
 import { TrailerEmbed } from "@/components/movies/MediaCard";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -378,6 +382,11 @@ export function WatchPage() {
   const [movie, setMovie] = useState<Movie | null>(null);
   const [movieLoading, setMovieLoading] = useState(true);
   const [resolved, setResolved] = useState<ResolvedStream | null>(null);
+  // Base language code the backend inferred for this viewer (from their
+  // address, never from anything they typed). Held apart from `resolved`
+  // because every source adoption rewrites that object wholesale and would
+  // otherwise drop the one value that outlives the source it arrived with.
+  const [detectedLanguage, setDetectedLanguage] = useState<string | null>(null);
   const [resolving, setResolving] = useState(false);
   const [season, setSeason] = useState(urlSeason);
   const [episode, setEpisode] = useState(urlEpisode);
@@ -643,6 +652,7 @@ export function WatchPage() {
             tmdbId: movie.providerId,
           });
           setResolved(stream);
+          if (stream.language) setDetectedLanguage(stream.language);
           // Starting playback is the strongest taste signal there is. It goes
           // to the server so the same profile ranks the same on every device;
           // the recorder is a no-op when signed out, and never throws.
@@ -664,6 +674,7 @@ export function WatchPage() {
               season: mediaType === "tv" ? targetSeason : undefined,
               episode: mediaType === "tv" ? targetEpisode : undefined,
             });
+            if (source.language) setDetectedLanguage(source.language);
 
             playable = {
               ...base,
@@ -774,6 +785,7 @@ export function WatchPage() {
         }
         if (disposed) return;
         setResolved(stream);
+        if (stream.language) setDetectedLanguage(stream.language);
         prefetchForOpen(stream.stream);
       } catch (error) {
         console.warn(
@@ -1206,6 +1218,7 @@ export function WatchPage() {
         episode: mediaType === "tv" ? episode : undefined,
         refresh: true,
       });
+      if (source.language) setDetectedLanguage(source.language);
 
       if (source.isEmbed || isExternalEmbedUrl(source.url)) {
         // The chain settled on a third-party provider. Render it; this is a
@@ -1445,6 +1458,27 @@ export function WatchPage() {
     [resolved?.stream?.subtitles]
   );
 
+  /**
+   * The language to open this title on, or null to leave the player alone.
+   *
+   * A viewer's own preference wins over the language the backend inferred from
+   * their address, but only when they actually expressed one -- the shipped
+   * default is indistinguishable from "never opened the settings", and letting
+   * it win would mean the inferred language could never apply to anyone.
+   *
+   * `autoSelectAudioSubtitles` is the kill switch: a viewer who has turned it
+   * off gets whatever the manifest opens on, from either source.
+   */
+  const { settings } = useAppSettings();
+  const preferredTrackLanguage = useMemo(() => {
+    if (!settings.autoSelectAudioSubtitles) return null;
+    const chosen =
+      settings.preferredLanguage !== DEFAULT_PREFERRED_LANGUAGE
+        ? settings.preferredLanguage
+        : null;
+    return chosen ?? detectedLanguage;
+  }, [settings, detectedLanguage]);
+
   // Metadata is still arriving. The player frame is drawn now rather than after
   // it lands, so the surface the viewer is waiting on is the surface that will
   // play: every later wait -- stream resolution, candidate failover -- paints
@@ -1560,6 +1594,7 @@ export function WatchPage() {
                         autoCycling={autoCycling}
                         onSourceError={handleSourceError}
                         onProgress={handleProgress}
+                        preferredLanguage={preferredTrackLanguage}
                         hideCloseButton
                       />
                     ) : usingEmbedProvider && !embedExhausted ? (

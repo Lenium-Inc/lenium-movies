@@ -38,6 +38,7 @@ load_env_file()
 import authdb
 import catalog_lib
 import catalog_service
+import geo_locale
 import stream_providers
 import taste
 import tmdb_service as tmdb
@@ -909,7 +910,21 @@ def resolve_movie():
     if media_type == "tv" and details.get("episodes"):
         movie_data["episodes"] = details["episodes"]
 
-    return jsonify({"movie": movie_data, "exact": True, "available": resolution.ok})
+    # Both endpoints that hand the player a source answer with the locale the
+    # track defaults should be built from. `/api/movies/resolve` is what a cold
+    # open calls first and `/api/get-stream` is what a re-resolve returns, so
+    # putting it only on one of them meant the default tracks were right on
+    # whichever path happened to run and wrong on the other.
+    locale = geo_locale.detect_locale(request)
+    return jsonify(
+        {
+            "movie": movie_data,
+            "exact": True,
+            "available": resolution.ok,
+            "language": locale["language"],
+            "country": locale["country"],
+        }
+    )
 
 
 @app.route("/api/get-stream", methods=["GET", "OPTIONS"])
@@ -1025,6 +1040,8 @@ def get_stream_direct():
             for candidate in resolution.candidates
         ]
 
+    locale = geo_locale.detect_locale(request)
+
     payload = {
         "success": True,
         "available": True,
@@ -1033,6 +1050,12 @@ def get_stream_direct():
         "mirrors": mirrors,
         "is_embed": resolution.is_embed,
         "provider": winner.id,
+        # Where the viewer is, so the player can open on the right audio and
+        # subtitle track instead of whichever one hls.js happens to list first.
+        # A seed only -- the switcher menus override it, and an undetermined
+        # country still yields a language rather than an absent field.
+        "language": locale["language"],
+        "country": locale["country"],
     }
     # The player reads tracks from whichever payload it was handed, and
     # `/api/get-stream` is what a re-resolve actually returns. Omitting

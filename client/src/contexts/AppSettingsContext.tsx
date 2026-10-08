@@ -22,6 +22,17 @@ export type PreferredLanguage =
   | "ar-SA" // Arabic
   | "ru-RU"; // Russian
 
+/**
+ * The language a fresh install ships with.
+ *
+ * Exported because a caller that has to choose between this preference and
+ * something inferred elsewhere (the backend's read of a viewer's address, say)
+ * needs to tell "the viewer asked for English" apart from "the viewer never
+ * touched this setting". Those two are the same stored value, so the check has
+ * to happen where the default is defined rather than at the call site.
+ */
+export const DEFAULT_PREFERRED_LANGUAGE: PreferredLanguage = "en-US";
+
 export interface LanguageOption {
   code: PreferredLanguage;
   label: string;
