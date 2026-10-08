@@ -365,7 +365,109 @@ def test_resolve_rejects_missing_identifier_as_json_400():
     assert "title" in body["error"].lower()
 
 
-# --- CORS still applied to error responses -----------------------------------
+# --- strict title matching in /api/movies/resolve ----------------------------
+
+
+def _search_returns(application, results):
+    """Route `search_multi` to a canned list; caller restores it."""
+    original = application.tmdb.search_multi
+    application.tmdb.search_multi = lambda *a, **k: results
+    return original
+
+
+def test_resolve_does_not_answer_with_the_top_search_hit():
+    # The defect this whole section exists for: a title TMDB does not carry used
+    # to resolve to `valid_results[0]`, whatever that happened to be. The viewer
+    # searched for one film and got another, correctly labelled, with nothing on
+    # screen to show the swap. The rank of a guess is not evidence that it is
+    # the title that was asked for.
+    app, client = _client()
+    original = _search_returns(
+        app,
+        [
+            {"id": 1, "media_type": "movie", "title": "Son of Samson"},
+            {"id": 2, "media_type": "movie", "title": "The Dirty Dozen"},
+            {"id": 3, "media_type": "tv", "name": "Bored to Death"},
+        ],
+    )
+    try:
+        res = client.post(
+            "/api/movies/resolve",
+            json={"title": "No Greater Love", "year": 1920},
+        )
+    finally:
+        app.tmdb.search_multi = original
+
+    body = _assert_json_error(res, 404)
+    assert body.get("code") == "TITLE_NOT_FOUND", f"404 did not name itself: {body!r}"
+    for decoy in ("Son of Samson", "Dirty Dozen", "Bored"):
+        assert decoy not in res.get_data(as_text=True), (
+            f"an unrelated search hit was echoed back: {body!r}"
+        )
+
+
+def test_resolve_rejects_an_id_that_answers_with_a_different_title():
+    # TMDB redirects some lookups onto a merged or replaced entry. The id the
+    # request named is the request; an id that comes back different is a second
+    # title, and playing it is the same defect as taking position zero.
+    app, client = _client()
+    original = app.tmdb.fetch_media_details
+    app.tmdb.fetch_media_details = lambda *a, **k: {"id": 4242, "title": "Not It"}
+    try:
+        res = client.post("/api/movies/resolve", json={"id": 603, "title": "It"})
+    finally:
+        app.tmdb.fetch_media_details = original
+
+    body = _assert_json_error(res, 404)
+    assert body.get("code") == "TITLE_NOT_FOUND", f"404 did not name itself: {body!r}"
+    assert "Not It" not in res.get_data(as_text=True), f"leaked the wrong title: {body!r}"
+
+
+def test_exact_title_match_finds_a_hit_below_the_top():
+    import app as application
+
+    results = [
+        {"id": 1, "media_type": "movie", "title": "Son of Samson"},
+        {"id": 9, "media_type": "movie", "title": "The Matrix", "release_date": "1999-03-31"},
+        {"id": 7, "media_type": "movie", "title": "The Matrix Reloaded"},
+    ]
+    match = application._exact_title_match(results, "the matrix", "1999")
+    assert match is not None and match["id"] == 9, f"missed the real title: {match!r}"
+
+    # Same title, no year given: still the one that is named.
+    assert application._exact_title_match(results, "The Matrix", None)["id"] == 9
+
+
+def test_exact_title_match_will_not_accept_another_year():
+    import app as application
+
+    results = [
+        {"id": 10, "media_type": "movie", "title": "It", "release_date": "1990-01-01"},
+        {"id": 11, "media_type": "movie", "title": "It", "release_date": "2017-09-08"},
+    ]
+    match = application._exact_title_match(results, "It", 2017)
+    assert match is not None and match["id"] == 11, f"wrong year won: {match!r}"
+    assert application._exact_title_match(results, "It", 2050) is None, (
+        "a year nothing matched was papered over"
+    )
+
+
+def test_exact_title_match_normalises_both_sides_the_same_way():
+    import app as application
+
+    # Case, punctuation, a trailing year and the stopwords are all outside what
+    # counts as "the same title", and the normalisation is the one the direct
+    # catalog already compares with -- so the id path and the title path in
+    # resolve cannot disagree about which film a string means.
+    results = [{"id": 5, "media_type": "movie", "title": "Fast & Furious (2009)"}]
+    assert application._exact_title_match(results, "THE FAST AND THE FURIOUS", None) is not None
+    assert application._exact_title_match(results, "fast and furious 2009", None) is not None
+    assert application._exact_title_match(results, "Son of Samson", None) is None
+    assert application._exact_title_match([], "Anything", None) is None
+    assert application._exact_title_match(results, "", None) is None
+
+
+
 
 
 def test_cors_header_present_on_error_responses():

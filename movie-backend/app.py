@@ -186,6 +186,44 @@ def _find_catalog_entry(title: str, year) -> dict | None:
     return best[1] if best else None
 
 
+def _exact_title_match(results: list[dict], title: str, year) -> dict | None:
+    """The one search result that *is* the requested title, or `None`.
+
+    Matching is on the normalised form the direct catalog already compares
+    with -- lowercase, punctuation and years stripped, stopwords dropped -- so
+    "The Fast and the Furious" and "Fast & Furious" score the same film while
+    "No Greater Love" and "Son of Samson" do not, no matter where either sits
+    in TMDB's ranking.
+
+    The year then has to survive `accept_candidate`, which is the same trust
+    check `_find_catalog_entry` applies: a known year with a contradicting
+    candidate rejects the candidate, and an unknown candidate year is only
+    admitted because the title matched exactly. Absence of evidence is not
+    evidence of a different film; a contradiction is.
+
+    `None` means "nothing here is that title", and the caller turns that into a
+    404. It never means "take the first one".
+    """
+    wanted = catalog_lib.normalize_title(title)
+    if not wanted:
+        return None
+    try:
+        requested_year = int(year) if year else None
+    except (TypeError, ValueError):
+        requested_year = None
+
+    for candidate in results:
+        name = candidate.get("title") or candidate.get("name") or ""
+        if catalog_lib.normalize_title(name) != wanted:
+            continue
+        release = candidate.get("release_date") or candidate.get("first_air_date") or ""
+        raw = release[:4]
+        candidate_year = int(raw) if raw.isdigit() else None
+        if catalog_lib.accept_candidate(requested_year, candidate_year, 1.0):
+            return candidate
+    return None
+
+
 def _direct_source_for(title: str, year=None, refresh: bool = False) -> dict | None:
     """Prefer a direct, playable Archive.org source for a title; fall back to a
     live on-demand scrape when the local catalog has no confident match. Pass
@@ -672,26 +710,47 @@ def resolve_movie():
     if not title and not tmdb_id:
         return _json_error("Provide a title or a TMDB id.", 400)
 
-    # If we have a TMDB ID, fetch details directly
+    # If we have a TMDB ID, fetch details directly.
+    #
+    # The id is the lookup, and it is exact: TMDB answers for precisely one
+    # title, so there is nothing to match and nothing to fall back to. An id
+    # that will not parse is not an id -- a slug, an IMDb string, a title in
+    # the wrong field -- and it is dropped here so the title below, which does
+    # have matching rules, is what the request is judged on.
     if tmdb_id:
         try:
             tmdb_id = int(tmdb_id)
         except (ValueError, TypeError):
             tmdb_id = None
-    
+
     if not tmdb_id and title:
-        # Search for the title
+        # A search returns ranked guesses, and the first of them is an answer
+        # only when it names the same film. This used to take
+        # `valid_results[0]` unconditionally, so a title TMDB did not carry --
+        # "No Greater Love" -- resolved to whatever TMDB ranked first for it,
+        # and the viewer played an unrelated film under the right heading with
+        # no way to tell the swap had happened.
+        #
+        # Matching is exact on the normalised title (case, punctuation, years
+        # and stopwords aside) and then passes the same year trust check the
+        # direct catalog uses, so a same-named film from another year is not a
+        # match either. Nothing matching means nothing to play, and the answer
+        # to that is a 404 rather than the top of somebody else's list.
         results = tmdb.search_multi(title)
         valid_results = [r for r in results if r.get("media_type") in ("movie", "tv")]
-        if valid_results:
-            top = valid_results[0]
+        top = _exact_title_match(valid_results, title, year)
+        if top is not None:
             tmdb_id = top["id"]
             media_type = top.get("media_type", "movie")
             title = top.get("title") or top.get("name") or title
             year = year or (top.get("release_date") or top.get("first_air_date") or "")[:4]
 
     if not tmdb_id:
-        return jsonify({"error": f"Could not find metadata for '{title}'"}), 404
+        return _json_error(
+            f"Could not find metadata for '{title}'",
+            404,
+            code="TITLE_NOT_FOUND",
+        )
 
     if not media_type:
         media_type = "movie"
@@ -699,7 +758,21 @@ def resolve_movie():
     # Fetch full metadata from TMDB
     details = tmdb.fetch_media_details(tmdb_id, media_type)
     if not details:
-        return jsonify({"error": f"Could not fetch details for '{title}'"}), 404
+        return _json_error(
+            f"Could not fetch details for '{title}'",
+            404,
+            code="TITLE_NOT_FOUND",
+        )
+    # TMDB can answer a lookup with a different id than the one asked for (a
+    # redirect on a merged or replaced entry). The request named one title; a
+    # second one is not it, and quietly playing it is the same defect as the
+    # index-0 fallback above.
+    if str(details.get("id")) != str(tmdb_id):
+        return _json_error(
+            f"Could not find metadata for '{title}'",
+            404,
+            code="TITLE_NOT_FOUND",
+        )
 
     if media_type == "tv":
         seasons_count = details.get("number_of_seasons", 1)
