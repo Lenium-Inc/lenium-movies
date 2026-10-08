@@ -131,6 +131,21 @@ function classifyError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   const lowerMessage = message.toLowerCase();
 
+  // Checked before any substring branch, because both of this state's signals
+  // are already words the branches below match on: it arrives on a 404, and its
+  // message contains "provider", which the `provider_unavailable` branch reads
+  // as "the provider is down, keep trying". The backend already walked all six
+  // sources before answering, so calling that retryable turns the one genuinely
+  // final outcome into an endless retry loop.
+  if (error instanceof StreamExhaustedError) {
+    return {
+      type: "exhausted",
+      message: titleUnavailable,
+      recoverable: false,
+      retryCount: 0,
+    };
+  }
+
   if (error instanceof StreamNotFoundError) {
     return {
       type: "not_found",
@@ -1133,10 +1148,13 @@ export function WatchPage() {
    * still covers is the resolver itself being unable to answer: a cold start or
    * a transient 5xx.
    *
-   * A 503 is deliberately not retried. It means the backend already walked the
-   * entire chain and every provider came back empty or unreachable, so asking
-   * again can only re-walk providers that just failed. That is a decision, not
-   * an outage, and the terminal state is the honest response to it.
+   * `StreamExhaustedError` is deliberately not retried. It means the backend
+   * already walked the entire chain and every provider came back empty or
+   * unreachable, so asking again can only re-walk providers that just failed.
+   * That is a decision, not an outage, and the terminal state is the honest
+   * response to it. It arrives on a 404 so that a shed 503 -- the memory guard
+   * asking for ten seconds' patience -- keeps falling through to the retry
+   * below, which is what it deserves.
    *
    * `refresh` bypasses the backend's direct-source cache so a retry can pick up
    * a title the first attempt missed, rather than replaying the same cached

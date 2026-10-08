@@ -357,13 +357,14 @@ export class StreamNotFoundError extends Error {
 
 /**
  * Thrown when the backend walked every configured provider and none of them
- * could serve the title (HTTP 503 from `/api/get-stream`).
+ * could serve the title (HTTP 404 with `code: "PROVIDERS_EXHAUSTED"` from
+ * `/api/get-stream`).
  *
- * This is deliberately distinct from a transport error. A 503 is the resolver
- * reporting a *decision* -- the whole chain was tried -- so retrying it can only
- * re-walk providers that already failed. Treating it as a generic error made
- * the client burn its whole retry budget re-asking a question that was already
- * answered, delaying the terminal state by several long round-trips.
+ * This is deliberately distinct from a transport error. It reports a
+ * *decision* -- the whole chain was tried -- so retrying it can only re-walk
+ * providers that already failed. Treating it as a generic error made the client
+ * burn its whole retry budget re-asking a question that was already answered,
+ * delaying the terminal state by several long round-trips.
  */
 export class StreamExhaustedError extends Error {
   /** Per-provider outcome from the chain, for diagnostics. */
@@ -710,6 +711,51 @@ export const STREAM_RESOLVE_TIMEOUT_MS = 30_000;
  * guaranteeing the client stops waiting.
  */
 export const MOVIE_RESOLVE_TIMEOUT_MS = 45_000;
+
+/**
+ * Per-provider diagnostics when this response means "every provider failed",
+ * or `null` when it means something else.
+ *
+ * Exhaustion is identified by its *code*, not by its status, because two
+ * unrelated conditions used to share one status and the client's response to
+ * them is opposite:
+ *
+ * - `404 PROVIDERS_EXHAUSTED` is a decision -- all six providers were walked
+ *   and none could serve the title -- so re-asking only re-walks what already
+ *   failed. It moved off `503` because that is also what the memory guard
+ *   answers when the byte ceiling trips, and "no source exists" and "we are
+ *   shedding load right now" must not be the same number.
+ * - `503 RESOURCE_LIMIT_EXCEEDED` is that guard: transient by construction, so
+ *   it stays retryable. Reading *every* 503 as exhaustion -- what this did
+ *   before -- turned a shed request that would have cleared in ten seconds into
+ *   a permanent failure for the viewer.
+ *
+ * A 503 naming neither still counts as exhaustion. A proxy in front of the
+ * backend can replace the body with its own error page, and then the status is
+ * the only evidence there is.
+ */
+async function readProviderExhaustion(response: Response): Promise<unknown[] | null> {
+  let body: Record<string, unknown> | null = null;
+  try {
+    const parsed: unknown = await response.json();
+    if (parsed !== null && typeof parsed === "object") {
+      body = parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Unparseable body: only the status below can be judged.
+  }
+
+  const code = typeof body?.code === "string" ? body.code : null;
+  const attempts = Array.isArray(body?.provider_attempts) ? body.provider_attempts : [];
+
+  if (response.status === 404) {
+    return code === "PROVIDERS_EXHAUSTED" ? attempts : null;
+  }
+  if (response.status === 503) {
+    return code === "RESOURCE_LIMIT_EXCEEDED" ? null : attempts;
+  }
+  return null;
+}
 
 /**
  * Resolve a direct playable source for an already-known TMDB title through the

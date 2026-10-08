@@ -218,10 +218,14 @@ def _restore_chain(application):
     application.stream_providers.HEALTH.reset()
     application.stream_providers.clear_probe_cache()
 
-def test_get_stream_answers_503_only_after_every_provider_failed():
-    # The contract the client now depends on: a 503 means the whole chain was
-    # walked, so it is a final answer. A 404 here would be read as "no such
-    # title" and 500 as "the backend broke", and both would be wrong.
+def test_get_stream_answers_404_only_after_every_provider_failed():
+    # The contract the client now depends on: exhaustion is a *final* answer,
+    # not an outage. It used to be a 503, which is also what the shared memory
+    # guard answers when the byte ceiling trips -- so "the whole chain was
+    # walked and none of it works" and "we are shedding load right now" were
+    # the same number, and the client could not tell a decision from a
+    # transient failure. It now carries a code that names the case, and the
+    # guard keeps 503 to itself.
     app, client = _client()
     _exhaust_the_chain(app)
     try:
@@ -229,15 +233,21 @@ def test_get_stream_answers_503_only_after_every_provider_failed():
     finally:
         _restore_chain(app)
 
-    body = _assert_json_error(res, 503)
+    body = _assert_json_error(res, 404)
+    assert body.get("code") == "PROVIDERS_EXHAUSTED", (
+        f"exhaustion did not name itself: {body!r}"
+    )
+    assert body.get("error") == "No active stream sources", (
+        f"unexpected exhaustion message: {body!r}"
+    )
     assert body.get("available") is False, f"exhaustion did not report available:false: {body!r}"
 
     # Exhaustion still advertises the chain, in priority order and in the one
     # shape every resolver client reads. An empty `providers` here was the old
     # contract and it was the wrong one: the client walks this list on its own
-    # per-candidate timer, so handing it nothing on a 503 leaves it with no way
-    # to try anything, and no way to tell "no such title" from "every provider
-    # was down at this instant". `available: false` is what says none of it was
+    # per-candidate timer, so handing it nothing leaves it with no way to try
+    # anything, and no way to tell "no such title" from "every provider was
+    # down at this instant". `available: false` is what says none of it was
     # verified -- the chain is addressable, not vetted.
     providers = body.get("providers")
     assert isinstance(providers, list) and providers, (
@@ -260,7 +270,7 @@ def test_get_stream_exhaustion_reports_what_each_provider_did():
     app, client = _client()
     _exhaust_the_chain(app)
     try:
-        body = _assert_json_error(client.get("/api/get-stream?tmdb_id=603"), 503)
+        body = _assert_json_error(client.get("/api/get-stream?tmdb_id=603"), 404)
     finally:
         _restore_chain(app)
 
@@ -275,10 +285,12 @@ def test_get_stream_exhaustion_reports_what_each_provider_did():
     )
 
 
-def test_get_stream_never_answers_503_while_a_provider_is_working():
-    # The inverse, because a 503 is terminal for the client: if a single
+def test_get_stream_never_reports_exhaustion_while_a_provider_is_working():
+    # The inverse, because exhaustion is terminal for the client: if a single
     # reachable provider is enough to answer, the retry budget is not spent and
-    # the viewer sees a frame instead of an error card.
+    # the viewer sees a frame instead of an error card. A 503 would be even
+    # worse than it was before -- with the guard owning that status, exhaustion
+    # spilling into it would also mean claiming the memory ceiling was hit.
     app, client = _client()
     _exhaust_the_chain(app)
     app.stream_providers.probe_embed = lambda *a, **k: True

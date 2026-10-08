@@ -898,17 +898,25 @@ def get_stream_direct():
     )
 
     if not resolution.ok:
-        # 503 rather than 404: the title exists and was looked up correctly, but
-        # no provider can currently serve it. `attempts` carries the per-provider
-        # outcome so this is diagnosable from the client's own terminal state
-        # rather than being an opaque "nothing worked".
+        # 404 with an explicit `code`, not 503.
+        #
+        # 503 is the memory guard's status: `/api` answers 503 when the shared
+        # byte ceiling trips, so exhaustion and "we are shedding load" were the
+        # same number and the client could not tell a final answer from a
+        # transient one. The two are now distinguishable without a second
+        # round-trip -- `code` names this case and the guard keeps 503.
+        #
+        # The distinction that matters to the viewer is unchanged: this is a
+        # *decision*, not an outage. Every one of the six providers (the direct
+        # catalog plus the five embeds) was walked and none could serve the
+        # title, so re-asking can only re-walk providers that just failed.
         #
         # The chain is still returned, unresolved but in priority order, so a
-        # client walking it on its own timer has something to walk. The 503 and
-        # `available: false` are what say none of it was verified.
+        # client walking it on its own timer has something to walk.
         return _json_error(
-            "No streaming provider could serve this title.",
-            503,
+            "No active stream sources",
+            404,
+            code="PROVIDERS_EXHAUSTED",
             available=False,
             providers=stream_providers.planned_candidate_entries(
                 tmdb_id, media_type, season_number, episode_number

@@ -129,11 +129,11 @@ describe("getStreamSource timeout handling", () => {
 });
 
 /**
- * A 503 from `/api/get-stream` is the backend reporting that it walked the
- * entire provider chain and found nothing. It has to be distinguishable from a
- * transport error, because the Watch page's response to the two is opposite:
- * a transport error is worth retrying, an exhausted chain is a final answer and
- * re-asking only re-walks providers that already failed.
+ * `/api/get-stream` distinguishes "the chain is exhausted" from "the server is
+ * busy", and the Watch page's response to the two is opposite: an exhausted
+ * chain is a final answer and re-asking only re-walks providers that already
+ * failed, while a shed request clears on its own and is worth waiting for.
+ * The two used to share a status, so neither could be told apart.
  */
 describe("getStreamSource provider exhaustion", () => {
   beforeEach(() => {
@@ -145,16 +145,57 @@ describe("getStreamSource provider exhaustion", () => {
     vi.restoreAllMocks();
   });
 
-  it("throws StreamExhaustedError, not a generic error, on a 503", async () => {
+  it("throws StreamExhaustedError, not a generic error, on 404 PROVIDERS_EXHAUSTED", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => jsonResponse(503, { success: false, available: false }))
+      vi.fn(async () =>
+        jsonResponse(404, {
+          success: false,
+          status: 404,
+          code: "PROVIDERS_EXHAUSTED",
+          available: false,
+        })
+      )
     );
 
     const pending = getStreamSource({ tmdbId: "603", mediaType: "movie" });
     await expect(pending).rejects.toBeInstanceOf(StreamExhaustedError);
     // A cold start must never be satisfied by this path.
     await expect(pending).rejects.not.toBeInstanceOf(StreamTimeoutError);
+  });
+
+  it("keeps a plain 404 retryable, because it is 'no such title' not 'no source'", async () => {
+    // `/api/movies/resolve` answers 404 TITLE_NOT_FOUND for an unmatched title.
+    // Reading every 404 as exhaustion would hand the viewer a terminal screen
+    // for a request that was simply wrong.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(404, { success: false, code: "TITLE_NOT_FOUND" }))
+    );
+
+    await expect(
+      getStreamSource({ tmdbId: "603", mediaType: "movie" })
+    ).rejects.not.toBeInstanceOf(StreamExhaustedError);
+  });
+
+  it("keeps a shed 503 retryable, because it clears on its own", async () => {
+    // The memory guard's answer when the byte ceiling trips. It is transient by
+    // construction, so treating it as exhaustion -- as this did before -- turned
+    // a request that would have succeeded in ten seconds into a permanent
+    // failure screen for the viewer.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse(503, {
+          error: "Server under high load. Retrying shortly.",
+          code: "RESOURCE_LIMIT_EXCEEDED",
+        })
+      )
+    );
+
+    await expect(
+      getStreamSource({ tmdbId: "603", mediaType: "movie" })
+    ).rejects.not.toBeInstanceOf(StreamExhaustedError);
   });
 
   it("carries the per-provider diagnostics so the terminal state explains itself", async () => {
@@ -164,7 +205,9 @@ describe("getStreamSource provider exhaustion", () => {
     ];
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => jsonResponse(503, { success: false, provider_attempts: attempts }))
+      vi.fn(async () =>
+        jsonResponse(404, { success: false, code: "PROVIDERS_EXHAUSTED", provider_attempts: attempts })
+      )
     );
 
     const error = await rejection(getStreamSource({ tmdbId: "603", mediaType: "movie" }));
@@ -172,10 +215,10 @@ describe("getStreamSource provider exhaustion", () => {
     expect(error.providerAttempts).toEqual(attempts);
   });
 
-  it("still reports exhaustion when the 503 body is unreadable", async () => {
+  it("still reports exhaustion when a legacy 503 body is unreadable", async () => {
     // A proxy in front of the backend can replace the body with its own error
-    // page. The status alone is the decision, so the parse failure must not
-    // downgrade it into a retryable transport error.
+    // page. With no code to read, 503 is the only evidence left, and the client
+    // must still reach a terminal state rather than retry forever.
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => ({
@@ -209,8 +252,8 @@ describe("getStreamSource provider exhaustion", () => {
   });
 
   it("leaves other 5xx statuses retryable", async () => {
-    // Only 503 carries the "I tried everything" meaning. A 502 means something
-    // upstream broke, which is exactly the case the retry budget exists for.
+    // A 502 means something upstream broke, which is exactly the case the
+    // retry budget exists for: no code names exhaustion, so no code admits it.
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(502, { success: false })));
 
     await expect(
