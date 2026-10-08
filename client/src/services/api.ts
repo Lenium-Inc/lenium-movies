@@ -787,20 +787,8 @@ export async function getStreamSource(
     STREAM_RESOLVE_TIMEOUT_MS
   );
   if (!response.ok) {
-    // 503 is the backend's "I tried everything" answer, not a broken request.
-    // Read the per-provider diagnostics off the body so the terminal state can
-    // explain itself without a second round-trip.
-    if (response.status === 503) {
-      let attempts: unknown[] = [];
-      try {
-        const body: unknown = await response.json();
-        if (typeof body === "object" && body !== null) {
-          const raw = (body as Record<string, unknown>).provider_attempts;
-          if (Array.isArray(raw)) attempts = raw;
-        }
-      } catch {
-        // A 503 with no parseable body is still a terminal answer.
-      }
+    const attempts = await readProviderExhaustion(response);
+    if (attempts !== null) {
       throw new StreamExhaustedError(attempts);
     }
     throw new Error(`Movie backend responded with status ${response.status}`);
