@@ -640,7 +640,15 @@ export function useCatalog(): UseCatalog {
           }
         };
 
-        if (continueItems.length) {
+        /*
+         * A search results page is assembled from `filtered` and nothing else,
+         * because `filtered` *is* the answer to the query. These two rows are
+         * the exception: one is the viewer's own history, the other is a server
+         * ranking of their taste, and neither is filtered by the search that is
+         * running. Showing them put titles the query never matched above the
+         * ones it did, under a page whose status bar promised results.
+         */
+        if (!searching && continueItems.length) {
           add("Continue Watching", continueItems, undefined, 1);
         }
         add("Trending Movies", movies.slice(0, cap), "score");
@@ -701,11 +709,13 @@ export function useCatalog(): UseCatalog {
 
         // Last, and only when the server actually ranked it. An empty "For You"
         // row reads as a broken feature, so it is omitted rather than padded.
-        if (forYou) add("For You", forYou.slice(0, cap2));
+        // Skipped on a search for the same reason as "Continue Watching": the
+        // taste feed does not know what was typed.
+        if (!searching && forYou) add("For You", forYou.slice(0, cap2));
         return out;
       }
     }
-  }, [view, filtered, savedIds, forYou, continueItems]);
+  }, [view, filtered, savedIds, forYou, continueItems, searching]);
 
   const setSection = useCallback((next: View) => {
     setView(next);

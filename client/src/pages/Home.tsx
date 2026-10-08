@@ -12,17 +12,10 @@ import {
   SearchStatusBar,
 } from "@/components/movies/CatalogEmptyState";
 import { Details } from "@/components/movies/Details";
-import { EpisodeCard } from "@/components/movies/EpisodeCard";
-import { RowScroller } from "@/components/movies/RowScroller";
 import { Spotlight } from "@/components/movies/Spotlight";
 import { Top10Row } from "@/components/movies/Top10Row";
-import { useEpisodeResume, useNewEpisodes } from "@/hooks/useNewEpisodes";
-import { buildWatchPath } from "@/lib/watchRoute";
 import { MovieRow } from "@/components/movies/MovieRow";
-import {
-  SkeletonEpisodeShelf,
-  SkeletonMovieGrid,
-} from "@/components/movies/SkeletonMovieCard";
+import { SkeletonMovieGrid } from "@/components/movies/SkeletonMovieCard";
 import { InfiniteMovieGrid } from "@/components/movies/InfiniteMovieGrid";
 import { DiscoverDropdown } from "@/components/DiscoverDropdown";
 import { TopProgressBar } from "@/components/ui/TopProgressBar";
@@ -48,7 +41,6 @@ export default function Home() {
     searchLoading,
     filtered,
     rows,
-    continueWatching: continueWatchingItems,
     discoverItems,
     discoverHasMore,
     discoverLoading,
@@ -92,54 +84,6 @@ export default function Home() {
     [filtered]
   );
 
-  /*
-   * The episode shelf is fed by the shows already on this page rather than by a
-   * list of its own: a show that is trending *now* is a show with something new
-   * to watch *now*, and reusing `filtered` means the shelf costs no extra
-   * catalogue request to populate.
-   *
-   * Home view only. On a browse grid the viewer asked for one specific list, and
-   * quietly mounting a shelf that issues six season requests underneath their
-   * filter would spend bandwidth on something they did not ask for.
-   */
-  const { episodes: newEpisodeItems } = useNewEpisodes(
-    isHomeView ? filtered : []
-  );
-  const newEpisodes = useEpisodeResume(newEpisodeItems, continueWatchingItems);
-
-  /*
-   * One column per show. `useNewEpisodes` returns a flat list ordered newest
-   * first, which is right for a "latest" shelf and wrong here: interleaving two
-   * shows puts S3E1 of one show directly above S7E2 of another and the grouping
-   * falls apart. Episodes are still grouped in the order their shows first
-   * appear in that list, so the most recently active show leads.
-   */
-  const episodeColumns = useMemo(() => {
-    const byShow = new Map<
-      string,
-      { showId: string; showName: string; items: typeof newEpisodes }
-    >();
-    for (const item of newEpisodes) {
-      // `number` null means TMDB listed the episode without one; there is no
-      // route to open for it, so it is left off the shelf rather than opening
-      // S{season}E0.
-      if (item.episode.number == null) continue;
-      const existing = byShow.get(item.showId);
-      if (existing) {
-        // At most three per column: a long-running show would otherwise make
-        // one column three times the height of the shelf's neighbours and push
-        // every other show off screen.
-        if (existing.items.length < 3) existing.items.push(item);
-        continue;
-      }
-      byShow.set(item.showId, {
-        showId: item.showId,
-        showName: item.showName,
-        items: [item],
-      });
-    }
-    return Array.from(byShow.values());
-  }, [newEpisodes]);
   // A hero with nothing in it is a 70vh rectangle of empty gradient, so it is
   // only rendered when the home view actually has titles to feature.
   const showHero = isHomeView && heroItems.length > 0 && !loading;
@@ -330,81 +274,18 @@ export default function Home() {
                 ) : (
                   <>
                     {/*
-                    New Episodes sits above every catalogue row and below the
-                    hero: an episode that aired this week is the freshest thing
-                    on the page, and burying it under Trending would make the
-                    shelf's whole reason for existing unmissable only if you
-                    happened to scroll.
+                      Nothing here on purpose.
 
-                    Grouped by show, in columns: the question this shelf answers
-                    is "what has my show been doing", which cannot be answered by
-                    eighteen unrelated stills in a single line. Each column is one
-                    show's newest episodes, so the shelf reads like a contents
-                    page for what you are already following. Columns come from
-                    different shows, so nothing is repeated within the shelf.
+                      The home page used to open this list with a "New Episodes"
+                      shelf, grouped into one column per show. It was removed: the
+                      shelf issued six season requests per page view to assemble
+                      itself, repeated titles the rest of the page was already
+                      showing, and pushed the catalogue rows -- the thing a
+                      viewer actually came to scroll -- below the fold. "Continue
+                      Watching" already answers "what should I watch next" with
+                      what the viewer themselves stopped, which needs no extra
+                      request at all.
                     */}
-                    {isHomeView &&
-                      (episodeColumns.length ? (
-                        <section className="mb-8">
-                          <h2 className="mb-3 px-1 text-lg font-semibold text-white">
-                            New Episodes
-                          </h2>
-                          <RowScroller label="New Episodes">
-                            {episodeColumns.map(column => (
-                              <div
-                                key={column.showId}
-                                className="w-64 shrink-0"
-                              >
-                                <h3 className="mb-2 line-clamp-1 text-xs font-semibold text-zinc-400">
-                                  {column.showName}
-                                </h3>
-                                <div className="flex flex-col gap-3">
-                                  {column.items.map(item => (
-                                    <EpisodeCard
-                                      key={`${item.showId}-${item.episode.season}-${item.episode.number}`}
-                                      episode={item.episode}
-                                      showName={item.showName}
-                                      resume={item.resume}
-                                      onPlay={() => {
-                                        // Same route contract as every other TV
-                                        // link on the site: the episode travels in
-                                        // the query string, never in the path
-                                        // segment.
-                                        window.location.href = buildWatchPath(
-                                          item.showId,
-                                          {
-                                            mediaType: "tv",
-                                            season: item.episode.season,
-                                            episode: item.episode.number ?? 1,
-                                          }
-                                        );
-                                      }}
-                                    />
-                                  ))}
-                                </div>
-                              </div>
-                            ))}
-                          </RowScroller>
-                        </section>
-                      ) : /*
-                         A loading placeholder rather than nothing. This shelf used
-                         to render only once its columns existed, so for the length
-                         of the request the page appeared to have no such
-                         category -- and then grew one underneath the viewer,
-                         pushing every row below it down. The heading is rendered
-                         too, for the same reason: a category that arrives with its
-                         own title reads as loaded, where a block of shimmer
-                         appearing from nowhere reads as a glitch.
-                       */ loading ? (
-                        <section className="mb-8" aria-busy="true">
-                          <h2 className="mb-3 px-1 text-lg font-semibold text-white">
-                            New Episodes
-                          </h2>
-                          <RowScroller label="New Episodes">
-                            <SkeletonEpisodeShelf />
-                          </RowScroller>
-                        </section>
-                      ) : null)}
                     {rows.map((row, index) =>
                       row.kind === "top10" ? (
                         <Top10Row
