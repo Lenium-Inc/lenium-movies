@@ -53,7 +53,7 @@ describe("injectOrigin", () => {
   });
 
   it("leaves a document with no token untouched", () => {
-    const html = "<head><title>Lenium</title></head>";
+    const html = "<head><title>Stream Vy</title></head>";
     expect(injectOrigin(html, "https://vy.example")).toBe(html);
   });
 });
@@ -192,7 +192,7 @@ describe("prerenderRoutes", () => {
     ]);
 
     const terms = pages.find(p => p.fileName === "terms.html")!.source;
-    expect(terms).toContain("<title>Terms of Service - Lenium</title>");
+    expect(terms).toContain("<title>Terms of Service - Stream Vy</title>");
     expect(terms).toContain('rel="canonical" href="https://vy.example/terms"');
     // ...and not the homepage's, which is the whole point: every route used to
     // serve this, so the site had exactly one indexable URL.

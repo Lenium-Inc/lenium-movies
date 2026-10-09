@@ -95,9 +95,9 @@ describe("pageSeo", () => {
 
   it("gives each legal page its own title", () => {
     for (const [route, expected] of [
-      ["/terms", "Terms of Service - Lenium"],
-      ["/privacy", "Privacy Policy - Lenium"],
-      ["/dmca", "Copyright & DMCA - Lenium"],
+      ["/terms", "Terms of Service - Stream Vy"],
+      ["/privacy", "Privacy Policy - Stream Vy"],
+      ["/dmca", "Copyright & DMCA - Stream Vy"],
     ] as const) {
       expect(pageSeo(route).title, route).toBe(expected);
     }
@@ -154,7 +154,7 @@ describe("title pages", () => {
   it("becomes indexable with the film's own title and description", () => {
     const seo = pageSeo("/watch/603", { movie: matrix });
     expect(seo.indexable).toBe(true);
-    expect(seo.title).toBe("The Matrix (1999) - Watch Free on Lenium");
+    expect(seo.title).toBe("The Matrix (1999) - Watch Free on Stream Vy");
     expect(seo.description).toBe("A hacker learns the truth.");
     expect(seo.image).toBe(matrix.image);
   });
@@ -163,7 +163,7 @@ describe("title pages", () => {
     const seo = pageSeo("/watch/603", {
       movie: { id: "603", title: "The Matrix" },
     });
-    expect(seo.description).toContain("Watch The Matrix free on Lenium");
+    expect(seo.description).toContain("Watch The Matrix free on Stream Vy");
     expect(seo.description).not.toContain("1999");
   });
 
