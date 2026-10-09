@@ -142,7 +142,7 @@ export default function ProfilesPage() {
               className="inline-flex items-center gap-2 text-xs text-white/40 transition hover:text-white"
             >
               <LogOut className="h-3.5 w-3.5" />
-              Sign Out of {user?.name ?? "Lenium"}
+              Sign Out of {user?.name ?? "Stream Vy"}
             </button>
           </div>
         </div>

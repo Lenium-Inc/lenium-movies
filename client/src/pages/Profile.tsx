@@ -176,7 +176,7 @@ export default function ProfilePage() {
           <Link
             href="/"
             className="shrink-0 rounded-md text-white"
-            aria-label="Lenium home"
+            aria-label="Stream Vy home"
           >
             <BrandLockup size="sm" />
           </Link>
