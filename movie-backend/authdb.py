@@ -311,6 +311,9 @@ class Store:
                         pin_hash TEXT,
                         pin_salt TEXT,
                         sort_order INT DEFAULT 0,
+                        preferred_language TEXT NOT NULL DEFAULT '',
+                        preferred_subtitle TEXT NOT NULL DEFAULT '',
+                        locale_region TEXT NOT NULL DEFAULT '',
                         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
                     )
                     """
@@ -549,6 +552,9 @@ class Store:
                         pin_hash TEXT,
                         pin_salt TEXT,
                         sort_order INT DEFAULT 0,
+                        preferred_language TEXT NOT NULL DEFAULT '',
+                        preferred_subtitle TEXT NOT NULL DEFAULT '',
+                        locale_region TEXT NOT NULL DEFAULT '',
                         created_at TEXT NOT NULL
                     )
                     """
@@ -748,6 +754,13 @@ class Store:
         wanted = [
             ("watch_history", "profile_id", "UUID" if self.pg else "INTEGER"),
             ("watch_history", "duration_seconds", "INT DEFAULT 0"),
+            # Locale choices live per profile (a home watches in more than one
+            # language), and every install that predates this feature has a
+            # `watch_profiles` without them -- `CREATE TABLE IF NOT EXISTS`
+            # would silently keep the old shape there.
+            ("watch_profiles", "preferred_language", "TEXT NOT NULL DEFAULT ''"),
+            ("watch_profiles", "preferred_subtitle", "TEXT NOT NULL DEFAULT ''"),
+            ("watch_profiles", "locale_region", "TEXT NOT NULL DEFAULT ''"),
         ]
         for table, column, coltype in wanted:
             if self._has_column(table, column):
@@ -1035,6 +1048,9 @@ class Store:
             "pin_hash",
             "pin_salt",
             "sort_order",
+            "preferred_language",
+            "preferred_subtitle",
+            "locale_region",
         }
         sets, params = [], []
         for key, value in fields.items():
