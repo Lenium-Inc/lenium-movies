@@ -52,7 +52,7 @@ export function ProfileMenu() {
     return (
       <Link
         href="/login"
-        className="rounded-md bg-violet-600 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-violet-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400"
+        className="rounded-xl bg-[var(--sv-violet-deep)] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[var(--sv-violet)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400"
       >
         Sign In
       </Link>

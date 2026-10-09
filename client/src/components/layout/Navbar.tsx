@@ -5,6 +5,7 @@ import { BrandLockup } from "@/components/brand/Brand";
 import type { View } from "@/components/layout/navigation";
 import { ProfileMenu } from "@/components/layout/ProfileMenu";
 import { NavbarSearch } from "@/components/layout/NavbarSearch";
+import { NotificationsBell } from "@/components/layout/NotificationsBell";
 import { savedListIds, subscribeList } from "@/services/lists";
 
 interface NavbarProps {
@@ -128,6 +129,10 @@ export function Navbar({ view, onNavigate }: NavbarProps) {
             its results drop down underneath instead of taking over the page.
           */}
           <NavbarSearch />
+
+          <div className="shrink-0">
+            <NotificationsBell />
+          </div>
 
           <button
             type="button"
