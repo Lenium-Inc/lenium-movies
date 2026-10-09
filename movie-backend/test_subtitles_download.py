@@ -249,64 +249,73 @@ def test_choose_subtitles_deduplicates_by_language():
     assert len(catalog_lib.choose_subtitles(files, "ident")) == 1
 
 
-# --- /api/subtitles ----------------------------------------------------------
+# --- /api/v1/playback/captions ------------------------------------------------
 
 
-def test_subtitles_route_serves_vtt_content_type():
+def _caption_track(url, **meta):
+    """Mint the caption handle the route now requires, and build its URL."""
+    import playback_tokens
+
+    token = playback_tokens.issue(playback_tokens.KIND_CAPTION, url, meta=meta or None)
+    return f"/api/v1/playback/captions?track={token}"
+
+
+def test_captions_route_serves_vtt_content_type():
     _, client = _client()
     _fake_archive(VTT_BODY)
-    res = client.get("/api/subtitles?url=https://archive.org/download/x/a.vtt")
+    res = client.get(_caption_track("https://archive.org/download/x/a.vtt"))
     ctype = (res.headers.get("Content-Type") or "").lower()
     # A <track> is rejected outright if this is not WebVTT.
     assert "text/vtt" in ctype, ctype
     assert res.data.decode().startswith("WEBVTT")
 
 
-def test_subtitles_route_converts_srt_upstream():
+def test_captions_route_converts_srt_upstream():
     _, client = _client()
     _fake_archive(SRT_BODY)
-    res = client.get("/api/subtitles?url=https://archive.org/download/x/a.srt")
+    res = client.get(_caption_track("https://archive.org/download/x/a.srt"))
     body = res.data.decode()
     assert res.status_code == 200
     assert body.startswith("WEBVTT"), body[:60]
     assert "00:00:09.000 --> 00:00:15.001" in body, body
 
 
-def test_subtitles_route_converts_when_upstream_lies_about_type():
+def test_captions_route_converts_when_upstream_lies_about_type():
     # The node serves `text/plain` even for `.vtt`; the body is the truth.
     _, client = _client()
     _fake_archive(SRT_BODY, content_type="text/vtt")
-    res = client.get("/api/subtitles?url=https://archive.org/download/x/a.vtt")
+    res = client.get(_caption_track("https://archive.org/download/x/a.vtt"))
     assert res.data.decode().startswith("WEBVTT"), res.data[:60]
 
 
-def test_subtitles_route_rejects_non_archive_host():
+def test_captions_route_rejects_non_archive_host():
     _, client = _client()
-    res = client.get("/api/subtitles?url=https://evil.example.com/a.vtt")
+    res = client.get(_caption_track("https://evil.example.com/a.vtt"))
     assert res.status_code == 400, res.status_code
     assert res.get_json()["success"] is False
 
 
-def test_subtitles_route_rejects_missing_url():
+def test_captions_route_rejects_missing_handle():
     _, client = _client()
-    assert client.get("/api/subtitles").status_code == 400
+    assert client.get("/api/v1/playback/captions").status_code == 400
+    assert client.get("/api/v1/playback/captions?track=not-a-token").status_code == 400
 
 
-def test_subtitles_route_rejects_non_http_scheme():
+def test_captions_route_rejects_non_http_scheme():
     _, client = _client()
-    res = client.get("/api/subtitles?url=file:///etc/passwd")
+    res = client.get(_caption_track("file:///etc/passwd"))
     assert res.status_code == 400, res.status_code
 
 
-def test_subtitles_route_reports_upstream_failure_as_json_502():
+def test_captions_route_reports_upstream_failure_as_json_502():
     _, client = _client()
     _fake_archive_failing()
-    res = client.get("/api/subtitles?url=https://archive.org/download/x/a.vtt")
+    res = client.get(_caption_track("https://archive.org/download/x/a.vtt"))
     assert res.status_code == 502, res.status_code
     assert res.get_json()["success"] is False
 
 
-def test_subtitles_route_rejects_oversized_payload():
+def test_captions_route_rejects_oversized_payload():
     _, client = _client()
     import app as application
 
@@ -314,13 +323,13 @@ def test_subtitles_route_rejects_oversized_payload():
     application.SUBTITLE_MAX_BYTES = 32
     _fake_archive("WEBVTT\n\n" + ("x" * 500))
     try:
-        res = client.get("/api/subtitles?url=https://archive.org/download/x/a.vtt")
+        res = client.get(_caption_track("https://archive.org/download/x/a.vtt"))
         assert res.status_code == 502, res.status_code
     finally:
         application.SUBTITLE_MAX_BYTES = original
 
 
-def test_subtitles_route_rejects_truncated_caption_file():
+def test_captions_route_rejects_truncated_caption_file():
     # A clipped caption file would fail mid-playback with no visible cause, so
     # the helper rejects rather than truncates.
     _, client = _client()
@@ -331,20 +340,18 @@ def test_subtitles_route_rejects_truncated_caption_file():
     import app as application
 
     application.catalog_lib.fetch_bounded_text = _truncating
-    res = client.get("/api/subtitles?url=https://archive.org/download/x/a.vtt")
+    res = client.get(_caption_track("https://archive.org/download/x/a.vtt"))
     assert res.status_code == 502, res.status_code
 
 
-def test_subtitles_route_honours_allowlist_inside_helper():
+def test_captions_route_honours_allowlist_inside_helper():
     # The helper is the single place the host allowlist is enforced; the route
     # must surface that as a 400 rather than a 502.
     #
     # It keys off the exception type, not its wording. The route used to decide
-    # with `"archive.org" in str(error)`, so this test passed only because the
-    # stub happened to use the same phrasing as the helper -- and a rejection
-    # worded differently (a scheme, a port, a credential in the authority) came
-    # back as a 502, which reads as archive.org being down rather than as a
-    # refused request.
+    # with `"archive.org" in str(error)`, so a rejection worded differently (a
+    # scheme, a port, a credential in the authority) came back as a 502, which
+    # reads as archive.org being down rather than as a refused request.
     _, client = _client()
     import app as application
 
@@ -354,7 +361,7 @@ def test_subtitles_route_honours_allowlist_inside_helper():
         )
 
     application.catalog_lib.fetch_bounded_text = _rejecting
-    res = client.get("/api/subtitles?url=https://evil.example.com/a.vtt")
+    res = client.get(_caption_track("https://evil.example.com/a.vtt"))
     assert res.status_code == 400, res.status_code
 
     # A plain ValueError is the byte cap, which is an upstream refusal and stays
@@ -363,18 +370,45 @@ def test_subtitles_route_honours_allowlist_inside_helper():
         raise ValueError("file exceeds the maximum subtitle size")
 
     application.catalog_lib.fetch_bounded_text = _oversized
-    res = client.get("/api/subtitles?url=https://archive.org/download/x/a.vtt")
+    res = client.get(_caption_track("https://archive.org/download/x/a.vtt"))
     assert res.status_code == 502, res.status_code
 
 
-# --- /api/movies/download ----------------------------------------------------
+def test_captions_body_is_sanitised_not_passed_through():
+    # The upstream body is untrusted like any other relayed content: cue
+    # payload overrides and unknown tags are stripped before the text reaches
+    # the player, while the cue itself survives.
+    _, client = _client()
+    _fake_archive(
+        "WEBVTT\n\n"
+        "00:00:09.000 --> 00:00:15.000 line:0 position:20%\n"
+        "<c.yellow>vivid</c> text\n"
+    )
+    res = client.get(_caption_track("https://archive.org/download/x/a.vtt"))
+    body = res.data.decode()
+    assert res.status_code == 200, body
+    assert "vivid" in body, body
+    assert "<c.yellow>" not in body, f"tag survived sanitising: {body}"
+    assert "position:20%" not in body, f"cue override survived: {body}"
+
+
+# --- /api/v1/playback/download ------------------------------------------------
+
+
+def _download_leg(url, filename=None):
+    """Mint the download handle the route now requires, and build its URL."""
+    import playback_tokens
+
+    meta = {"filename": filename} if filename else {}
+    token = playback_tokens.issue(playback_tokens.KIND_DOWNLOAD, url, meta=meta or None)
+    return f"/api/v1/playback/download?token={token}"
 
 
 def test_download_sends_attachment_disposition():
     _, client = _client()
     _fake_archive(b"movie-bytes")
     res = client.get(
-        "/api/movies/download?url=https://archive.org/download/x/a.mp4&filename=Movie.mp4"
+        _download_leg("https://archive.org/download/x/a.mp4", filename="Movie.mp4")
     )
     disposition = res.headers.get("Content-Disposition") or ""
     # Without `attachment` the browser navigates instead of saving.
@@ -382,24 +416,22 @@ def test_download_sends_attachment_disposition():
     assert "Movie.mp4" in disposition, disposition
 
 
-def test_versioned_download_alias_uses_archive_attachment_proxy():
+def test_download_requires_a_handle():
+    # The caller no longer supplies the URL at all: without a handle there is
+    # nothing to serve, and the old URL-carrying aliases are gone rather than
+    # left open as the un-tokenised door they were.
     _, client = _client()
-    _fake_archive(b"movie-bytes")
-    res = client.get(
-        "/api/v1/stream/download?url=https://archive.org/download/x/a.mp4"
-        "&filename=Movie.mp4"
-    )
-    assert res.status_code == 200, res.status_code
-    assert res.data == b"movie-bytes"
-    assert (res.headers.get("Content-Disposition") or "").startswith("attachment;")
+    assert client.get("/api/v1/playback/download").status_code == 400
+    assert client.get("/api/v1/playback/download?token=not-a-token").status_code == 400
 
 
 def test_download_includes_utf8_filename_star():
     _, client = _client()
     _fake_archive(b"movie-bytes")
     res = client.get(
-        "/api/movies/download?url=https://archive.org/download/x/a.mp4"
-        "&filename=Amélie 2001.mp4"
+        _download_leg(
+            "https://archive.org/download/x/a.mp4", filename="Amélie 2001.mp4"
+        )
     )
     disposition = res.headers.get("Content-Disposition") or ""
     # Non-ASCII titles survive via the RFC 6266 UTF-8 form.
@@ -411,7 +443,7 @@ def test_download_falls_back_to_archive_filename():
     _, client = _client()
     _fake_archive(b"movie-bytes")
     res = client.get(
-        "/api/movies/download?url=https://archive.org/download/x/NightOfLivingDead.mp4"
+        _download_leg("https://archive.org/download/x/NightOfLivingDead.mp4")
     )
     assert "NightOfLivingDead.mp4" in (res.headers.get("Content-Disposition") or "")
 
@@ -420,8 +452,10 @@ def test_download_strips_header_injection_from_filename():
     _, client = _client()
     _fake_archive(b"movie-bytes")
     res = client.get(
-        "/api/movies/download?url=https://archive.org/download/x/a.mp4"
-        "&filename=bad%22name%0d%0aX-Injected:%20yes"
+        _download_leg(
+            "https://archive.org/download/x/a.mp4",
+            filename='bad"name\r\nX-Injected: yes',
+        )
     )
     disposition = res.headers.get("Content-Disposition") or ""
     # CR/LF must never survive into the header value.
@@ -437,7 +471,10 @@ def test_download_strips_path_separators_from_filename():
     _, client = _client()
     _fake_archive(b"movie-bytes")
     res = client.get(
-        "/api/movies/download?url=https://archive.org/download/x/a.mp4&filename=..%2F..%2Fetc%2Fpasswd"
+        _download_leg(
+            "https://archive.org/download/x/a.mp4",
+            filename="../../etc/passwd",
+        )
     )
     disposition = res.headers.get("Content-Disposition") or ""
     assert "/" not in disposition.split(";")[1], disposition
@@ -445,23 +482,44 @@ def test_download_strips_path_separators_from_filename():
 
 
 def test_download_rejects_non_archive_host():
+    # No fake: the real helper must refuse before any socket is opened, and the
+    # refusal (ArchiveUrlRejected) is a 400, not an upstream failure.
     _, client = _client()
-    res = client.get("/api/movies/download?url=https://evil.example.com/a.mp4")
+    res = client.get(_download_leg("https://evil.example.com/a.mp4"))
     assert res.status_code == 400, res.status_code
     assert res.get_json()["success"] is False
-
-
-def test_download_rejects_missing_url():
-    _, client = _client()
-    assert client.get("/api/movies/download").status_code == 400
 
 
 def test_download_reports_upstream_failure_as_json_502():
     _, client = _client()
     _fake_archive_failing()
-    res = client.get("/api/movies/download?url=https://archive.org/download/x/a.mp4")
+    res = client.get(_download_leg("https://archive.org/download/x/a.mp4"))
     assert res.status_code == 502, res.status_code
     assert res.get_json()["success"] is False
+
+
+def test_retired_playback_paths_are_gone():
+    # The hard cut left no aliases behind. A 404 from each is the proof that
+    # the un-tokenised doors -- which took a raw URL from the caller -- are not
+    # quietly still serving.
+    #
+    # `/api/movies/resolve` is the one exception: it is back as a thin alias
+    # for `/api/v1/playback/init` (same handler, same tokenised legs) because
+    # the web client still calls it from three places. It is absent from this
+    # list on purpose; test_stream_errors.py's resolve-alias tests pin why it
+    # is safe to keep.
+    _, client = _client()
+    for path in (
+        "/api/subtitles",
+        "/api/movies/download",
+        "/api/v1/stream/download",
+        "/api/get-stream",
+        "/api/movies/stream",
+        "/api/movies/manifest",
+        "/api/v1/stream/manifest",
+    ):
+        res = client.get(path)
+        assert res.status_code == 404, f"{path} is still registered: {res.status_code}"
 
 
 def test_safe_download_name_helper():

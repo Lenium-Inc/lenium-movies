@@ -160,12 +160,12 @@ def test_unhandled_exception_is_logged_server_side():
     ).get_data(as_text=True)
 
 
-# --- /api/get-stream input validation ---------------------------------------
+# --- /api/v1/playback/init input validation ---------------------------------
 
 
-def test_get_stream_rejects_missing_id():
+def test_init_rejects_missing_id():
     _, client = _client()
-    _assert_json_error(client.get("/api/get-stream"), 400)
+    _assert_json_error(client.get("/api/v1/playback/init"), 400)
 
 
 def test_episodes_rejects_nonnumeric_id_as_400_not_404():
@@ -176,24 +176,27 @@ def test_episodes_rejects_nonnumeric_id_as_400_not_404():
     assert "episode" not in body["error"].lower()
 
 
-def test_get_stream_rejects_nonnumeric_id():
+def test_init_rejects_nonnumeric_id():
     # The bug: the id was interpolated into the TMDB path and the embed URL, so
     # garbage produced a confident 200 carrying an embed URL that can never play.
     _, client = _client()
-    _assert_json_error(client.get("/api/get-stream?id=not-a-number"), 400)
+    _assert_json_error(client.get("/api/v1/playback/init?id=not-a-number"), 400)
+    _assert_json_error(client.get("/api/v1/playback/init?tmdb_id=not-a-number"), 400)
 
 
-def test_get_stream_rejects_path_injection_id():
+def test_init_rejects_path_injection_id():
     _, client = _client()
     for bad in ("../secrets", "1;DROP TABLE users", "-1", "0", "1e999"):
-        _assert_json_error(client.get(f"/api/get-stream?id={bad}"), 400)
+        _assert_json_error(client.get(f"/api/v1/playback/init?id={bad}"), 400)
 
 
 def test_rejects_oversized_id():
     # A 40-digit id parses as a Python int (unbounded) but is not a TMDB id, so
     # it should be rejected rather than forwarded upstream as a certain 404.
     _, client = _client()
-    _assert_json_error(client.get("/api/get-stream?id=" + "9" * 40), 400)
+    _assert_json_error(
+        client.get("/api/v1/playback/init?id=" + "9" * 40), 400
+    )
     _assert_json_error(client.get("/api/episodes?tmdb_id=" + "9" * 40), 400)
 
 
@@ -218,7 +221,19 @@ def _restore_chain(application):
     application.stream_providers.HEALTH.reset()
     application.stream_providers.clear_probe_cache()
 
-def test_get_stream_answers_404_only_after_every_provider_failed():
+
+def _stub_details(application, details):
+    """Route `fetch_media_details` to a canned row; returns the original.
+
+    The metadata half of init must not need a network round trip to exercise
+    the provider half: the chain under test is resolution, and a live TMDB
+    call would make every assertion here depend on someone else's uptime."""
+    original = application.tmdb.fetch_media_details
+    application.tmdb.fetch_media_details = lambda *a, **k: details
+    return original
+
+
+def test_init_answers_404_only_after_every_provider_failed():
     # The contract the client now depends on: exhaustion is a *final* answer,
     # not an outage. It used to be a 503, which is also what the shared memory
     # guard answers when the byte ceiling trips -- so "the whole chain was
@@ -228,9 +243,11 @@ def test_get_stream_answers_404_only_after_every_provider_failed():
     # guard keeps 503 to itself.
     app, client = _client()
     _exhaust_the_chain(app)
+    original = _stub_details(app, {"id": 603, "title": "The Matrix"})
     try:
-        res = client.get("/api/get-stream?tmdb_id=603")
+        res = client.get("/api/v1/playback/init?tmdb_id=603")
     finally:
+        app.tmdb.fetch_media_details = original
         _restore_chain(app)
 
     body = _assert_json_error(res, 404)
@@ -243,12 +260,10 @@ def test_get_stream_answers_404_only_after_every_provider_failed():
     assert body.get("available") is False, f"exhaustion did not report available:false: {body!r}"
 
     # Exhaustion still advertises the chain, in priority order and in the one
-    # shape every resolver client reads. An empty `providers` here was the old
-    # contract and it was the wrong one: the client walks this list on its own
-    # per-candidate timer, so handing it nothing leaves it with no way to try
-    # anything, and no way to tell "no such title" from "every provider was
-    # down at this instant". `available: false` is what says none of it was
-    # verified -- the chain is addressable, not vetted.
+    # shape every resolver client reads -- now as frame handles: the client
+    # walks this list on its own per-candidate timer, so it needs *something*
+    # addressable, but the URL behind each entry is not its to hold. A raw
+    # https:// URL here would undo the whole point of the handle layer.
     providers = body.get("providers")
     assert isinstance(providers, list) and providers, (
         f"exhaustion advertised no candidates: {body!r}"
@@ -259,19 +274,26 @@ def test_get_stream_answers_404_only_after_every_provider_failed():
     assert all(entry["is_embed"] for entry in providers), (
         f"a planned embed candidate claimed to be a file: {providers!r}"
     )
+    assert all(
+        entry["url"].startswith("/api/v1/playback/frame?token=") for entry in providers
+    ), f"exhaustion leaked a raw provider URL: {providers!r}"
     assert [entry["name"] for entry in providers] == [
         provider.label for provider in app.stream_providers.EMBED_PROVIDERS
     ], f"exhaustion chain is out of priority order: {providers!r}"
 
 
-def test_get_stream_exhaustion_reports_what_each_provider_did():
+def test_init_exhaustion_reports_what_each_provider_did():
     # Without per-provider diagnostics the client's terminal state is an
     # unactionable "nothing worked", which is indistinguishable from a bug.
     app, client = _client()
     _exhaust_the_chain(app)
+    original = _stub_details(app, {"id": 603, "title": "The Matrix"})
     try:
-        body = _assert_json_error(client.get("/api/get-stream?tmdb_id=603"), 404)
+        body = _assert_json_error(
+            client.get("/api/v1/playback/init?tmdb_id=603"), 404
+        )
     finally:
+        app.tmdb.fetch_media_details = original
         _restore_chain(app)
 
     attempts = body.get("provider_attempts")
@@ -285,7 +307,7 @@ def test_get_stream_exhaustion_reports_what_each_provider_did():
     )
 
 
-def test_get_stream_never_reports_exhaustion_while_a_provider_is_working():
+def test_init_never_reports_exhaustion_while_a_provider_is_working():
     # The inverse, because exhaustion is terminal for the client: if a single
     # reachable provider is enough to answer, the retry budget is not spent and
     # the viewer sees a frame instead of an error card. A 503 would be even
@@ -294,18 +316,28 @@ def test_get_stream_never_reports_exhaustion_while_a_provider_is_working():
     app, client = _client()
     _exhaust_the_chain(app)
     app.stream_providers.probe_embed = lambda *a, **k: True
+    original = _stub_details(app, {"id": 603, "title": "The Matrix"})
     try:
-        res = client.get("/api/get-stream?tmdb_id=603")
+        res = client.get("/api/v1/playback/init?tmdb_id=603")
     finally:
+        app.tmdb.fetch_media_details = original
         _restore_chain(app)
 
     assert res.status_code == 200, f"a live provider still produced {res.status_code}"
     body = res.get_json()
+    assert body["success"] is True
     assert body["available"] is True
-    assert body["is_embed"] is True
-    assert body["provider"], "the serving provider was not named"
-    assert body["activeSource"], "no source url on a successful resolve"
-    assert body["sources"], "no failover chain on a successful resolve"
+    movie = body["movie"]
+    assert movie["is_embed"] is True
+    assert movie["format"] == "frame", f"an embed claimed a playable format: {movie!r}"
+    assert movie["stream_url"].startswith("/api/v1/playback/frame?token="), (
+        f"embed stream_url is not a frame handle: {movie['stream_url']!r}"
+    )
+    assert movie["providers"], "no failover chain on a successful resolve"
+    assert all(
+        entry["url"].startswith("/api/v1/playback/frame?token=")
+        for entry in movie["providers"]
+    ), f"a provider URL crossed the wire raw: {movie['providers']!r}"
     # The locale seed rides on the success payload too, so the player can build
     # its default audio/subtitle tracks without a second round trip.
     assert isinstance(body.get("language"), str) and body["language"], (
@@ -313,7 +345,7 @@ def test_get_stream_never_reports_exhaustion_while_a_provider_is_working():
     )
 
 
-def test_get_stream_prefers_a_direct_source_over_every_embed():
+def test_init_prefers_a_direct_source_over_every_embed():
     # Direct is a real file the native player can boot, with no third-party
     # frame in the path. It must win whenever the catalog has the title.
     app, client = _client()
@@ -323,54 +355,192 @@ def test_get_stream_prefers_a_direct_source_over_every_embed():
     app.stream_providers.probe_embed = lambda url, **k: probed.append(url) or True
     app._direct_source_for = lambda *a, **k: {
         "stream_url": "https://archive.org/download/x/master.mp4",
-        "streams": [{"url": "https://archive.org/download/x/720.mp4", "quality": "720p"}],
+        "streams": [
+            {"url": "https://archive.org/download/x/720.mp4", "quality": "720p"}
+        ],
     }
+    original = _stub_details(app, {"id": 603, "title": "The Matrix"})
     try:
-        res = client.get("/api/get-stream?tmdb_id=603")
+        res = client.get("/api/v1/playback/init?tmdb_id=603")
     finally:
+        app.tmdb.fetch_media_details = original
         _restore_chain(app)
 
     assert res.status_code == 200
     body = res.get_json()
-    assert body["is_embed"] is False
-    assert body["provider"] == "archive_direct"
-    assert body["activeSource"].endswith("master.mp4")
+    movie = body["movie"]
+    assert movie["is_embed"] is False
+    assert movie["provider"] == "archive_direct"
+    assert movie["format"] == "mp4"
+    assert movie["stream_url"].startswith("/api/v1/playback/media?token="), (
+        f"primary is not a media handle: {movie['stream_url']!r}"
+    )
+    assert movie["sources"], "no failover chain on a successful resolve"
+    assert all(url.startswith("/api/v1/playback/") for url in movie["sources"]), (
+        f"a source URL crossed the wire raw: {movie['sources']!r}"
+    )
     assert probed == [], f"embeds were probed despite a direct hit: {probed!r}"
 
 
-# --- /api/movies/resolve input validation -----------------------------------
+def test_init_relays_hls_behind_the_manifest_proxy():
+    # An `.m3u8` needs the manifest relay (its segments are rewritten as the
+    # playlist is served); pointing the player straight at the playlist would
+    # hand it a cross-origin URL that dies on CORS and the Referer check.
+    app, client = _client()
+    app.stream_providers.HEALTH.reset()
+    app.stream_providers.clear_probe_cache()
+    app.stream_providers.probe_embed = lambda *a, **k: False
+    app._direct_source_for = lambda *a, **k: {
+        "stream_url": "https://cdn.example.org/hls/master.m3u8",
+        "streams": [],
+    }
+    original = _stub_details(app, {"id": 603, "title": "The Matrix"})
+    try:
+        res = client.get("/api/v1/playback/init?tmdb_id=603")
+    finally:
+        app.tmdb.fetch_media_details = original
+        _restore_chain(app)
 
-def test_resolve_rejects_non_object_json_body():
+    assert res.status_code == 200
+    movie = res.get_json()["movie"]
+    assert movie["format"] == "hls"
+    assert movie["stream_url"].startswith("/api/proxy/manifest?token="), (
+        f"an HLS primary bypassed the relay: {movie['stream_url']!r}"
+    )
+
+
+# --- /api/movies/resolve is a compat alias for playback/init ----------------
+#
+# The web client still POSTs the pre-v1 contract from three places (stream
+# resolver, Watch metadata fetch, details warm resolve). The route is kept as
+# a thin alias so those callers stop 404ing; these tests pin that the alias
+# inherits the tokenised-legs contract rather than resurrecting the old
+# raw-URL behaviour the hard cut removed.
+
+
+def test_resolve_alias_serves_the_pre_v1_contract():
+    # Success through the alias must carry the fields the client's
+    # `isResolvePayload` reads (`movie`, `exact`, `language`) and only ever
+    # tokenised legs -- the reason the old route was safe to re-expose.
+    app, client = _client()
+    app.stream_providers.HEALTH.reset()
+    app.stream_providers.clear_probe_cache()
+    app.stream_providers.probe_embed = lambda *a, **k: True
+    app._direct_source_for = lambda *a, **k: None
+    original = _stub_details(app, {"id": 603, "title": "The Matrix"})
+    try:
+        res = client.post("/api/movies/resolve", json={"id": "603"})
+    finally:
+        app.tmdb.fetch_media_details = original
+        _restore_chain(app)
+
+    assert res.status_code == 200, f"alias failed: {res.status_code} {res.data[:200]!r}"
+    body = res.get_json()
+    assert body["exact"] is True
+    assert isinstance(body.get("language"), str) and body["language"]
+    movie = body["movie"]
+    assert movie["id"] == "603"
+    assert movie["stream_url"].startswith("/api/v1/playback/frame?token="), (
+        f"alias leaked a raw stream URL: {movie['stream_url']!r}"
+    )
+    assert movie["providers"], "alias dropped the failover chain"
+    assert all(
+        entry["url"].startswith("/api/v1/playback/frame?token=")
+        for entry in movie["providers"]
+    ), f"alias leaked a raw provider URL: {movie['providers']!r}"
+
+
+def test_resolve_alias_keeps_the_exhaustion_contract():
+    # 404-with-a-code is the client's terminal-state signal; the alias must
+    # not answer exhaustion with a bare 200 or an un-coded error.
+    app, client = _client()
+    _exhaust_the_chain(app)
+    original = _stub_details(app, {"id": 603, "title": "The Matrix"})
+    try:
+        body = _assert_json_error(
+            client.post("/api/movies/resolve", json={"id": "603"}), 404
+        )
+    finally:
+        app.tmdb.fetch_media_details = original
+        _restore_chain(app)
+
+    assert body.get("code") == "PROVIDERS_EXHAUSTED", f"alias lost the code: {body!r}"
+
+
+def test_resolve_alias_shares_init_input_validation():
+    # The alias goes through the same validator, so the pre-v1 path's old
+    # injection holes (path-traversal ids, oversized ids) stay closed.
+    _, client = _client()
+    _assert_json_error(client.get("/api/movies/resolve?id=not-a-number"), 400)
+    _assert_json_error(
+        client.get("/api/movies/resolve?id=" + "9" * 40), 400
+    )
+    _assert_json_error(client.get("/api/movies/resolve"), 400)
+
+
+# --- /api/v1/playback/init body validation -----------------------------------
+
+
+def test_init_rejects_non_object_json_body():
     # `silent=True` suppresses only *parse* failures. A valid body that is not
     # an object stays truthy, and .get() on it raised -> 500.
     _, client = _client()
     for raw in ('"x"', "[1,2]", "5", "true", "null"):
-        res = client.post("/api/movies/resolve", data=raw, content_type="application/json")
-        if raw == "null":
-            # `or {}` turns JSON null into {} -> treated as an empty request and
-            # falls through to the "missing title" 400. Still a 400, still JSON.
-            _assert_json_error(res, 400)
-        else:
-            _assert_json_error(res, 400)
+        res = client.post("/api/v1/playback/init", data=raw, content_type="application/json")
+        # "null" parses to None, which is indistinguishable from a body we
+        # refused to parse -- both are a 400, both JSON, never a fallthrough
+        # that treats a null body as an empty request.
+        _assert_json_error(res, 400)
 
 
-def test_resolve_rejects_unparseable_body_as_json_400():
+def test_init_rejects_unparseable_body_as_json_400():
     _, client = _client()
     res = client.post(
-        "/api/movies/resolve", data="{not json", content_type="application/json"
+        "/api/v1/playback/init", data="{not json", content_type="application/json"
     )
     _assert_json_error(res, 400)
 
 
-def test_resolve_rejects_missing_identifier_as_json_400():
+def test_init_rejects_missing_identifier_as_json_400():
     # No title and no id: the request never named anything, so 400. It used to
     # answer 404 "Could not find metadata for ''".
     _, client = _client()
-    body = _assert_json_error(client.post("/api/movies/resolve", json={}), 400)
+    body = _assert_json_error(client.post("/api/v1/playback/init", json={}), 400)
     assert "title" in body["error"].lower()
 
 
-# --- strict title matching in /api/movies/resolve ----------------------------
+def test_init_rejects_wrong_content_type_and_bad_scalars():
+    # Every field has one type and the answer names it, so the client never
+    # has to guess which of five fields was wrong from a generic message.
+    _, client = _client()
+    body = _assert_json_error(
+        client.post(
+            "/api/v1/playback/init", data="title=X", content_type="text/plain"
+        ),
+        400,
+    )
+    assert "json" in body["error"].lower()
+    _assert_json_error(
+        client.post("/api/v1/playback/init", json={"title": "X", "season": "abc"}), 400
+    )
+    _assert_json_error(
+        client.post("/api/v1/playback/init", json={"title": "X", "media_type": "game"}),
+        400,
+    )
+    _assert_json_error(
+        client.post("/api/v1/playback/init", json={"title": "X", "year": "1200"}),
+        400,
+    )
+    _assert_json_error(
+        client.post("/api/v1/playback/init", json={"title": "X", "refresh": "maybe"}),
+        400,
+    )
+    _assert_json_error(
+        client.post("/api/v1/playback/init", json={"title": "x" * 301}), 400
+    )
+
+
+# --- strict title matching in /api/v1/playback/init ---------------------------
 
 
 def _search_returns(application, results):
@@ -380,7 +550,7 @@ def _search_returns(application, results):
     return original
 
 
-def test_resolve_does_not_answer_with_the_top_search_hit():
+def test_init_does_not_answer_with_the_top_search_hit():
     # The defect this whole section exists for: a title TMDB does not carry used
     # to resolve to `valid_results[0]`, whatever that happened to be. The viewer
     # searched for one film and got another, correctly labelled, with nothing on
@@ -396,10 +566,7 @@ def test_resolve_does_not_answer_with_the_top_search_hit():
         ],
     )
     try:
-        res = client.post(
-            "/api/movies/resolve",
-            json={"title": "No Greater Love", "year": 1920},
-        )
+        res = client.get("/api/v1/playback/init?title=No%20Greater%20Love&year=1920")
     finally:
         app.tmdb.search_multi = original
 
@@ -411,7 +578,7 @@ def test_resolve_does_not_answer_with_the_top_search_hit():
         )
 
 
-def test_resolve_rejects_an_id_that_answers_with_a_different_title():
+def test_init_rejects_an_id_that_answers_with_a_different_title():
     # TMDB redirects some lookups onto a merged or replaced entry. The id the
     # request named is the request; an id that comes back different is a second
     # title, and playing it is the same defect as taking position zero.
@@ -419,7 +586,7 @@ def test_resolve_rejects_an_id_that_answers_with_a_different_title():
     original = app.tmdb.fetch_media_details
     app.tmdb.fetch_media_details = lambda *a, **k: {"id": 4242, "title": "Not It"}
     try:
-        res = client.post("/api/movies/resolve", json={"id": 603, "title": "It"})
+        res = client.post("/api/v1/playback/init", json={"id": 603, "title": "It"})
     finally:
         app.tmdb.fetch_media_details = original
 
