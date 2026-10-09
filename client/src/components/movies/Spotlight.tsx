@@ -11,12 +11,14 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
 import type { Movie } from "./types";
+import { RemindMeButton } from "./RemindMeButton";
 import { formatRuntime } from "@/lib/format";
 import { tmdbImage } from "@/lib/tmdbImages";
 import { absoluteUrl } from "@/lib/siteUrl";
 import { resolveTrailer } from "@/lib/tmdbTrailers";
 import { useTrailerPlayback } from "@/hooks/useTrailerPlayback";
 import { fetchTrailerByTmdbId, type TrailerInfo } from "@/services/api";
+import { isUpcoming, releaseCountdownLabel } from "@/services/notifications";
 
 export interface SpotlightProps {
   items: readonly Movie[];
@@ -82,9 +84,11 @@ const BADGE =
 /**
  * The featured hero, as a bounded card rather than a full-bleed wash.
  *
- * Bounding it (`max-w-7xl`, `rounded-2xl`, a hairline and a drop shadow) is what
+ * Bounding it (`max-w-7xl`, `rounded-3xl`, a hairline and a drop shadow) is what
  * makes the artwork read as a poster rather than as wallpaper: the image has an
  * edge, and an edge is what tells the eye this is an object it can look *at*.
+ * Height is capped at 660px per the home artboard, so a tall monitor does not
+ * turn the first shelf below the fold into a rumour.
  *
  * The old version dimmed the backdrop to `opacity-60` and then laid two heavy
  * scrims over it, which compounded -- the artwork the visitor came to see was
@@ -202,6 +206,10 @@ export function Spotlight({
   }, [current]);
 
   const rating = formatRating(current?.vote_average ?? current?.score);
+  const upcoming = isUpcoming(current?.releaseDate);
+  const countdownLabel = current?.releaseDate
+    ? releaseCountdownLabel(current.releaseDate)
+    : "";
 
   const step = useCallback(
     (delta: number) => setIndex(i => (i + delta + count) % count),
@@ -269,8 +277,8 @@ export function Spotlight({
       <div
         className={
           // `group` so the edge arrows can reveal themselves on card hover.
-          "group relative isolate h-[80vh] min-h-[600px] w-full overflow-hidden " +
-          "rounded-2xl border border-white/10 bg-neutral-900 shadow-2xl"
+          "group relative isolate h-[min(660px,72vh)] min-h-[540px] w-full overflow-hidden " +
+          "rounded-3xl border border-white/[0.07] bg-neutral-900 shadow-2xl"
         }
       >
         {/* Artwork, at full strength. A slow settle gives the crossfade
@@ -293,7 +301,7 @@ export function Spotlight({
                     aria-hidden
                     loading="eager"
                     fetchPriority="high"
-                    className="h-full w-full object-cover object-center"
+                    className="hero-drift h-full w-full object-cover object-center"
                   />
                 ) : (
                   <div
@@ -331,6 +339,12 @@ export function Spotlight({
         <div
           aria-hidden
           className="absolute inset-0 bg-[radial-gradient(ellipse_55%_45%_at_88%_18%,rgba(139,92,246,0.16),transparent_68%)]"
+        />
+        {/* Grain, per the artboard: kills gradient banding on wide displays
+            without touching the artwork's own contrast. */}
+        <div
+          aria-hidden
+          className="hero-grain pointer-events-none absolute inset-0 z-[1]"
         />
 
         {/* The trailer frame, once the viewer has asked for it.
@@ -465,11 +479,11 @@ export function Spotlight({
                   </div>
 
                   {/* Hidden rather than truncated on the shortest screens: three
-                      clamped lines at 375px is a paragraph of fragments. Two lines,
-                      not three, so the block ends on a full sentence instead of
-                      stopping mid-word partway down a third line. */}
+                      clamped lines at 375px is a paragraph of fragments. Three
+                      lines at sm and up, where the card has the width to hold
+                      them. */}
                   {current.synopsis ? (
-                    <p className="hidden max-w-lg text-sm leading-relaxed text-white/80 sm:line-clamp-2 sm:block">
+                    <p className="hidden max-w-lg text-sm leading-relaxed text-neutral-300 sm:line-clamp-3 sm:block">
                       {current.synopsis}
                     </p>
                   ) : null}
@@ -478,50 +492,66 @@ export function Spotlight({
                       it is a second-tier intent, and it used to sit between Play
                       and Share at the same weight, which made the row read as
                       three peers rather than one primary action and two
-                      affordances. It is still one tap away inside More Info. */}
-                  <div className="flex flex-wrap items-center gap-2.5 pt-1 sm:gap-3">
-                    <button
-                      type="button"
-                      onClick={() => handlePlay(current)}
-                      className={
-                        "inline-flex min-h-11 items-center gap-2 rounded-lg bg-white px-6 " +
-                        "text-sm font-bold text-neutral-900 transition " +
-                        "hover:bg-white/85 focus-visible:outline focus-visible:outline-2 " +
-                        "focus-visible:outline-offset-2 focus-visible:outline-white"
-                      }
-                    >
-                      <Play className="h-4 w-4 fill-current" aria-hidden />
-                      Play
-                    </button>
+                      affordances. It is still one tap away inside More Info.
 
-                    <button
-                      type="button"
-                      onClick={() => onMoreInfo?.(current)}
-                      className={
-                        "inline-flex min-h-11 items-center gap-2 rounded-lg px-5 " +
-                        "text-sm font-semibold text-white backdrop-blur-md transition " +
-                        "bg-white/15 hover:bg-white/25 focus-visible:outline " +
-                        "focus-visible:outline-2 focus-visible:outline-offset-2 " +
-                        "focus-visible:outline-white/70"
-                      }
-                    >
-                      <Info className="h-4 w-4" aria-hidden />
-                      More Info
-                    </button>
+                      A title that has not come out yet has no play: the white
+                      pill becomes the artboard's notify button and the countdown
+                      sits above it, where Play's click-to-trailer surface still
+                      works because a teaser is usually already online. */}
+                  <div className="space-y-3 pt-1">
+                    {upcoming && countdownLabel ? (
+                      <div className="text-xs font-medium uppercase tracking-[0.2em] text-[#aab3c7]">
+                        {countdownLabel}
+                      </div>
+                    ) : null}
+                    <div className="flex flex-wrap items-center gap-2.5 sm:gap-3">
+                      {upcoming ? (
+                        <RemindMeButton movie={current} />
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handlePlay(current)}
+                          className={
+                            "inline-flex min-h-11 items-center gap-2 rounded-xl bg-white px-8 " +
+                            "text-sm font-bold text-black transition " +
+                            "hover:bg-neutral-200 focus-visible:outline focus-visible:outline-2 " +
+                            "focus-visible:outline-offset-2 focus-visible:outline-white"
+                          }
+                        >
+                          <Play className="h-4 w-4 fill-current" aria-hidden />
+                          Play
+                        </button>
+                      )}
 
-                    <button
-                      type="button"
-                      onClick={() => void handleShare(current)}
-                      aria-label={`Share ${current.title}`}
-                      className={
-                        "grid h-11 w-11 shrink-0 place-items-center rounded-full text-white " +
-                        "backdrop-blur-md transition bg-white/15 hover:bg-white/25 " +
-                        "focus-visible:outline focus-visible:outline-2 " +
-                        "focus-visible:outline-offset-2 focus-visible:outline-white/70"
-                      }
-                    >
-                      <Link2 className="h-4 w-4" aria-hidden />
-                    </button>
+                      <button
+                        type="button"
+                        onClick={() => onMoreInfo?.(current)}
+                        className={
+                          "inline-flex min-h-11 items-center gap-2 rounded-xl px-5 " +
+                          "text-sm font-semibold text-white backdrop-blur-md transition " +
+                          "border border-white/15 bg-white/10 hover:bg-white/20 " +
+                          "focus-visible:outline focus-visible:outline-2 " +
+                          "focus-visible:outline-offset-2 focus-visible:outline-white/70"
+                        }
+                      >
+                        <Info className="h-4 w-4" aria-hidden />
+                        More Info
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => void handleShare(current)}
+                        aria-label={`Share ${current.title}`}
+                        className={
+                          "grid h-11 w-11 shrink-0 place-items-center rounded-full text-white " +
+                          "backdrop-blur-md transition border border-white/15 bg-white/10 hover:bg-white/20 " +
+                          "focus-visible:outline focus-visible:outline-2 " +
+                          "focus-visible:outline-offset-2 focus-visible:outline-white/70"
+                        }
+                      >
+                        <Link2 className="h-4 w-4" aria-hidden />
+                      </button>
+                    </div>
                   </div>
                 </motion.div>
               ) : null}
@@ -550,10 +580,10 @@ export function Spotlight({
               aria-label="Previous featured title"
               onClick={() => step(-1)}
               className={
-                "group absolute left-2 top-1/2 z-20 grid h-11 w-11 -translate-y-1/2 " +
-                "place-items-center rounded-full text-white transition " +
-                "bg-black/40 backdrop-blur-md hover:bg-black/65 focus-visible:outline " +
-                "focus-visible:outline-2 focus-visible:outline-offset-2 " +
+                "group absolute left-2 top-1/2 z-20 grid h-12 w-12 -translate-y-1/2 " +
+                "place-items-center rounded-full border border-white/15 text-white " +
+                "transition bg-[rgba(7,9,15,0.35)] backdrop-blur-md hover:bg-[rgba(7,9,15,0.6)] " +
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 " +
                 "focus-visible:outline-white/80 " +
                 "opacity-0 focus-visible:opacity-100 group-hover:opacity-100 " +
                 "max-[1023px]:opacity-100 sm:left-4"
@@ -567,10 +597,10 @@ export function Spotlight({
               aria-label="Next featured title"
               onClick={() => step(1)}
               className={
-                "group absolute right-2 top-1/2 z-20 grid h-11 w-11 -translate-y-1/2 " +
-                "place-items-center rounded-full text-white transition " +
-                "bg-black/40 backdrop-blur-md hover:bg-black/65 focus-visible:outline " +
-                "focus-visible:outline-2 focus-visible:outline-offset-2 " +
+                "group absolute right-2 top-1/2 z-20 grid h-12 w-12 -translate-y-1/2 " +
+                "place-items-center rounded-full border border-white/15 text-white " +
+                "transition bg-[rgba(7,9,15,0.35)] backdrop-blur-md hover:bg-[rgba(7,9,15,0.6)] " +
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 " +
                 "focus-visible:outline-white/80 " +
                 "opacity-0 focus-visible:opacity-100 group-hover:opacity-100 " +
                 "max-[1023px]:opacity-100 sm:right-4"
