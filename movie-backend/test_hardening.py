@@ -719,38 +719,73 @@ def test_relay_allowlist_survives_redirects():
 
 
 def test_relay_route_rejects_a_hostile_url_without_fetching_it():
-    """The 400 has to come from validation, before any socket is opened."""
+    """The 400/403 has to come from validation, before any socket is opened.
+
+    The relay legs no longer take a URL from the caller at all -- they take a
+    handle -- so the hostile-URL class of attack now has to defeat a handle
+    first. Each leg still re-validates what its handle names (the archive
+    allowlist, the proxy host set) rather than trusting that minting was
+    validation, and this proves the refusal happens above the network layer."""
     _store, client = _fresh_client()
     import app as application
+    import playback_tokens
 
     # The opener is what actually opens a socket, so exploding it proves the
     # request never got that far -- stubbing `open_archive_stream` itself would
     # replace the validation along with the network call and prove nothing.
     original = application.catalog_lib._archive_opener
+    original_get = application.requests.get
 
     def _explode(*_args, **_kwargs):
         raise AssertionError("a rejected URL reached the network layer")
 
     application.catalog_lib._archive_opener = _explode
+    application.requests.get = _explode
     try:
         for hostile in (
             "http://127.0.0.1:5000/api/auth/me",
             "http://169.254.169.254/latest/meta-data/",
             "https://archive.org/metadata/x",
         ):
-            res = client.get("/api/movies/stream", query_string={"url": hostile})
+            media = playback_tokens.issue(playback_tokens.KIND_MEDIA, hostile)
+            res = client.get("/api/v1/playback/media", query_string={"token": media})
             assert res.status_code == 400, (hostile, res.status_code, res.get_json())
+
+            download = playback_tokens.issue(playback_tokens.KIND_DOWNLOAD, hostile)
+            res = client.get(
+                "/api/v1/playback/download", query_string={"token": download}
+            )
+            assert res.status_code == 400, (hostile, res.status_code, res.get_json())
+
+        # The proxy leg refuses by host set: a `u` that names a host the
+        # playlist never referenced is 403 before `requests.get` is reached,
+        # even though the handle itself is valid.
+        proxy = playback_tokens.issue(
+            playback_tokens.KIND_PROXY,
+            "https://archive.org/download/x/master.m3u8",
+        )
+        res = client.get(
+            "/api/proxy/segment",
+            query_string={"token": proxy, "u": "http://169.254.169.254/latest/"},
+        )
+        assert res.status_code == 403, (res.status_code, res.get_json())
     finally:
         application.catalog_lib._archive_opener = original
+        application.requests.get = original_get
 
 
 def test_relay_is_not_readable_from_an_arbitrary_origin():
-    """The route used to set `Access-Control-Allow-Origin: *`, which contradicted
-    the allow-list policy every other route follows and made the relay usable
-    from any site on the internet -- including through a victim's browser.
+    """The relay legs answer the CORS allowlist and nobody else.
+
+    They used to set `Access-Control-Allow-Origin: *`, which contradicted the
+    allow-list policy every other route follows and made the relay usable from
+    any site on the internet -- including through a victim's browser. CORS now
+    comes only from the shared hook: an allowlisted origin gets itself back,
+    a hostile one gets no header at all, which is the browser saying no.
     """
     _store, client = _fresh_client()
     import app as application
+    import playback_tokens
 
     original = application.catalog_lib.open_archive_stream
 
@@ -761,10 +796,11 @@ def test_relay_is_not_readable_from_an_arbitrary_origin():
     application.catalog_lib.open_archive_stream = _stub
     try:
         url = "https://archive.org/download/public-domain-film/movie.mp4"
+        token = playback_tokens.issue(playback_tokens.KIND_MEDIA, url)
 
         hostile = client.get(
-            "/api/movies/stream",
-            query_string={"url": url},
+            "/api/v1/playback/media",
+            query_string={"token": token},
             headers={"Origin": "https://evil.example"},
         )
         assert hostile.status_code == 200
@@ -774,8 +810,8 @@ def test_relay_is_not_readable_from_an_arbitrary_origin():
         # the media element and hls.js send the site's origin.
         for allowed in ("https://streamvy.me", "https://www.streamvy.me"):
             ok = client.get(
-                "/api/movies/stream",
-                query_string={"url": url},
+                "/api/v1/playback/media",
+                query_string={"token": token},
                 headers={"Origin": allowed},
             )
             assert ok.status_code == 200, (allowed, ok.status_code)
