@@ -1,33 +1,17 @@
-import { useCallback, useEffect, useRef, useState, useMemo } from "react";
-import { useLocation, useParams } from "wouter";
 import {
-  Bookmark,
-  Check,
-  ChevronDown,
-  ChevronUp,
-  Star,
-  X,
-  MessageSquare,
-  Clock,
-  Tv,
-  Film,
-  WifiOff,
-  Zap,
-  Wifi,
-  Settings,
-  ChevronDown as ChevronDownIcon,
-  ArrowLeft,
-  Share2,
-  Heart,
-  Plus,
-  User,
-  MapPin,
-  Globe,
-  Calendar,
-} from "lucide-react";
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useMemo,
+  type CSSProperties,
+} from "react";
+import { useLocation, useParams } from "wouter";
+import { Check, Star, ArrowLeft, Play, Share2, Plus } from "lucide-react";
 import { getRating, setRating, subscribeRatings } from "@/services/ratings";
 import {
   apiUrl,
+  fetchDiscover,
   fetchTrailer,
   getStreamSource,
   MOVIE_RESOLVE_TIMEOUT_MS,
@@ -36,6 +20,7 @@ import {
   StreamNotFoundError,
   StreamExhaustedError,
   StreamTimeoutError,
+  type CatalogItem,
   type ResolvedStream,
   type StreamMovie,
   type TrailerInfo,
@@ -79,10 +64,9 @@ import {
   DEFAULT_PREFERRED_LANGUAGE,
   useAppSettings,
 } from "@/contexts/AppSettingsContext";
-import { TrailerEmbed } from "@/components/movies/MediaCard";
-import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { ReleaseCountdown } from "@/components/watch/ReleaseCountdown";
+import { resolveTrailer, trailerThumbnail } from "@/lib/tmdbTrailers";
+import { formatReleaseDate, isUpcoming } from "@/services/notifications";
 import { isExternalEmbedUrl, orderDirectStreams } from "@/lib/streamUtils";
 import { chainFromBackend, resolveEmbedSources } from "@/lib/embedSources";
 import { tmdbImage, type TmdbImageSize } from "@/lib/tmdbImages";
@@ -140,10 +124,28 @@ const MAX_AUTO_RETRY_WINDOW_MS = 2 * 60 * 1000;
  * first one was.
  */
 const PLAYER_FRAME_CLASS =
-  "relative w-full max-w-6xl mx-auto aspect-video rounded-2xl overflow-hidden bg-black shadow-[0_20px_80px_rgba(0,0,0,0.8)] border border-white/10 group";
+  "relative w-full mx-auto aspect-video min-h-[300px] rounded-[18px] overflow-hidden border border-white/10 group";
 
 const PLAYER_GLOW_CLASS =
-  "absolute -inset-4 bg-gradient-to-r from-purple-600/30 via-pink-600/20 to-amber-500/30 rounded-3xl blur-3xl opacity-60 -z-10 pointer-events-none transition-all duration-700";
+  "absolute -inset-x-2 -top-7 -bottom-3 rounded-[24px] blur-[50px] opacity-70 -z-10 pointer-events-none transition-all duration-700";
+
+/** Streamvy hero: a warm pool of light behind a near-black player frame. */
+const HERO_GLOW_STYLE: CSSProperties = {
+  background:
+    "radial-gradient(60% 70% at 30% 40%, #4a3320 0%, transparent 70%), radial-gradient(50% 60% at 80% 60%, #2b1d4a 0%, transparent 70%)",
+};
+
+const HERO_FRAME_STYLE: CSSProperties = {
+  background:
+    "radial-gradient(520px 320px at 50% 25%, #3a2c1a 0%, #14100a 55%, #05060a 100%)",
+};
+
+/** Ghost action pill from the watch mockup: hairline border, no fill. */
+const WATCH_GHOST_BUTTON =
+  "inline-flex h-[42px] items-center gap-2 rounded-[10px] border border-white/14 bg-transparent px-4 text-sm text-[#f1f3f8] transition hover:bg-white/[0.08] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400";
+
+const WATCH_GHOST_ICON_BUTTON =
+  "grid h-[42px] w-[42px] place-items-center rounded-[10px] border border-white/14 bg-transparent text-[#f1f3f8] transition hover:bg-white/[0.08] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400";
 
 function classifyError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -292,8 +294,11 @@ function isWorthRetrying(status: number): boolean {
 /** How long to wait before the one retry. */
 const RETRY_DELAY_MS = 1200;
 
-// Fetch full movie details from TMDB via backend resolve endpoint
-async function fetchMovieDetails(tmdbId: string): Promise<Movie | null> {
+// Fetch full movie details from TMDB via backend resolve endpoint. Exported
+// for Home, which opens the same details sheet on a search-suggest pick --
+// that pick only carries a title and a poster, so the sheet is upgraded with
+// the full record once this lands.
+export async function fetchMovieDetails(tmdbId: string): Promise<Movie | null> {
   // Bounded and abortable. This pointed at the resolve endpoint, which can
   // scrape Archive.org for minutes server-side, and `fetch` has no default
   // timeout -- so a slow resolve pinned the page on its skeleton with no error
@@ -765,6 +770,10 @@ export function WatchPage() {
   const opened = useRef(false);
   useEffect(() => {
     if (opened.current || !movie) return;
+    // A title that has not come out yet has nothing to resolve: the hero shows
+    // its release countdown, so reaching for a stream would only wake providers
+    // for a file that does not exist and paint a failure over the poster.
+    if (isUpcoming(movie.releaseDate)) return;
     opened.current = true;
     let disposed = false;
 
@@ -939,10 +948,10 @@ export function WatchPage() {
         ? `${movie.title} — S${season} E${episode}`
         : movie?.title || "Loading...";
 
-  const DEFAULT_TAB_TITLE = "Lenium";
+  const DEFAULT_TAB_TITLE = "Stream Vy";
   useEffect(() => {
     document.title = movie?.title
-      ? `${movie.title} — Lenium`
+      ? `${movie.title} — Stream Vy`
       : DEFAULT_TAB_TITLE;
     return () => {
       document.title = DEFAULT_TAB_TITLE;
@@ -1479,6 +1488,90 @@ export function WatchPage() {
     return chosen ?? detectedLanguage;
   }, [settings, detectedLanguage]);
 
+  /* ------------------------------------------------------------------ *
+   * Streamvy watch-page presentation state.
+   *
+   * Everything below is UI-only: it picks which of the two hero states to
+   * paint (a live player, or a release countdown for a title that is not out),
+   * which sidebar tab is open, and what populates the "More like this" shelf.
+   * None of it touches resolve, progress or playback, which stay above.
+   * ------------------------------------------------------------------ */
+
+  // A title is "upcoming" while its release day is still ahead of us.
+  const upcoming = isUpcoming(movie?.releaseDate);
+
+  const [asideTab, setAsideTab] = useState<"episodes" | "trailers" | "more">(
+    "trailers"
+  );
+  const [playingTrailer, setPlayingTrailer] = useState(false);
+
+  // Series open on their episode list; films on their trailer.
+  useEffect(() => {
+    setAsideTab(movie?.mediaType === "tv" ? "episodes" : "trailers");
+    setPlayingTrailer(false);
+  }, [movie?.id]);
+
+  const resolvedTrailer = useMemo(
+    () => resolveTrailer(trailer, { controls: true }),
+    [trailer]
+  );
+  const trailerThumb = useMemo(() => trailerThumbnail(trailer), [trailer]);
+
+  // "More like this": one discover request per genre the title carries (capped
+  // at three), merged, deduped and ranked by how many of those genres each
+  // candidate shares. A single-genre shelf was dominated by whatever else sits
+  // in that genre -- two shared tags outrank one, and popularity only breaks
+  // ties. Best-effort: a shelf that cannot be filled is simply absent rather
+  // than an error.
+  const [similar, setSimilar] = useState<CatalogItem[]>([]);
+  const genreKey = movie?.genre?.join(",") ?? "";
+  useEffect(() => {
+    if (!movie) return;
+    const seedGenres = (movie.genre ?? []).slice(0, 3);
+    if (seedGenres.length === 0) {
+      setSimilar([]);
+      return;
+    }
+    let active = true;
+    const seed = new Set(seedGenres.map(g => g.toLowerCase()));
+    Promise.allSettled(
+      seedGenres.map(genre =>
+        fetchDiscover({
+          media_type: isSeries ? "tv" : "movie",
+          genre,
+          per_page: 12,
+        })
+      )
+    ).then(results => {
+      if (!active) return;
+      const currentKey = String(movie.providerId ?? movie.id);
+      const seen = new Set<string>();
+      const merged: CatalogItem[] = [];
+      for (const result of results) {
+        if (result.status !== "fulfilled") continue;
+        for (const item of result.value.items) {
+          const key = String(item.tmdb_id ?? item.id);
+          if (key === currentKey || seen.has(key)) continue;
+          seen.add(key);
+          merged.push(item);
+        }
+      }
+      const overlap = (item: CatalogItem) =>
+        (item.genres ?? []).reduce(
+          (count, g) => (seed.has(g.toLowerCase()) ? count + 1 : count),
+          0
+        );
+      merged.sort(
+        (a, b) =>
+          overlap(b) - overlap(a) || (b.popularity ?? 0) - (a.popularity ?? 0)
+      );
+      setSimilar(merged.slice(0, 8));
+    });
+    return () => {
+      active = false;
+    };
+  }, [movie?.id, movie?.providerId, isSeries, genreKey]);
+
   // Metadata is still arriving. The player frame is drawn now rather than after
   // it lands, so the surface the viewer is waiting on is the surface that will
   // play: every later wait -- stream resolution, candidate failover -- paints
@@ -1486,19 +1579,21 @@ export function WatchPage() {
   // hand reads as a second, unrelated wait arriving out of nowhere.
   //
   // Nothing else can render yet: the sidebar, the season controls and every
-  // action button read `movie`. The right column is simply absent, which the
-  // grid handles as an empty track.
+  // action button read `movie`. The sidebar column is simply absent, which the
+  // flex layout handles by giving the frame the full row.
   if (movieLoading) {
     return (
       /* The shell owns the background colour; see the note in `Home`. */
       <div className="min-h-screen text-white">
         <main className="pt-16 pb-12 px-4 sm:px-6 lg:px-8">
-          <div className="mx-auto max-w-[1400px]">
-            <div className="grid lg:grid-cols-[2fr_1fr] gap-6">
-              <div className="relative">
-                <div aria-hidden className={PLAYER_GLOW_CLASS} />
-                <div className={PLAYER_FRAME_CLASS}>
-                  <StreamLoader />
+          <div className="mx-auto max-w-[1560px]">
+            <div className="flex flex-wrap items-start gap-10">
+              <div className="min-w-0 flex-1 basis-[640px]">
+                <div className="relative">
+                  <div aria-hidden className={PLAYER_GLOW_CLASS} />
+                  <div className={PLAYER_FRAME_CLASS}>
+                    <StreamLoader />
+                  </div>
                 </div>
               </div>
             </div>
@@ -1533,31 +1628,112 @@ export function WatchPage() {
       ? getImageUrl(movie.poster, "w780")
       : "";
 
+  /*
+   * The details grid under the frame, per the watch artboard: films carry
+   * Director / Cast / Country / Language, series swap in Creator and First
+   * aired. Pairs with no value are dropped rather than rendered empty -- a
+   * label with nothing under it is a hole, not a field.
+   */
+  const castLine = movie.cast.length ? movie.cast.slice(0, 3).join(", ") : "";
+  const detailPairs: { label: string; value: string }[] = (
+    movie.mediaType === "tv"
+      ? [
+          { label: "Creator", value: movie.director ?? "" },
+          { label: "Cast", value: castLine },
+          { label: "Language", value: movie.language ?? "" },
+          {
+            label: "First aired",
+            value: movie.releaseDate
+              ? formatReleaseDate(movie.releaseDate)
+              : "",
+          },
+        ]
+      : [
+          { label: "Director", value: movie.director ?? "" },
+          { label: "Cast", value: castLine },
+          { label: "Country", value: movie.country ?? "" },
+          { label: "Language", value: movie.language ?? "" },
+        ]
+  ).filter(pair => pair.value);
+
+  const asideTabs = [
+    ...(movie.mediaType === "tv"
+      ? [{ id: "episodes" as const, label: "Episodes" }]
+      : []),
+    { id: "trailers" as const, label: "Trailers" },
+    { id: "more" as const, label: "More like this" },
+  ];
+  // A film has no episode list; if the tab state says otherwise after a
+  // movie/series swap, fall back to trailers rather than an empty panel.
+  const activeTab =
+    movie.mediaType !== "tv" && asideTab === "episodes" ? "trailers" : asideTab;
+
+  const metaLine = [
+    movie.year,
+    movie.runtime != null ? formatRuntime(movie.runtime) : null,
+    movie.genre.slice(0, 3).join(" / "),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
   return (
     <div className="min-h-screen text-white">
       <main className="pt-16 pb-12 px-4 sm:px-6 lg:px-8">
-        <div className="mx-auto max-w-[1400px]">
-          {/* Split Layout: Player (2/3) | Sidebar (1/3) */}
-          <div className="grid lg:grid-cols-[2fr_1fr] gap-6">
-            {/* LEFT PANEL: Video Player - Theater Mode */}
-            <div className="relative">
-              {/* Ambient Canvas Glow Effect - Netflix-style backdrop glow behind player */}
-              <div aria-hidden className={PLAYER_GLOW_CLASS} />
-              <div className={PLAYER_FRAME_CLASS}>
-                {resolved && (
-                  <>
-                    {/* Top-left overlay: Back button */}
-                    <div className="absolute top-4 left-4 z-20">
-                      <button
-                        onClick={handleBackToDetails}
-                        aria-label="Back to details"
-                        className="flex items-center justify-center w-10 h-10 rounded-full bg-black/60 hover:bg-white/10 border border-white/10 backdrop-blur-md text-white transition-colors"
-                      >
-                        <ArrowLeft className="h-5 w-5" />
-                      </button>
-                    </div>
+        <div className="mx-auto max-w-[1560px]">
+          {/* Split layout per the watch artboard: player column (title block
+              underneath) and a tabbed sidebar, side by side. */}
+          <div className="flex flex-wrap items-start gap-10">
+            {/* LEFT: player frame, then the title block below it */}
+            <div className="min-w-0 flex-1 basis-[640px]">
+              <div className="relative">
+                <div aria-hidden className={PLAYER_GLOW_CLASS} />
+                <div className={PLAYER_FRAME_CLASS}>
+                  {/* Top-left overlay: Back button — present for every frame state */}
+                  <div className="absolute top-[18px] left-[18px] z-20">
+                    <button
+                      onClick={handleBackToDetails}
+                      aria-label="Back"
+                      className="grid h-10 w-10 place-items-center rounded-full border border-white/[0.18] bg-[rgba(8,11,20,0.4)] text-[#f1f3f8] backdrop-blur-md transition hover:bg-white/10"
+                    >
+                      <ArrowLeft className="h-[18px] w-[18px]" />
+                    </button>
+                  </div>
 
-                    {/*
+                  {upcoming && !resolved ? (
+                    <>
+                      {/* The artboard's unreleased state: the timer takes the
+                          player's place inside the same warm frame, so the
+                          surface a viewer aims at never moves or empties out. */}
+                      {streamPoster ? (
+                        <img
+                          src={streamPoster}
+                          alt=""
+                          aria-hidden
+                          className="absolute inset-0 h-full w-full scale-110 object-cover opacity-25 blur-2xl"
+                        />
+                      ) : null}
+                      <div
+                        aria-hidden
+                        className="absolute inset-0"
+                        style={HERO_GLOW_STYLE}
+                      />
+                      <div className="absolute inset-0 z-10 flex items-center justify-center px-6">
+                        <ReleaseCountdown movie={movie} />
+                      </div>
+                    </>
+                  ) : playingTrailer && resolvedTrailer ? (
+                    <iframe
+                      key={resolvedTrailer.src}
+                      src={resolvedTrailer.src}
+                      title={`${movie.title} — ${resolvedTrailer.label}`}
+                      allow="autoplay; encrypted-media"
+                      allowFullScreen
+                      referrerPolicy="strict-origin-when-cross-origin"
+                      className="absolute inset-0 h-full w-full border-0"
+                    />
+                  ) : resolved ? (
+                    <>
+                      {/*
                       Player surface, in strict precedence order:
 
                       1. a directly playable source -> <VideoPlayer>
@@ -1576,43 +1752,43 @@ export function WatchPage() {
                       two that pulls a third-party ad provider's scripts into the
                       page.
                     */}
-                    {currentStreamUrl && !streamUnavailable ? (
-                      <VideoPlayer
-                        key={playerKeyRef.current}
-                        streamUrl={currentStreamUrl}
-                        title={displayTitle}
-                        poster={streamPoster}
-                        onClose={handleClose}
-                        variants={qualityVariants}
-                        subtitles={streamSubtitles}
-                        currentQuality={
-                          qualityVariants.find(v => v.quality)?.quality ||
-                          "Auto"
-                        }
-                        onQualityChange={q => {}}
-                        isLoading={resolving}
-                        autoCycling={autoCycling}
-                        onSourceError={handleSourceError}
-                        onProgress={handleProgress}
-                        preferredLanguage={preferredTrackLanguage}
-                        hideCloseButton
-                      />
-                    ) : usingEmbedProvider && !embedExhausted ? (
-                      <EmbedPlayer
-                        key={playerKeyRef.current}
-                        sources={embedChain}
-                        title={displayTitle}
-                        poster={streamPoster}
-                        activeSourceId={embedSourceId ?? undefined}
-                        onActiveSourceIdChange={setEmbedSourceId}
-                        onPlaying={handleEmbedPlaying}
-                        onExhausted={handleEmbedExhausted}
-                      />
-                    ) : null}
-                  </>
-                )}
+                      {currentStreamUrl && !streamUnavailable ? (
+                        <VideoPlayer
+                          key={playerKeyRef.current}
+                          streamUrl={currentStreamUrl}
+                          title={displayTitle}
+                          poster={streamPoster}
+                          onClose={handleClose}
+                          variants={qualityVariants}
+                          subtitles={streamSubtitles}
+                          currentQuality={
+                            qualityVariants.find(v => v.quality)?.quality ||
+                            "Auto"
+                          }
+                          onQualityChange={q => {}}
+                          isLoading={resolving}
+                          autoCycling={autoCycling}
+                          onSourceError={handleSourceError}
+                          onProgress={handleProgress}
+                          preferredLanguage={preferredTrackLanguage}
+                          hideCloseButton
+                        />
+                      ) : usingEmbedProvider && !embedExhausted ? (
+                        <EmbedPlayer
+                          key={playerKeyRef.current}
+                          sources={embedChain}
+                          title={displayTitle}
+                          poster={streamPoster}
+                          activeSourceId={embedSourceId ?? undefined}
+                          onActiveSourceIdChange={setEmbedSourceId}
+                          onPlaying={handleEmbedPlaying}
+                          onExhausted={handleEmbedExhausted}
+                        />
+                      ) : null}
+                    </>
+                  ) : null}
 
-                {/*
+                  {/*
                   The overlay, and the only place a wait is drawn.
 
                   It is a sibling of the surface rather than a state of it, and
@@ -1624,17 +1800,17 @@ export function WatchPage() {
                   picture change, and why nothing below it has to know which of
                   the two is running.
                 */}
-                {stage === "resolving_backend" ||
-                stage === "testing_candidate" ? (
-                  <StreamLoader
-                    className="z-30"
-                    poster={streamPoster}
-                    title={displayTitle}
-                    stage={stage}
-                  />
-                ) : null}
+                  {stage === "resolving_backend" ||
+                  stage === "testing_candidate" ? (
+                    <StreamLoader
+                      className="z-30"
+                      poster={streamPoster}
+                      title={displayTitle}
+                      stage={stage}
+                    />
+                  ) : null}
 
-                {/*
+                  {/*
                   The one terminal state. Reached only once every candidate has
                   been ruled out, and it has no button: the chain was walked in
                   full, so a retry would ask the same providers the same question
@@ -1642,105 +1818,63 @@ export function WatchPage() {
                   because that is the only thing known -- whether a given provider
                   will be up in a minute is not something this page can find out.
                 */}
-                {streamUnavailable ? (
-                  <div className="absolute inset-0 z-30 flex items-center justify-center">
-                    <div className="relative w-full h-full max-w-6xl max-h-[85vh] flex items-center justify-center">
-                      <img
-                        src={streamPoster}
-                        alt=""
-                        aria-hidden
-                        className="absolute inset-0 w-full h-full object-cover opacity-40 blur-2xl scale-110"
-                      />
-                      <div className="relative z-20 rounded-xl px-8 py-6 text-center">
-                        <p className="text-lg font-semibold text-white">
-                          {titleUnavailable}
-                        </p>
+                  {streamUnavailable ? (
+                    <div className="absolute inset-0 z-30 flex items-center justify-center">
+                      <div className="relative w-full h-full max-w-6xl max-h-[85vh] flex items-center justify-center">
+                        <img
+                          src={streamPoster}
+                          alt=""
+                          aria-hidden
+                          className="absolute inset-0 w-full h-full object-cover opacity-40 blur-2xl scale-110"
+                        />
+                        <div className="relative z-20 rounded-xl px-8 py-6 text-center">
+                          <p className="text-lg font-semibold text-white">
+                            {titleUnavailable}
+                          </p>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ) : null}
+                  ) : null}
+                </div>
               </div>
 
-              {/* Season/episode navigation, directly below the player */}
-              {movie.mediaType === "tv" ? (
-                <details className="mt-4 rounded-2xl border border-white/10 bg-zinc-900/60">
-                  <summary className="cursor-pointer list-none px-4 py-4 text-sm font-semibold text-white [&::-webkit-details-marker]:hidden">
-                    Seasons and episodes
-                    <span className="ml-2 font-normal text-white/55">
-                      Season {season} · Episode {episode}
-                    </span>
-                  </summary>
-                  <div className="border-t border-white/10 p-4">
-                    <WatchTVControls
-                      currentSeason={season}
-                      currentEpisode={episode}
-                      seasons={tvSeasons}
-                      episodes={currentSeasonEpisodes}
-                      onSelectEpisode={handleSelectEpisode}
-                    />
-                  </div>
-                </details>
-              ) : null}
-            </div>
-
-            {/*
-              RIGHT PANEL: the details, synopsis and My List action.
-              `sv-surface` is the standard pane from the design system, so this
-              column is the same glass as the hero card on the home page rather
-              than a second surface treatment.
-            */}
-            <aside className="sv-surface lg:sticky lg:top-24 max-h-[calc(100vh-6rem)] space-y-6 overflow-y-auto rounded-2xl p-5 pr-3">
-              {/* Show/Movie Title & Metadata */}
-              <div className="space-y-4">
-                <h1 className="text-xl sm:text-2xl font-bold text-white truncate">
+              {/* Below the frame: title, meta, synopsis, actions, details —
+                  the artboard docks them under the player rather than inside
+                  the sidebar, so the sidebar can be tabs. */}
+              <div className="pt-7">
+                <h1 className="m-0 text-[clamp(24px,2.3vw,32px)] font-bold leading-[1.1] tracking-[-0.02em] text-white">
                   {movie.title}
                 </h1>
 
-                <div className="flex flex-wrap items-center gap-2 text-xs text-[#aaa9ae]">
-                  {movie.year && (
-                    <span className="px-2 py-1 bg-white/5 border border-white/10 rounded">
-                      {movie.year}
-                    </span>
-                  )}
-                  {movie.runtime != null && (
-                    <>
-                      <span>·</span>
-                      <span className="px-2 py-1 bg-white/5 border border-white/10 rounded">
-                        {formatRuntime(movie.runtime)}
-                      </span>
-                    </>
-                  )}
-                  <span>·</span>
-                  <span className="px-2 py-1 bg-white/5 border border-white/10 rounded">
-                    {movie.genre.slice(0, 3).join(" · ")}
-                  </span>
-                  {movie.score !== null && (
-                    <span className="flex items-center gap-1 px-2 py-1 bg-amber-500/20 border border-amber-500/30 rounded text-amber-400">
-                      <Star className="h-3.5 w-3.5 fill-current" />
+                <p className="mt-2.5 text-sm text-[#8f99b0]">
+                  {metaLine}
+                  {movie.score != null && movie.score > 0 ? (
+                    <span className="ml-2 inline-flex items-center gap-1 align-middle text-amber-400">
+                      <Star className="h-3.5 w-3.5 fill-current" aria-hidden />
                       {movie.score}
                     </span>
-                  )}
-                  {movie.mediaType === "tv" && resolved && (
-                    <span className="px-2 py-1 bg-blue-500/20 border border-blue-500/30 rounded text-blue-400 flex items-center gap-1">
-                      <Tv className="h-3.5 w-3.5" />
-                      {resolved.stream.seasons || "?"} Seasons
-                    </span>
-                  )}
-                </div>
+                  ) : null}
+                </p>
 
                 {/* Synopsis. Omitted entirely when the catalogue has none,
                     rather than padded with placeholder prose. */}
                 {movie.synopsis ? (
-                  <p className="text-sm leading-6 text-[#c5c5c1] line-clamp-4">
+                  <p className="mt-4 max-w-[600px] text-[15px] leading-[1.65] text-[#c3cadb]">
                     {movie.synopsis}
                   </p>
                 ) : null}
 
-                {/* Action Buttons */}
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    variant="outline"
-                    className="flex items-center gap-2 px-4 py-3 focus-visible:ring-violet-600/50"
+                <div className="mt-5 flex flex-wrap items-center gap-2.5">
+                  {/* No Play button here: the player above already is the play
+                      action for whatever the resolver settled on, and a second
+                      Play below the fold only re-invoked resolveAndPlay for a
+                      stream the page was already resolving. Download and My
+                      List are the decisions actually taken after reading the
+                      synopsis. */}
+                  <button
+                    type="button"
+                    className={WATCH_GHOST_BUTTON}
+                    aria-pressed={isInMyList(movie.id)}
                     onClick={() => {
                       if (!authUser) {
                         navigate("/login");
@@ -1771,120 +1905,203 @@ export function WatchPage() {
                         });
                       }
                     }}
-                    aria-pressed={isInMyList(movie.id)}
                   >
                     {isInMyList(movie.id) ? (
-                      <Check className="h-5 w-5" />
+                      <Check className="h-4 w-4" aria-hidden />
                     ) : (
-                      <Plus className="h-5 w-5" />
+                      <Plus className="h-4 w-4" aria-hidden />
                     )}
-                    <span className="hidden sm:inline">
-                      {isInMyList(movie.id) ? "✓ In My List" : "Add to My List"}
-                    </span>
-                  </Button>
-                  <DownloadButton
-                    title={movie.title}
-                    year={movie.year}
-                    variants={resolved?.stream?.streams ?? []}
-                  />
+                    {isInMyList(movie.id) ? "In My List" : "My List"}
+                  </button>
+
+                  {!upcoming && !streamUnavailable ? (
+                    <DownloadButton
+                      title={movie.title}
+                      year={movie.year}
+                      variants={resolved?.stream?.streams ?? []}
+                    />
+                  ) : null}
 
                   {/*
-                    Share, next to Add to My List rather than floating over the
-                    video.
-
-                    It used to sit in the player's top-right corner, which is
-                    where a viewer's hand already goes to reach the provider's own
-                    fullscreen and settings controls, and it meant the only way to
-                    share a title was to have the player open. Both of those
-                    actions are decisions taken after reading the synopsis, so the
-                    button belongs with the other one.
+                    Share, next to My List rather than floating over the
+                    video. It used to sit in the player's top-right corner,
+                    which is where a viewer's hand already goes to reach the
+                    provider's own fullscreen and settings controls, and it
+                    meant the only way to share a title was to have the player
+                    open. Both of those actions are decisions taken after
+                    reading the synopsis, so the button belongs here.
                   */}
-                  <Button
-                    variant="outline"
-                    className="flex items-center gap-2 px-4 py-3 focus-visible:ring-violet-600/50"
+                  <button
+                    type="button"
+                    className={WATCH_GHOST_ICON_BUTTON}
                     onClick={() => void handleShare()}
                     aria-label="Share this title"
                   >
-                    <Share2 className="h-5 w-5" />
-                    <span className="hidden sm:inline">Share</span>
-                  </Button>
+                    <Share2 className="h-[18px] w-[18px]" aria-hidden />
+                  </button>
                 </div>
+
+                {/* Details grid, per the artboard: uppercase micro-labels over
+                    plain values, auto-fitting columns, top rule. */}
+                {detailPairs.length ? (
+                  <dl
+                    className="mt-8 grid gap-5 border-t border-white/[0.08] pt-6"
+                    style={{
+                      gridTemplateColumns:
+                        "repeat(auto-fit, minmax(150px, 1fr))",
+                    }}
+                  >
+                    {detailPairs.map(pair => (
+                      <div key={pair.label}>
+                        <dt className="mb-1.5 text-[11px] uppercase tracking-[0.14em] text-[#7f8aa3]">
+                          {pair.label}
+                        </dt>
+                        <dd className="m-0 text-sm text-[#dfe3ee]">
+                          {pair.value}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                ) : null}
+              </div>
+            </div>
+
+            {/*
+              Sidebar: underline tabs over one panel. The episodes panel is
+              the same WatchTVControls the page used to keep under the
+              player; the trailer panel plays into the frame; "More like
+              this" is the catalogue's own discover answer, minus this title.
+            */}
+            <aside className="min-w-[280px] flex-1 basis-[340px] lg:w-[340px] lg:flex-none">
+              <div className="flex items-end gap-6 border-b border-white/10">
+                {asideTabs.map(tab => {
+                  const active = activeTab === tab.id;
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setAsideTab(tab.id)}
+                      aria-current={active ? "page" : undefined}
+                      className={
+                        "-mb-px border-b-2 px-0 pt-2 pb-3 text-sm transition " +
+                        (active
+                          ? "border-[var(--sv-violet)] font-medium text-[#f1f3f8]"
+                          : "border-transparent text-[#7f8aa3] hover:text-[#cfd5e4]")
+                      }
+                    >
+                      {tab.label}
+                    </button>
+                  );
+                })}
+                <div className="flex-1" />
               </div>
 
-              {/* Divider */}
-              <Separator className="border-white/10" />
-
-              {/* Series context; episode controls stay collapsed below the player. */}
-              {movie.mediaType === "tv" && resolved ? (
-                <div className="space-y-2">
-                  <h2 className="text-sm font-semibold uppercase tracking-wide text-white/55">
-                    Now playing
-                  </h2>
-                  <p className="text-sm text-white">
-                    {currentEpisodeTitle} · Season {season}, Episode {episode}
-                  </p>
-                </div>
-              ) : (
-                // Movie: Show details in sidebar
-                <div className="space-y-6">
-                  {/* Details - only show rows with data */}
-                  <div className="space-y-4">
-                    <h2 className="text-sm font-semibold text-white/80 uppercase tracking-wide">
-                      Details
-                    </h2>
-                    <div className="grid grid-cols-2 gap-3 text-sm">
-                      {movie.director && (
-                        <div>
-                          <p className="text-white/50">Director</p>
-                          <p className="text-white font-medium">
-                            {movie.director}
-                          </p>
-                        </div>
-                      )}
-                      {movie.cast.length > 0 && (
-                        <div>
-                          <p className="text-white/50">Cast</p>
-                          <p className="text-white font-medium line-clamp-1">
-                            {movie.cast.slice(0, 3).join(", ")}
-                          </p>
-                        </div>
-                      )}
-                      {movie.country && (
-                        <div>
-                          <p className="text-white/50">Country</p>
-                          <p className="text-white font-medium">
-                            {movie.country}
-                          </p>
-                        </div>
-                      )}
-                      {movie.language && (
-                        <div>
-                          <p className="text-white/50">Language</p>
-                          <p className="text-white font-medium">
-                            {movie.language}
-                          </p>
-                        </div>
-                      )}
-                      {movie.releaseDate && (
-                        <div>
-                          <p className="text-white/50">Release Date</p>
-                          <p className="text-white font-medium">
-                            {movie.releaseDate}
-                          </p>
-                        </div>
-                      )}
-                      {movie.runtime != null && (
-                        <div>
-                          <p className="text-white/50">Runtime</p>
-                          <p className="text-white font-medium">
-                            {formatRuntime(movie.runtime)}
-                          </p>
-                        </div>
-                      )}
-                    </div>
+              <div className="pt-3">
+                {activeTab === "episodes" && movie.mediaType === "tv" ? (
+                  <WatchTVControls
+                    currentSeason={season}
+                    currentEpisode={episode}
+                    seasons={tvSeasons}
+                    episodes={currentSeasonEpisodes}
+                    onSelectEpisode={handleSelectEpisode}
+                  />
+                ) : activeTab === "trailers" ? (
+                  trailer && resolvedTrailer ? (
+                    <button
+                      type="button"
+                      onClick={() => setPlayingTrailer(was => !was)}
+                      className={
+                        "flex w-full items-center gap-3.5 rounded-xl p-2.5 text-left text-[#f1f3f8] transition " +
+                        (playingTrailer
+                          ? "bg-white/[0.05]"
+                          : "hover:bg-white/[0.05]")
+                      }
+                    >
+                      <div className="relative w-[112px] shrink-0 overflow-hidden rounded-lg bg-[linear-gradient(135deg,#1c2338,#0b0f1b)]">
+                        {trailerThumb ? (
+                          <img
+                            src={trailerThumb}
+                            alt=""
+                            aria-hidden
+                            className="aspect-video w-full object-cover"
+                            loading="lazy"
+                          />
+                        ) : (
+                          <div className="grid aspect-video w-full place-items-center text-[#cfd5e4]">
+                            <Play
+                              className="h-4 w-4 fill-current"
+                              aria-hidden
+                            />
+                          </div>
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium">
+                          {trailer.title || "Trailer"}
+                        </p>
+                        <p className="mt-1 text-xs text-[#7f8aa3]">
+                          {playingTrailer ? "Now playing" : "Play trailer"}
+                        </p>
+                      </div>
+                    </button>
+                  ) : (
+                    <p className="px-2.5 py-4 text-sm text-[#7f8aa3]">
+                      No trailers yet.
+                    </p>
+                  )
+                ) : similar.length ? (
+                  <div className="space-y-1">
+                    {similar.map(item => {
+                      const tmdbId = Number(item.tmdb_id ?? 0);
+                      return (
+                        <button
+                          key={String(item.tmdb_id ?? item.id)}
+                          type="button"
+                          disabled={isNaN(tmdbId) || tmdbId <= 0}
+                          onClick={() => {
+                            if (isNaN(tmdbId) || tmdbId <= 0) return;
+                            navigate(
+                              buildWatchPath(tmdbId, {
+                                mediaType:
+                                  item.media_type === "tv" ? "tv" : "movie",
+                              })
+                            );
+                          }}
+                          className="flex w-full items-center gap-3.5 rounded-xl p-2.5 text-left text-[#f1f3f8] transition hover:bg-white/[0.05] disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent"
+                        >
+                          <div className="w-12 shrink-0 overflow-hidden rounded-md bg-zinc-800">
+                            {item.poster_url ? (
+                              <img
+                                src={item.poster_url}
+                                alt=""
+                                aria-hidden
+                                className="aspect-[2/3] w-full object-cover"
+                                loading="lazy"
+                              />
+                            ) : (
+                              <div className="grid aspect-[2/3] w-full place-items-center text-xs text-white/40">
+                                {item.title.slice(0, 1)}
+                              </div>
+                            )}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-medium">
+                              {item.title}
+                            </p>
+                            <p className="mt-0.5 text-xs text-[#7f8aa3]">
+                              {item.year ?? ""}
+                            </p>
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
-                </div>
-              )}
+                ) : (
+                  <p className="px-2.5 py-4 text-sm text-[#7f8aa3]">
+                    Nothing similar in the catalogue yet.
+                  </p>
+                )}
+              </div>
             </aside>
           </div>
         </div>

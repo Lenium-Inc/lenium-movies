@@ -247,10 +247,14 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
       return;
     }
     await resolveAndPlay(1, 1);
-    navigate(`/watch/${movie.providerId}`);
+    navigate(
+      buildWatchPath(movie.providerId, {
+        mediaType: movie.mediaType,
+        season: 1,
+        episode: 1,
+      })
+    );
   };
-
-  const showMainPlayButton = movie.mediaType !== "tv";
 
   /**
    * Save the resolved direct file to the user's device.
@@ -496,16 +500,20 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
           )}
 
           <div className="mt-5 flex flex-wrap items-center gap-3">
-            {showMainPlayButton && (
-              <button
-                onClick={play}
-                disabled={resolving}
-                className="flex-1 sm:flex-none flex items-center justify-center gap-2 rounded-md bg-[#d7d7d3] px-6 py-3 text-sm font-black text-[#0b0b0e] hover:bg-white disabled:opacity-60 transition-all active:scale-[0.98] shadow-lg shadow-[#d7d7d3]/20"
-              >
-                <Play className="h-5 w-5 fill-current" />
-                {resolving ? "Loading Stream…" : "Play"}
-              </button>
-            )}
+            {/* The Play button is shown for series too. It used to be gated on
+                `mediaType !== "tv"` -- the episode grid was treated as the only
+                entry point for a show -- but a viewer opening the sheet for a
+                series still wants the obvious primary action, and `play()`
+                already resolves the currently selected episode (S1E1 by
+                default) and routes through buildWatchPath with type=tv. */}
+            <button
+              onClick={play}
+              disabled={resolving}
+              className="flex w-full sm:w-auto items-center justify-center gap-2 rounded-xl bg-white px-8 py-3 text-sm font-bold text-black hover:bg-neutral-200 disabled:opacity-60 transition-all active:scale-[0.98] shadow-lg shadow-black/20"
+            >
+              <Play className="h-5 w-5 fill-current" />
+              {resolving ? "Loading Stream…" : "Play"}
+            </button>
             <button
               onClick={() => {
                 if (!authUser) {
