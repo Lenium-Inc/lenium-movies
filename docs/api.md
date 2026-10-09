@@ -36,22 +36,31 @@ and error codes are not in this codebase.
 | `/api/catalog/discover`        | GET          | Discover shelves                                   |
 | `/api/catalog/search`          | GET          | Cached catalogue search                            |
 | `/api/media/<id>`              | GET          | One catalog record by id                           |
-| `/api/movies/resolve`          | GET, POST    | Resolve a title to a playable state                |
+| `/api/movies/resolve`          | GET, POST    | Pre-v1 alias of `/api/v1/playback/init` (kept for the web client) |
 | `/api/episodes`                | GET          | Season/episode details for a series                |
 | `/api/movies/trailer`          | GET          | Trailer for a title                                |
 | `/api/catalog/movieTrailer`    | GET          | Trailer by TMDB id                                 |
-| `/api/subtitles`               | GET          | Subtitle relay                                     |
 
 ## Playback
 
+All playback legs are tokenised: the resolver answers handles (`/api/v1/playback/frame?token=…`,
+`/api/v1/playback/media?token=…`, …) and never a raw provider URL. The pre-v1
+doors that took a raw URL from the caller — `/api/get-stream`,
+`/api/movies/stream`, `/api/movies/download`, `/api/subtitles` — are gone and
+answer 404.
+
 | Route                        | Method    | Notes                                                          |
 | ---------------------------- | --------- | -------------------------------------------------------------- |
-| `/api/get-stream`            | GET       | Direct (Archive.org) source, ordered candidates                 |
-| `/api/movies/stream`         | GET       | Byte relay for range requests and seeking                       |
-| `/api/movies/download`       | GET       | Archive.org-only attachment relay                              |
-| `/api/v1/stream/download`    | GET       | Versioned alias for the same Archive.org-only download relay   |
+| `/api/v1/playback/init`      | GET, POST | Resolve once: metadata, ordered provider chain, tokenised legs |
+| `/api/movies/resolve`        | GET, POST | Thin alias of `/api/v1/playback/init` (pre-v1 field names)     |
+| `/api/v1/playback/frame`     | GET       | 302 to an embed target (frame handle)                          |
+| `/api/v1/playback/media`     | GET       | Range-passing media relay (media handle)                       |
+| `/api/v1/playback/captions`  | GET       | Proxied WebVTT track (caption handle)                          |
+| `/api/v1/playback/download`  | GET       | Archive.org-only attachment relay (media handle)               |
+| `/api/proxy/manifest`        | GET       | HLS manifest relay, segments rewritten onto the segment relay  |
+| `/api/proxy/segment`         | GET       | HLS segment relay                                              |
 
-`stream_providers.resolve()` returns the first playable provider plus the
+`stream_providers.resolve_direct()` returns the first playable provider plus the
 remaining ordered candidates. The client renders the first and may fail over
 client-side. `STREAM_PROVIDER_DISABLED` and `STREAM_PROVIDER_ORDER` reshape the
 chain without a code change.
