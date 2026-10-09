@@ -576,7 +576,9 @@ export function useCatalog(): UseCatalog {
       case "new":
         return [{ title: "Recently Added", items: byYearDesc.slice(0, cap) }];
       case "popular":
-        return [{ title: "Popular on Lenium", items: filtered.slice(0, cap) }];
+        return [
+          { title: "Popular on Stream Vy", items: filtered.slice(0, cap) },
+        ];
       case "trending":
         return [{ title: "Trending Now", items: filtered.slice(0, cap) }];
       case "tv":

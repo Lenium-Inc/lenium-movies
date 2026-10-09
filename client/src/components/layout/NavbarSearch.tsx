@@ -7,7 +7,6 @@ import {
   TrendingUp,
   X,
 } from "lucide-react";
-import { useLocation } from "wouter";
 import { useComposition } from "@/hooks/useComposition";
 import {
   searchSuggest,
@@ -15,13 +14,25 @@ import {
   type SearchSuggestion,
 } from "@/services/api";
 
-/** Fired (with `{ query: string }`) to drop a plain query back into the catalog
- *  grid on the home page. */
+/** Fired with `{ query: string }` to drop a plain query back into the catalog
+ *  grid on the home page. An empty query means "clear the applied search", so
+ *  the home page's Clear control and this input stay in sync either way. */
 export const APPLY_SEARCH_EVENT = "lenium:apply-search";
+
+/**
+ * Fired with the picked `PaletteItem` so the home page opens that title's
+ * details panel.
+ *
+ * Picking a row used to `navigate('/watch/:id')`, which skipped the details
+ * view entirely and dropped the viewer straight into stream resolution. A
+ * suggestion carries only a title and a poster, so the sheet is what owns the
+ * upgrade to the full record; this component only reports the pick.
+ */
+export const SELECT_TITLE_EVENT = "lenium:select-title";
 
 const SEARCH_DEBOUNCE_MS = 300;
 
-interface PaletteItem {
+export interface PaletteItem {
   id: string;
   title: string;
   year?: string;
@@ -58,7 +69,6 @@ function toItem(r: SearchSuggestion): PaletteItem {
  * "/" is kept because the hero header advertises it.
  */
 export function NavbarSearch() {
-  const [, navigate] = useLocation();
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [suggestions, setSuggestions] = useState<PaletteItem[]>([]);
@@ -128,6 +138,24 @@ export function NavbarSearch() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // The results grid's own Clear control dispatches this same event, so
+  // listening here keeps the field in step with a search that was cleared
+  // from somewhere other than this input. Dispatching from here and hearing
+  // our own event back is harmless: the value we set equals the value we sent.
+  useEffect(() => {
+    const onApply = (event: Event) => {
+      const applied = (event as CustomEvent<{ query?: string }>).detail?.query;
+      if (typeof applied !== "string") return;
+      setQuery(applied);
+      if (!applied.trim()) {
+        setSuggestions([]);
+        setActiveIndex(-1);
+      }
+    };
+    window.addEventListener(APPLY_SEARCH_EVENT, onApply);
+    return () => window.removeEventListener(APPLY_SEARCH_EVENT, onApply);
+  }, []);
+
   // Debounced live suggestions. The `cancelled` flag is what stops a slow
   // response for an earlier query from overwriting a newer one: the request
   // itself cannot be cancelled, because `searchSuggest` takes no AbortSignal.
@@ -189,8 +217,7 @@ export function NavbarSearch() {
 
   const openItem = (item: PaletteItem) => {
     dismiss();
-    setQuery("");
-    navigate(`/watch/${item.id}`);
+    window.dispatchEvent(new CustomEvent(SELECT_TITLE_EVENT, { detail: item }));
   };
 
   const applyToCatalog = () => {
@@ -213,9 +240,7 @@ export function NavbarSearch() {
       // Escape look like it did nothing at all. Suppressing the native clear
       // means the close and the clear both go through React state.
       event.preventDefault();
-      setQuery("");
-      setSuggestions([]);
-      setActiveIndex(-1);
+      clear();
       dismiss();
       return;
     }
@@ -245,6 +270,12 @@ export function NavbarSearch() {
     setSuggestions([]);
     setActiveIndex(-1);
     inputRef.current?.focus();
+    // Also drop the search already applied to the results grid: the input and
+    // the grid are two views of the same query, and clearing only the input
+    // left results on screen for a query the field no longer showed.
+    window.dispatchEvent(
+      new CustomEvent(APPLY_SEARCH_EVENT, { detail: { query: "" } })
+    );
   };
 
   // Escape has to mean "cancel my CJK composition" while an IME is mid-flight,

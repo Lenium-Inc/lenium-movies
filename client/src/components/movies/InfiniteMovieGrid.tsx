@@ -21,6 +21,12 @@ interface InfiniteMovieGridProps {
   error?: string | null;
   /** The feed was throttled upstream, which is not a failure state. */
   rateLimited?: boolean;
+  /**
+   * Suppress the "end of the catalogue" footer. Search results reuse this
+   * grid but are not the catalogue, and a fixed count of matches is not a
+   * boundary anyone reached.
+   */
+  hideEndNotice?: boolean;
 }
 
 function MovieCardWrapper({
@@ -66,6 +72,7 @@ export function InfiniteMovieGrid({
   loadingMore,
   error,
   rateLimited,
+  hideEndNotice,
 }: InfiniteMovieGridProps) {
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const onLoadMoreRef = useRef(onLoadMore);
@@ -135,7 +142,7 @@ export function InfiniteMovieGrid({
         <div ref={sentinelRef} aria-hidden className="h-px" />
       ) : null}
 
-      {!hasMore && (
+      {!hasMore && !hideEndNotice && (
         <p className="mt-12 text-center text-xs font-medium uppercase tracking-[0.18em] text-white/25">
           You've reached the end of the catalogue
         </p>

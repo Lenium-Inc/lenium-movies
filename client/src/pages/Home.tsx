@@ -5,7 +5,12 @@ import {
   useCatalog,
 } from "@/hooks/useCatalog";
 import { Navbar } from "@/components/layout/Navbar";
-import { APPLY_SEARCH_EVENT } from "@/components/layout/NavbarSearch";
+import {
+  APPLY_SEARCH_EVENT,
+  SELECT_TITLE_EVENT,
+  type PaletteItem,
+} from "@/components/layout/NavbarSearch";
+import { fetchMovieDetails } from "@/pages/Watch";
 import { tmdbImage } from "@/lib/tmdbImages";
 import {
   CatalogEmptyState,
@@ -62,19 +67,61 @@ export default function Home() {
 
   const [heroActive, setHeroActive] = useState<Movie | null>(null);
 
-  // The navbar search can push a plain query back into the catalog
-  // grid ("Show all results") — apply it to the shared search state.
+  // The navbar search can push a plain query back into the catalog grid
+  // ("Show all results"), or an empty one to clear it (the input's X or
+  // Escape). The view is left alone on purpose: forcing `view = "movies"`
+  // used to drop every TV match from a search, and it made the post-clear
+  // state jump to a browse grid the viewer had never opened.
   useEffect(() => {
     const onApply = (event: Event) => {
       const query = (event as CustomEvent<{ query?: string }>).detail?.query;
-      if (typeof query === "string" && query.trim()) {
-        setSearch(query.trim());
-        setView("movies");
-      }
+      if (typeof query !== "string") return;
+      setSearch(query.trim());
     };
     window.addEventListener(APPLY_SEARCH_EVENT, onApply);
     return () => window.removeEventListener(APPLY_SEARCH_EVENT, onApply);
-  }, [setSearch, setView]);
+  }, [setSearch]);
+
+  // A search-suggest pick carries only an id, title and poster. Open the
+  // details sheet with that much so the click responds instantly, then swap
+  // in the full record when the resolve lands (synopsis, genres, runtime,
+  // cast). The guard keeps a slow response for a previous pick from
+  // overwriting the current one -- or a sheet the viewer already closed.
+  useEffect(() => {
+    const onSelect = (event: Event) => {
+      const item = (event as CustomEvent<PaletteItem | undefined>).detail;
+      if (!item || typeof item.id !== "string" || !item.title) return;
+      const numericId = parseInt(item.id, 10);
+      setSelected({
+        id: Number.isFinite(numericId) ? numericId : 0,
+        providerId: item.id,
+        title: item.title,
+        year: item.year ? parseInt(item.year, 10) || null : null,
+        runtime: null,
+        rating: null,
+        score: null,
+        genre: [],
+        poster: item.posterUrl || null,
+        backdrop: null,
+        synopsis: "",
+        director: null,
+        cast: [],
+        country: null,
+        language: null,
+        releaseDate: null,
+        source: "tmdb",
+        mediaType: item.mediaType,
+      });
+      void fetchMovieDetails(item.id).then(full => {
+        if (!full) return;
+        setSelected(current =>
+          current && String(current.providerId) === item.id ? full : current
+        );
+      });
+    };
+    window.addEventListener(SELECT_TITLE_EVENT, onSelect);
+    return () => window.removeEventListener(SELECT_TITLE_EVENT, onSelect);
+  }, []);
 
   const isClientSearch = search.trim().length > 0;
   const isHomeView = view === "home" && !isClientSearch;
@@ -181,7 +228,17 @@ export default function Home() {
           ) : (
             <>
               {isClientSearch ? (
-                <SearchStatusBar query={search} onClear={() => setSearch("")} />
+                <SearchStatusBar
+                  query={search}
+                  count={filtered.length}
+                  onClear={() =>
+                    window.dispatchEvent(
+                      new CustomEvent(APPLY_SEARCH_EVENT, {
+                        detail: { query: "" },
+                      })
+                    )
+                  }
+                />
               ) : null}
               {!isClientSearch &&
               !isBrowseView &&
@@ -204,7 +261,7 @@ export default function Home() {
               {/*
               Nothing here on purpose.
 
-              The home page used to open with a "What Lenium is" block
+              The home page used to open with a "What Stream Vy is" block
               restating what the product does and, underneath it, the daily
               viewing allowance in the same words the server refuses with. It sat
               between the featured title and the shelves, so the two things a
@@ -214,39 +271,74 @@ export default function Home() {
             */}
 
               {/*
-              Browse controls. On the home view the heading is dropped and only
-              the filter row remains: with the shelves underneath now named
-              (Continue Watching / Trending Movies / Popular Series), a
-              "Browse the catalogue" heading in front of them labels the hero's
-              own output rather than a separate destination.
+              Browse controls. On the home view the artboard's genre pill row
+              replaces the dropdown: one tap re-filters the shelves underneath
+              in place, with no navigation and no heading in front of them.
+              Other catalogue views keep the full dropdown, which also owns
+              sort, media type and the jump into the browse grid.
+
+              Hidden entirely during a search: "Browse the catalogue /
+              Discover" above a results grid is browse chrome standing between
+              the query and its answer, and the dropdown's filters do not
+              apply to search results anyway.
             */}
-              <section className="mt-12 flex flex-wrap items-center justify-between gap-4">
-                {isHomeView ? null : (
-                  <div>
-                    <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#8b8b90]">
-                      Browse the catalogue
-                    </p>
-                    {/* An h2, not an h1: the spotlight above already owns the
-                      page's h1 with the featured title. Two h1s on one page
-                      splits the document outline and leaves assistive tech
-                      announcing the featured film twice. */}
-                    <h2 className="mt-1 text-2xl font-bold">Discover</h2>
-                  </div>
-                )}
-                <DiscoverDropdown
-                  genre={genre}
-                  setGenre={setGenre}
-                  sort={sort}
-                  setSort={setSort}
-                  mediaType={mediaType}
-                  setMediaType={setMediaType}
-                  setView={setView}
-                  filteredCount={
-                    isBrowseView ? discoverItems.length : filtered.length
-                  }
-                  isLoading={loading || searchLoading || discoverLoading}
-                />
-              </section>
+              {!isClientSearch ? (
+                <section className="mt-12 flex flex-wrap items-center justify-between gap-4">
+                  {isHomeView ? (
+                    <div
+                      role="group"
+                      aria-label="Filter shelves by genre"
+                      className="-mx-1 flex w-full gap-2 overflow-x-auto px-1 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                    >
+                      {genreFilterOptions.map(item => {
+                        const active = genre === item;
+                        return (
+                          <button
+                            key={item}
+                            type="button"
+                            onClick={() => setGenre(item)}
+                            aria-pressed={active}
+                            className={
+                              "shrink-0 rounded-full px-4 py-2 text-sm font-medium transition-all duration-200 " +
+                              (active
+                                ? "scale-105 bg-white px-5 font-bold text-black shadow-md"
+                                : "text-neutral-400 hover:text-white")
+                            }
+                          >
+                            {item}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <>
+                      <div>
+                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#8b8b90]">
+                          Browse the catalogue
+                        </p>
+                        {/* An h2, not an h1: the spotlight above already owns the
+                        page's h1 with the featured title. Two h1s on one page
+                        splits the document outline and leaves assistive tech
+                        announcing the featured film twice. */}
+                        <h2 className="mt-1 text-2xl font-bold">Discover</h2>
+                      </div>
+                      <DiscoverDropdown
+                        genre={genre}
+                        setGenre={setGenre}
+                        sort={sort}
+                        setSort={setSort}
+                        mediaType={mediaType}
+                        setMediaType={setMediaType}
+                        setView={setView}
+                        filteredCount={
+                          isBrowseView ? discoverItems.length : filtered.length
+                        }
+                        isLoading={loading || searchLoading || discoverLoading}
+                      />
+                    </>
+                  )}
+                </section>
+              ) : null}
               <div className="mt-8">
                 {loading ? (
                   <SkeletonMovieGrid count={12} />
@@ -271,6 +363,36 @@ export default function Home() {
                     error={discoverError}
                     rateLimited={discoverRateLimited}
                   />
+                ) : isClientSearch ? (
+                  /*
+                    The results screen: one flat grid of what matched, with no
+                    shelf headings borrowed from the home page. Search results
+                    used to fall through to `rows` below, which capped them at
+                    twenty, split them under titles like "Trending Movies" and
+                    "Recently Added" that had nothing to do with the query, and
+                    dropped every TV match. The empty case is handled by
+                    `CatalogEmptyState` above, so an empty grid renders nothing
+                    rather than a second empty state.
+                  */
+                  filtered.length > 0 ? (
+                    <InfiniteMovieGrid
+                      items={filtered}
+                      savedIds={savedIds}
+                      onSelect={movie => {
+                        recordAffinity(movie, 0.5);
+                        setSelected(movie);
+                      }}
+                      onSave={movie => {
+                        recordAffinity(movie, 0.8);
+                        toggleSave(movie);
+                      }}
+                      onLoadMore={() => undefined}
+                      hasMore={false}
+                      initialLoading={false}
+                      loadingMore={false}
+                      hideEndNotice
+                    />
+                  ) : null
                 ) : (
                   <>
                     {/*

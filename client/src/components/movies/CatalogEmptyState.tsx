@@ -1,4 +1,4 @@
-import { Search, X, Loader2 } from "lucide-react";
+import { Search } from "lucide-react";
 
 interface CatalogEmptyStateProps {
   loading: boolean;
@@ -56,22 +56,44 @@ export function CatalogEmptyState({
 
 interface SearchStatusBarProps {
   query: string;
+  /** How many titles matched; omitted from the line when unknown. */
+  count?: number;
   onClear: () => void;
 }
 
-/** Read-only banner confirming that results below are streamable matches. */
-export function SearchStatusBar({ query, onClear }: SearchStatusBarProps) {
+/**
+ * The results heading: the query as a plain section title with its match
+ * count beside it, not a boxed banner.
+ *
+ * The old version wrapped the line in a bordered strip with a Clear "X" that
+ * echoed the one already sitting in the search field, so the same page
+ * offered two identical escapes under two different appearances. The heading
+ * reads as a title for the grid below it, and Clear is one quiet text link.
+ */
+export function SearchStatusBar({
+  query,
+  count,
+  onClear,
+}: SearchStatusBarProps) {
   return (
-    <div className="mt-5 flex items-center justify-between rounded-md border border-white/10 bg-white/[0.03] px-4 py-3 text-xs text-[#c4c4c0]">
-      <span>
-        Playable results for <strong className="text-white">{query}</strong>
-      </span>
-      <button
-        onClick={onClear}
-        className="flex items-center gap-1 text-[#d7d7d3]"
-      >
-        <X className="h-3 w-3" /> Clear
-      </button>
-    </div>
+    <section className="mt-6 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+      <h2 className="text-xl font-bold text-white">
+        Results for <span className="text-[#aab3c7]">“{query.trim()}”</span>
+      </h2>
+      <div className="flex items-baseline gap-4">
+        {typeof count === "number" ? (
+          <span className="text-xs text-[#8f99b0]">
+            {count} {count === 1 ? "title" : "titles"}
+          </span>
+        ) : null}
+        <button
+          type="button"
+          onClick={onClear}
+          className="text-xs text-[#8f99b0] underline-offset-4 transition hover:text-white hover:underline"
+        >
+          Clear search
+        </button>
+      </div>
+    </section>
   );
 }
