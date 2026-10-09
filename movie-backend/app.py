@@ -2,8 +2,18 @@
 FreeStream Backend - TMDB-First Metadata & Streaming API
 
 Serves live TMDB search (GET /api/search), trending/popular/now_playing/on_the_air feeds,
-playback resolution (POST /api/movies/resolve), direct stream sources (GET /api/get-stream),
+the unified playback contract (POST/GET /api/v1/playback/init), tokenised playback legs
+(GET /api/v1/playback/media, /frame, /captions, /download), locale configuration
+(GET/POST /api/v1/locale/config), operator metrics (GET /api/admin/system/metrics),
 trailer lookup (GET /api/movies/trailer), and episode details (GET /api/episodes).
+Third-party HLS is relayed through GET /api/proxy/manifest and GET /api/proxy/segment,
+which carry a Referer and a browser User-Agent upstream so hls.js can play what the
+origin would otherwise refuse cross-origin.
+
+No response carries a third-party URL: every playable, embeddable or downloadable
+target crosses the wire as an opaque handle minted by playback_tokens, so the set of
+hosts this process will fetch for a client is decided entirely by server-side
+resolution (see docs/api.md).
 
 All metadata comes exclusively from TMDB's official API. No static archives or fallbacks.
 
@@ -25,9 +35,10 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-from flask import Flask, Response, jsonify, request
+from flask import Flask, Response, jsonify, redirect, request, stream_with_context
 from werkzeug.exceptions import HTTPException
 
+import requests
 from cachetools import TTLCache
 
 # Imported first so the dotenv file is loaded before any module reads a secret.
@@ -36,11 +47,15 @@ from runtime_config import load_env_file, ssl_context, tmdb_api_key
 load_env_file()
 
 import authdb
+import caption_engine
 import catalog_lib
 import catalog_service
 import geo_locale
+import locale_settings
+import playback_tokens
 import stream_providers
 import taste
+import telemetry
 import tmdb_service as tmdb
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -368,9 +383,9 @@ def _parse_tmdb_id(raw) -> int | None:
     - absurdly large: Python ints are unbounded, so a 40-digit value parses
       cleanly and would just be a guaranteed upstream 404
 
-    Shared by /api/get-stream and /api/episodes so both classify a bad id the
-    same way instead of one 400-ing and the other 404-ing with a message that
-    blames the title.
+    Shared by /api/v1/playback/init and /api/episodes so both classify a bad id
+    the same way instead of one 400-ing and the other 404-ing with a message
+    that blames the title.
     """
     try:
         value = int(str(raw).strip())
@@ -401,63 +416,11 @@ def _unhandled_exception_handler(error: Exception):
     return _json_error("The movie backend could not fulfil this request.", 500)
 
 
-# Cap the upstream subtitle fetch so a slow Archive.org node cannot pin a
-# worker thread. Subtitle files are small (tens of KB), so a hard byte ceiling
-# also prevents this endpoint being used to pull an arbitrary large file.
+# Cap the upstream caption fetch so a slow Archive.org node cannot pin a
+# worker thread. Caption files are small (tens of KB), so a hard byte ceiling
+# also prevents the caption route being used to pull an arbitrary large file.
 SUBTITLE_TIMEOUT_SECONDS = 15
 SUBTITLE_MAX_BYTES = 4 * 1024 * 1024
-
-
-@app.route("/api/subtitles", methods=["GET"])
-def proxy_subtitles():
-    """Serve a subtitle track as CORS-enabled WebVTT.
-
-    A `<track>` element fetches its `src` with CORS, and Archive.org's download
-    nodes return neither `Access-Control-Allow-Origin` nor a WebVTT content
-    type (they serve `text/plain`). Pointing a track straight at the archive
-    therefore fails silently in the browser: the track is rejected, no cues
-    ever fire, and the UI still reports a subtitle as "selected". Proxying the
-    file server-side is what makes subtitles actually work.
-
-    `.srt` upstreams are converted to WebVTT here, because a browser cannot
-    render SubRip at all. Only archive.org hosts are accepted, matching the
-    stream proxy, so this cannot be turned into a general-purpose fetcher.
-    """
-    url = (request.args.get("url") or "").strip()
-    if not url:
-        return _json_error("Missing url", 400)
-
-    # Host and scheme validation happens inside `fetch_bounded_text`, which
-    # shares its allowlist with the stream relay.
-    try:
-        text = catalog_lib.fetch_bounded_text(
-            url, SUBTITLE_TIMEOUT_SECONDS, SUBTITLE_MAX_BYTES
-        )
-    except ValueError as error:
-        # Host allowlist rejection and the byte cap both land here.
-        message = str(error)
-        if "archive.org" in message:
-            return _json_error(message, 400)
-        return _json_error(message, 502)
-    except urllib.error.HTTPError as exc:
-        return _json_error(f"Subtitle upstream returned {exc.code}", 502)
-    except (urllib.error.URLError, TimeoutError, OSError):
-        return _json_error("Subtitle upstream unavailable", 502)
-
-    # The upstream extension is only a hint: archive.org serves `.srt` files as
-    # `text/plain` and occasionally mislabels the container, so the body is
-    # sniffed for the WEBVTT signature and converted when it is missing.
-    is_srt = urllib.parse.urlparse(url).path.lower().endswith(".srt")
-    if is_srt or not text.lstrip("\ufeff").lstrip().upper().startswith("WEBVTT"):
-        text = catalog_lib.srt_to_vtt(text)
-
-    response = Response(text, mimetype="text/vtt")
-    response.headers["Content-Type"] = "text/vtt; charset=utf-8"
-    # Cues are immutable for a given archive item, but the upstream node
-    # rotates; a short shared cache absorbs repeated seeks without pinning
-    # stale data.
-    response.headers["Cache-Control"] = "public, max-age=300"
-    return response
 
 
 @app.after_request
@@ -475,6 +438,53 @@ def add_cors_headers(response):
     response.headers["Access-Control-Expose-Headers"] = "Content-Length, Accept-Ranges, Content-Type"
     response.vary.add("Origin")
     response.headers.pop("X-Powered-By", None)
+    return response
+
+
+# ---------------------------------------------------------------------------
+# Telemetry & the memory guard
+#
+# Every request is counted and every error class recorded, so the operator
+# metrics route reports the process that served it rather than a guess. The
+# guard runs *before* the bulk-memory routes only: those are the ones that
+# fetch a manifest, relay a file, or walk a provider chain -- the work whose
+# allocations actually threaten the worker. Answering them 503 with an
+# explicit code when RSS is at the ceiling sheds load honestly (retryable,
+# distinguishable from "no source exists"), while metadata routes keep
+# answering because they allocate kilobytes.
+# ---------------------------------------------------------------------------
+
+#: Paths that pull bulk bodies upstream or buffer them in process. Kept as
+#: explicit paths rather than a prefix so a future metadata route added under
+#: /api/v1 is not silently made sheddable.
+_MEMORY_GUARDED_PATHS = frozenset(
+    {
+        "/api/v1/playback/init",
+        "/api/v1/playback/media",
+        "/api/v1/playback/download",
+        "/api/proxy/manifest",
+        "/api/proxy/segment",
+    }
+)
+
+
+@app.before_request
+def _telemetry_before_request():
+    telemetry.begin_request()
+    if request.method == "OPTIONS":
+        return None
+    if request.path in _MEMORY_GUARDED_PATHS and telemetry.over_budget():
+        return _json_error(
+            "The server is at its memory limit. Try again shortly.",
+            503,
+            code="RESOURCE_LIMIT_EXCEEDED",
+        )
+    return None
+
+
+@app.after_request
+def _telemetry_after_request(response):
+    telemetry.end_request(response.status_code or 500)
     return response
 
 
@@ -675,94 +685,261 @@ def search_suggest():
 def health_check():
     return {"status": "online", "service": "vy-backend"}, 200
 
-@app.route("/api/movies/resolve", methods=["GET", "POST", "OPTIONS"])
-def resolve_movie():
+# ---------------------------------------------------------------------------
+# Playback: one init call; every downstream leg is an opaque handle
+#
+# `/api/v1/playback/init` is the only route that resolves a title. It answers
+# with metadata and with same-origin URLs -- a manifest relay, a media relay,
+# a frame redirect, caption tracks, download legs -- each carrying an opaque
+# handle minted by `playback_tokens`. Nothing hereafter hands a client a
+# third-party URL, so the set of hosts this process will ever fetch is decided
+# by server-side resolution alone, and a client cannot turn any playback leg
+# into a general-purpose fetcher.
+#
+# The metadata half is deliberately the same answer `/api/movies/resolve`
+# used to give (exact-title matching, redirect refusal, season/episode
+# counts), because those rules exist to stop an unrelated title playing under
+# the right heading -- they belong to resolution wherever it is exposed.
+# ---------------------------------------------------------------------------
+
+
+def _source_format(url: str) -> str:
+    """`"hls"` or `"mp4"` -- what the player must load, by container.
+
+    The only trustworthy signal a URL carries is its path: an `.m3u8` needs
+    hls.js, anything else is progressive and goes straight to a media element.
+    This is reported to the client as `format` and is authoritative there --
+    the relay URLs issued below are opaque paths, so the client must stop
+    inferring format from URL shape.
+    """
+    path = urllib.parse.urlparse(url or "").path.lower()
+    return "hls" if path.endswith((".m3u8", ".m3u")) else "mp4"
+
+
+def _play_url(url: str, region: str | None = None) -> tuple[str, str]:
+    """`(same-origin play URL, format)` for a direct media URL.
+
+    HLS goes behind the manifest relay (its segments are rewritten onto the
+    segment relay as the playlist is served); progressive files go behind the
+    media relay, which passes Range through so seeking still works.
+    """
+    if not url:
+        return "", "mp4"
+    if _source_format(url) == "hls":
+        token = playback_tokens.issue(
+            playback_tokens.KIND_PROXY, url, meta={"region": region or ""}
+        )
+        return f"/api/proxy/manifest?token={token}", "hls"
+    token = playback_tokens.issue(
+        playback_tokens.KIND_MEDIA, url, meta={"region": region or ""}
+    )
+    return f"/api/v1/playback/media?token={token}", "mp4"
+
+
+def _frame_url(url: str, region: str | None = None) -> str:
+    """A redirecting frame route for an embed target.
+
+    The embed page is opened *by the browser* following this route's redirect,
+    so the provider still frames exactly the URL it expects -- it simply never
+    crosses our wire as data, and the handle only ever answers `302`.
+    """
+    if not url:
+        return ""
+    token = playback_tokens.issue(
+        playback_tokens.KIND_FRAME, url, meta={"region": region or ""}
+    )
+    return f"/api/v1/playback/frame?token={token}"
+
+
+def _caption_tracks(subtitles, region: str | None = None) -> list[dict]:
+    """Subtitle descriptors with their fetch leg replaced by a caption handle.
+
+    Only the fields the player needs travel: label, language, and our route.
+    The upstream URL stays in the handle's meta; `format` (srt/vtt) does not
+    travel either, because the caption route sniffs the body -- the container
+    hint was only ever there to decide conversion, which is now unconditional.
+    """
+    tracks: list[dict] = []
+    for entry in subtitles or []:
+        if not isinstance(entry, dict):
+            continue
+        url = str(entry.get("url") or "")
+        if not url:
+            continue
+        label = str(entry.get("label") or "").strip()[:80]
+        lang = str(entry.get("lang") or "").strip()[:24]
+        token = playback_tokens.issue(
+            playback_tokens.KIND_CAPTION,
+            url,
+            meta={"label": label, "lang": lang, "region": region or ""},
+        )
+        tracks.append(
+            {
+                "label": label or lang,
+                "lang": lang or "eng",
+                "url": f"/api/v1/playback/captions?track={token}",
+            }
+        )
+    return tracks
+
+
+def _download_filename(title: str, quality: str, url: str) -> str:
+    """Server-derived save name: the title's own words plus the tier.
+
+    The client used to compose this from the raw URL; with no URL at the
+    client, the name is built where the URL still exists. `_safe_download_name`
+    sanitises it for the header at serve time.
+    """
+    ext = os.path.splitext(urllib.parse.urlparse(url).path)[1][:8] or ".mp4"
+    base = (title or "").strip() or "video"
+    return f"{base} ({quality}){ext}" if quality else f"{base}{ext}"
+
+
+def _download_url(url: str, filename: str, region: str | None = None) -> str | None:
+    """A download handle for `url`, or None when this host cannot be downloaded.
+
+    Downloadability is decided here by the same allowlist the relay enforces,
+    because the client can no longer classify a URL it never sees: `null` is
+    the honest answer for a tier the download route would refuse, rather than
+    a handle that 400s when clicked.
+    """
+    try:
+        catalog_lib.validate_archive_url(url, require_download_path=True)
+    except Exception:  # noqa: BLE001 - not downloadable == no handle, not an error
+        return None
+    token = playback_tokens.issue(
+        playback_tokens.KIND_DOWNLOAD, url, meta={"filename": filename, "region": region or ""}
+    )
+    return f"/api/v1/playback/download?token={token}"
+
+
+def _init_inputs() -> tuple[dict | None, tuple | None]:
+    """Read and strictly validate `/api/v1/playback/init` parameters.
+
+    GET carries them in the query string (prefetch, link shares); POST carries
+    a JSON object (the player). Both are folded into one dict and then judged
+    by the same rules, so the two entry points cannot disagree about what is
+    valid. Returns `(params, None)` or `(None, error_response)`.
+    """
+    if request.method == "POST":
+        if request.data and not request.is_json:
+            return None, _json_error("Content-Type must be application/json.", 400)
+        body = request.get_json(silent=True)
+        if body is None and request.data:
+            return None, _json_error("Request body must be valid JSON.", 400)
+        if body is not None and not isinstance(body, dict):
+            return None, _json_error("Request body must be a JSON object.", 400)
+    else:
+        body = {}
+    raw = {key: request.args.get(key) for key in request.args}
+    raw.update(body or {})
+
+    params: dict = {}
+
+    tmdb_raw = raw.get("tmdb_id", raw.get("id"))
+    if tmdb_raw not in (None, ""):
+        parsed = _parse_tmdb_id(tmdb_raw)
+        if parsed is None:
+            return None, _json_error("Invalid ID", 400)
+        params["tmdb_id"] = parsed
+
+    title = str(raw.get("title") or "").strip()
+    if len(title) > 300:
+        return None, _json_error("title must be 300 characters or fewer.", 400)
+    params["title"] = title
+    if not params.get("tmdb_id") and not title:
+        return None, _json_error("Provide a title or a TMDB id.", 400)
+
+    media_type = raw.get("media_type", raw.get("type"))
+    media_type = "movie" if media_type in (None, "") else str(media_type).strip().lower()
+    if media_type not in ("movie", "tv"):
+        return None, _json_error("media_type must be 'movie' or 'tv'.", 400)
+    params["media_type"] = media_type
+
+    for name in ("season", "episode"):
+        value = raw.get(name)
+        if value in (None, ""):
+            params[name] = 1
+            continue
+        try:
+            number = int(str(value).strip())
+        except (TypeError, ValueError):
+            return None, _json_error(f"{name} must be a positive integer.", 400)
+        if number < 1 or number > 9999:
+            return None, _json_error(f"{name} must be between 1 and 9999.", 400)
+        params[name] = number
+
+    year = raw.get("year")
+    if year in (None, ""):
+        params["year"] = None
+    else:
+        try:
+            parsed_year = int(str(year).strip())
+        except (TypeError, ValueError):
+            return None, _json_error("year must be a number.", 400)
+        if parsed_year < 1870 or parsed_year > 2200:
+            return None, _json_error("year must be between 1870 and 2200.", 400)
+        params["year"] = parsed_year
+
+    refresh = raw.get("refresh")
+    if refresh in (None, False, "", 0, "0", "false", "no"):
+        params["refresh"] = False
+    elif refresh is True or refresh in ("1", "true", "yes") or refresh == 1:
+        params["refresh"] = True
+    else:
+        return None, _json_error("refresh must be a boolean.", 400)
+
+    return params, None
+
+
+@app.route("/api/v1/playback/init", methods=["GET", "POST", "OPTIONS"])
+def playback_init():
+    """Resolve a title once: metadata, provider chain, and tokenised legs.
+
+    Answers 200 with `available` and an ordered chain when every provider was
+    walked and none could serve the title (the client shows its own state and
+    keeps the chain), 404 `TITLE_NOT_FOUND` only when the title does not
+    exist, and 404 `PROVIDERS_EXHAUSTED` when the address itself resolved but
+    no source did. Both 404s carry `code` so the client never has to infer a
+    decision from prose.
+    """
     if request.method == "OPTIONS":
         return ("", 204)
 
-    payload = request.get_json(silent=True) or {} if request.method == "POST" else {}
+    params, error = _init_inputs()
+    if error is not None:
+        return error
 
-    # `silent=True` only suppresses the *parse* failure. A syntactically valid
-    # body that is not an object -- "x", [1,2], 5 -- stays truthy and then
-    # .get() raises, turning a bad request into a 500. Reject it as a 400.
-    if not isinstance(payload, dict):
-        return _json_error("Request body must be a JSON object.", 400)
+    tmdb_id = params.get("tmdb_id")
+    title = params["title"]
+    media_type = params["media_type"]
+    season = params["season"]
+    episode = params["episode"]
+    year = params["year"]
+    refresh = params["refresh"]
 
-    title = str(payload.get("title") or request.args.get("title", "")).strip()
-    tmdb_id = payload.get("id") or payload.get("tmdb_id") or request.args.get("id")
-    media_type = payload.get("media_type") or payload.get("type")
-
-    try:
-        season = int(payload.get("season") or request.args.get("season") or 1)
-    except (ValueError, TypeError):
-        season = 1
-
-    try:
-        episode = int(payload.get("episode") or request.args.get("episode") or 1)
-    except (ValueError, TypeError):
-        episode = 1
-
-    year = payload.get("year") or request.args.get("year")
-
-    # Nothing to look up. Previously this fell through to the metadata lookup
-    # and answered 404 "Could not find metadata for ''" -- the wrong class for a
-    # request that never named a title, and a message that told the client
-    # nothing about what it got wrong.
-    if not title and not tmdb_id:
-        return _json_error("Provide a title or a TMDB id.", 400)
-
-    # If we have a TMDB ID, fetch details directly.
-    #
-    # The id is the lookup, and it is exact: TMDB answers for precisely one
-    # title, so there is nothing to match and nothing to fall back to. An id
-    # that will not parse is not an id -- a slug, an IMDb string, a title in
-    # the wrong field -- and it is dropped here so the title below, which does
-    # have matching rules, is what the request is judged on.
-    if tmdb_id:
-        try:
-            tmdb_id = int(tmdb_id)
-        except (ValueError, TypeError):
-            tmdb_id = None
-
+    # A title without an id is a search, and a search answers with ranked
+    # guesses -- the first of them is an answer only when it names the same
+    # film. Exact match on the normalised title, same year-trust rule as the
+    # direct catalog; nothing matching means nothing to play, and that is a
+    # 404 rather than the top of somebody else's list.
     if not tmdb_id and title:
-        # A search returns ranked guesses, and the first of them is an answer
-        # only when it names the same film. This used to take
-        # `valid_results[0]` unconditionally, so a title TMDB did not carry --
-        # "No Greater Love" -- resolved to whatever TMDB ranked first for it,
-        # and the viewer played an unrelated film under the right heading with
-        # no way to tell the swap had happened.
-        #
-        # Matching is exact on the normalised title (case, punctuation, years
-        # and stopwords aside) and then passes the same year trust check the
-        # direct catalog uses, so a same-named film from another year is not a
-        # match either. Nothing matching means nothing to play, and the answer
-        # to that is a 404 rather than the top of somebody else's list.
         results = tmdb.search_multi(title)
         valid_results = [r for r in results if r.get("media_type") in ("movie", "tv")]
         top = _exact_title_match(valid_results, title, year)
-        if top is not None:
-            tmdb_id = top["id"]
-            media_type = top.get("media_type", "movie")
-            title = top.get("title") or top.get("name") or title
-            year = year or (top.get("release_date") or top.get("first_air_date") or "")[:4]
+        if top is None:
+            return _json_error(
+                f"Could not find metadata for '{title}'", 404, code="TITLE_NOT_FOUND"
+            )
+        tmdb_id = top["id"]
+        media_type = top.get("media_type") or media_type
+        title = top.get("title") or top.get("name") or title
+        year = year or (top.get("release_date") or top.get("first_air_date") or "")[:4] or None
 
-    if not tmdb_id:
-        return _json_error(
-            f"Could not find metadata for '{title}'",
-            404,
-            code="TITLE_NOT_FOUND",
-        )
-
-    if not media_type:
-        media_type = "movie"
-
-    # Fetch full metadata from TMDB
     details = tmdb.fetch_media_details(tmdb_id, media_type)
     if not details:
         return _json_error(
-            f"Could not fetch details for '{title}'",
-            404,
-            code="TITLE_NOT_FOUND",
+            f"Could not fetch details for '{title}'", 404, code="TITLE_NOT_FOUND"
         )
     # TMDB can answer a lookup with a different id than the one asked for (a
     # redirect on a merged or replaced entry). The request named one title; a
@@ -770,33 +947,21 @@ def resolve_movie():
     # index-0 fallback above.
     if str(details.get("id")) != str(tmdb_id):
         return _json_error(
-            f"Could not find metadata for '{title}'",
-            404,
-            code="TITLE_NOT_FOUND",
+            f"Could not find metadata for '{title}'", 404, code="TITLE_NOT_FOUND"
         )
 
     if media_type == "tv":
         seasons_count = details.get("number_of_seasons", 1)
-        # Get episode count for requested season
         season_details = _tmdb_get(f"/tv/{tmdb_id}/season/{season}", {}) or {}
-        episodes = season_details.get("episodes", [])
-        episodes_count = len(episodes) if episodes else 10
-
-        # Use year from show's first air date if not provided
-        if not year and details.get("release_date"):
-            year = details["release_date"][:4]
-
-        # Series used to be excluded from the direct catalog outright, by
-        # handing the resolver an empty title. An episode is addressable now --
-        # Archive.org indexes public-domain shows one item per episode -- so the
-        # show's own name is passed instead.
+        episodes_list = season_details.get("episodes", [])
+        episodes_count = len(episodes_list) if episodes_list else 10
+        if not year and details.get("first_air_date"):
+            year = details["first_air_date"][:4]
+        # The show's name identifies the archive query; the year must not
+        # constrain it -- the item carrying S01E07 is dated to that episode's
+        # own air year, so `accept_candidate` would reject the correct file for
+        # every episode after the first.
         title_for_direct = details.get("name") or details.get("original_name") or title
-        # ...but the year is not. `year` here is the show's first-air year, while
-        # the item carrying S01E07 is dated to that episode's own air year, and
-        # `accept_candidate` compares the two directly. Feeding it the show's
-        # start year would reject the correct file for every episode after the
-        # first, so the constraint is dropped for series and the episode token in
-        # the title carries the identity instead.
         year_for_direct = None
     else:
         seasons_count = 1
@@ -806,14 +971,19 @@ def resolve_movie():
         title_for_direct = details.get("title") or title
         year_for_direct = year
 
-    # One provider chain, walked once, for both media types.
-    #
-    # This used to hardcode a single `vidsrc.me` embed and report the title as
-    # playable regardless of whether that host was up. The client had no way to
-    # know otherwise, so "provider down" surfaced as a dead player with a
-    # "Try another source" button. `resolve_direct` now tries the direct catalog
-    # first and then every configured embed in priority order, and only comes
-    # back empty when all of them are exhausted.
+    # Where the viewer is -- the seed for default tracks, reported on every
+    # answer so the player opens on the right audio and subtitle language
+    # instead of whichever one hls.js lists first. A signed-in profile's saved
+    # language wins over the geo seed: the viewer already told us.
+    locale = geo_locale.detect_locale(request)
+    language = locale["language"]
+    user = _auth_user()
+    if user:
+        profile = _resolve_profile(user)
+        if isinstance(profile, dict) and profile.get("preferred_language"):
+            language = str(profile["preferred_language"])
+    region = locale["country"] or ""
+
     resolution = stream_providers.resolve_direct(
         _direct_source_for,
         tmdb_id=tmdb_id,
@@ -822,28 +992,126 @@ def resolve_movie():
         year=year_for_direct,
         season=season,
         episode=episode,
-        refresh=False,
+        refresh=refresh,
     )
-    direct = resolution.winner.payload if resolution.winner and resolution.winner.kind == "direct" else None
-    stream_url = resolution.url
 
-    # The candidate chain is what the client walks after this, so its shape is
-    # part of the contract rather than a dump of internals: `name` / `url` /
-    # `is_embed`, winner first.
-    #
-    # A resolution can come back empty -- every provider benched, every probe
-    # timed out, the embed budget spent -- and an empty `providers` array would
-    # leave the client with nothing to try, so it can only render a dead end.
-    # For an addressable target the planned chain is emitted instead: every
-    # configured provider's URL in priority order. `available` is already a
-    # separate field and is what tells the client nothing was verified.
-    provider_candidates = resolution.candidate_entries()
-    if not provider_candidates:
-        provider_candidates = stream_providers.planned_candidate_entries(
-            tmdb_id, media_type, season, episode
+    if not resolution.ok:
+        # 404 with an explicit code, not 503: every provider was walked and
+        # none could serve the title, so re-asking only re-walks what just
+        # failed. The planned chain is still handed back -- as frame handles,
+        # never raw URLs -- so a client walking it on its own timer has
+        # something to walk.
+        planned = [
+            {
+                "name": entry["name"],
+                "url": _frame_url(entry["url"], region),
+                "is_embed": True,
+            }
+            for entry in stream_providers.planned_candidate_entries(
+                tmdb_id, media_type, season, episode
+            )
+            if entry.get("url")
+        ]
+        return _json_error(
+            "No active stream sources",
+            404,
+            code="PROVIDERS_EXHAUSTED",
+            available=False,
+            providers=planned,
+            provider_attempts=resolution.attempts,
         )
 
-    # Extract runtime as number
+    winner = resolution.winner
+    direct = winner.payload if winner.kind == "direct" else None
+    is_embed = resolution.is_embed
+
+    streams: list[dict] = []
+    mirrors: list[dict] = []
+    sources: list[str] = []
+    subtitles: list[dict] = []
+
+    if direct:
+        # One handle per raw URL, not per call: the same file named by the
+        # default stream and by its own quality tier must produce one token,
+        # or the client's URL Set sees two distinct strings and offers the
+        # viewer the identical source twice under different labels.
+        play_cache: dict[str, tuple[str, str]] = {}
+
+        def cached_play(raw: str) -> tuple[str, str]:
+            if raw not in play_cache:
+                play_cache[raw] = _play_url(raw, region)
+            return play_cache[raw]
+
+        primary_url, primary_format = cached_play(direct.get("stream_url") or "")
+        if primary_url:
+            sources.append(primary_url)
+        seen_sources = {primary_url}
+        for index, tier in enumerate(direct.get("streams") or []):
+            tier_url = str(tier.get("url") or "")
+            if not tier_url:
+                continue
+            play, fmt = cached_play(tier_url)
+            if not play:
+                continue
+            quality = str(tier.get("quality") or "")
+            try:
+                height = int(tier.get("height") or 0)
+            except (TypeError, ValueError):
+                height = 0
+            try:
+                size = int(tier.get("size") or 0)
+            except (TypeError, ValueError):
+                size = 0
+            streams.append(
+                {
+                    "quality": quality,
+                    "height": height,
+                    "width": tier.get("width") or 0,
+                    "size": size,
+                    "url": play,
+                    "format": fmt,
+                    "download_url": _download_url(
+                        tier_url, _download_filename(title, quality, tier_url), region
+                    ),
+                }
+            )
+            if play not in seen_sources:
+                seen_sources.add(play)
+                sources.append(play)
+            if tier_url != (direct.get("stream_url") or ""):
+                mirrors.append(
+                    {"name": f"Server {index + 1}", "url": play}
+                )
+        subtitles = _caption_tracks(direct.get("subtitles"), region)
+    else:
+        primary_url, primary_format = _frame_url(resolution.url, region), "frame"
+
+    # The embed failover chain, as frame handles. Direct entries a resolution
+    # may include are dropped on purpose: every direct candidate is already in
+    # `sources`/`mirrors`, and this array is what the embed player walks --
+    # a progressive file here would end up in an <iframe>.
+    providers = [
+        {
+            "name": entry["name"],
+            "url": _frame_url(entry["url"], region),
+            "is_embed": True,
+        }
+        for entry in resolution.candidate_entries()
+        if entry.get("is_embed") and entry.get("url")
+    ]
+    if not providers:
+        providers = [
+            {
+                "name": entry["name"],
+                "url": _frame_url(entry["url"], region),
+                "is_embed": True,
+            }
+            for entry in stream_providers.planned_candidate_entries(
+                tmdb_id, media_type, season, episode
+            )
+            if entry.get("url")
+        ]
+
     runtime = details.get("runtime")
     if runtime is not None:
         try:
@@ -851,368 +1119,707 @@ def resolve_movie():
         except (ValueError, TypeError):
             runtime = None
 
-    # Extract director/cast from details (may come from credits append_to_response)
     director = details.get("director")
     cast = details.get("cast", [])
     if not director and details.get("credits"):
         director, cast = tmdb.extract_director_and_cast(details.get("credits", {}))
-    genres = details.get("genres", [])
     country = details.get("country")
-    language = details.get("language")
-    if not country or not language:
+    language_detail = details.get("language")
+    if not country or not language_detail:
         extracted_country, extracted_language = tmdb.extract_country_and_language(details)
         country = country or extracted_country
-        language = language or extracted_language
+        language_detail = language_detail or extracted_language
 
-    movie_data = {
+    movie = {
         "id": str(tmdb_id),
         "title": details.get("title") or title,
-        "stream_url": stream_url,
-        # `available` is now a real answer from the provider chain rather than a
-        # constant. The metadata is still valid, so an unplayable title is
-        # reported in-band (a 200 with `available: false`) and the client shows
-        # its own state; a 404 here is reserved for "this title does not exist".
-        "is_available": resolution.ok,
+        "stream_url": primary_url,
+        "format": primary_format,
+        "is_embed": is_embed,
         "available": resolution.ok,
-        "is_embed": resolution.is_embed,
-        "providers": provider_candidates,
+        "provider": winner.id,
+        "sources": sources,
+        "mirrors": mirrors,
+        "streams": streams,
+        "subtitles": subtitles,
+        "providers": providers,
         "year": str(year) if year else "",
         "media_type": media_type,
         "season": season if media_type == "tv" else 1,
         "episode": episode if media_type == "tv" else 1,
         "seasons": seasons_count,
         "episodes_per_season": episodes_count,
-        "poster_url": details.get("poster_url", "") or (direct or {}).get("poster_url", ""),
+        "poster_url": details.get("poster_url", ""),
         "backdrop_url": details.get("backdrop_url", ""),
         "overview": details.get("overview", ""),
         "vote_average": details.get("vote_average"),
         "popularity": details.get("popularity"),
-        "genres": genres,
+        "genres": details.get("genres", []),
         "runtime": runtime,
         "director": director,
         "cast": cast,
         "country": country,
-        "language": language,
-        "release_date": details.get("release_date"),
+        "language": language_detail,
+        "release_date": details.get("release_date")
+        or details.get("first_air_date"),
     }
-
-    if direct:
-        movie_data["streams"] = direct.get("streams", [])
-        if direct.get("subtitles"):
-            movie_data["subtitles"] = direct["subtitles"]
-        movie_data["topics"] = direct.get("topics", [])
-        if direct.get("_downloads") is not None:
-            movie_data["_downloads"] = direct["_downloads"]
-        if direct.get("_addeddate"):
-            movie_data["_addeddate"] = direct["_addeddate"]
-
-    # Include full episode list for TV shows
     if media_type == "tv" and details.get("episodes"):
-        movie_data["episodes"] = details["episodes"]
+        movie["episodes"] = details["episodes"]
 
-    # Both endpoints that hand the player a source answer with the locale the
-    # track defaults should be built from. `/api/movies/resolve` is what a cold
-    # open calls first and `/api/get-stream` is what a re-resolve returns, so
-    # putting it only on one of them meant the default tracks were right on
-    # whichever path happened to run and wrong on the other.
-    locale = geo_locale.detect_locale(request)
+    # Count the session against the primary leg, and against the viewer's
+    # country for the regional view. The token is what later media/segment
+    # requests touch, so "active" means bytes are actually flowing.
+    primary_token = _token_of(primary_url)
+    if primary_token:
+        telemetry.open_stream(
+            primary_token,
+            user_id=user["id"] if user else None,
+            region=region or None,
+        )
+    telemetry.record_event("playback_init")
+
     return jsonify(
         {
-            "movie": movie_data,
+            "success": True,
             "exact": True,
-            "available": resolution.ok,
-            "language": locale["language"],
-            "country": locale["country"],
+            "available": True,
+            "format": primary_format,
+            "provider": winner.id,
+            "language": language,
+            "country": region,
+            "movie": movie,
         }
     )
 
 
-@app.route("/api/get-stream", methods=["GET", "OPTIONS"])
-def get_stream_direct():
+@app.route("/api/movies/resolve", methods=["GET", "POST", "OPTIONS"])
+def resolve_movie():
+    """Compatibility alias for /api/v1/playback/init.
+
+    The web client still calls this path from three places -- the stream
+    resolver (`api.ts resolveStream`), the Watch page's metadata fetch, and
+    the details sheet's warm resolve -- with the pre-v1 field names
+    (`id`/`title`/`year`/`season`/`episode`), which `_init_inputs` already
+    accepts as aliases. The v1 response is a strict superset of the old
+    contract (`movie` + `exact` + `language` are all present), so the same
+    handler answers both paths and nothing on the client needs to change to
+    stop the 404 this route's removal caused on every cold open.
+    """
+    return playback_init()
+
+
+def _token_of(play_url: str) -> str | None:
+    """The handle inside one of our own playback URLs, or None.
+
+    Used only on URLs this process just minted, so the query string is known
+    to carry `token=` (proxy/media/frame/download) or `track=` (captions).
+    """
+    if not play_url:
+        return None
+    try:
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(play_url).query)
+    except ValueError:
+        return None
+    for key in ("token", "track"):
+        values = query.get(key)
+        if values and values[0]:
+            return values[0]
+    return None
+
+# ---------------------------------------------------------------------------
+# The remaining playback legs. Each is a thin handle reader -- the handle is
+# the whole authorisation: it names one URL, carries the headers it needs
+# server-side, and expires on its own. None of them accepts a URL from the
+# caller, so none of them can be pointed anywhere new.
+# ---------------------------------------------------------------------------
+
+
+@app.route("/api/v1/playback/frame", methods=["GET", "OPTIONS"])
+def playback_frame():
+    """Redirect to the embed page the frame handle names.
+
+    A redirect rather than a body, for three reasons that all matter: the
+    browser ends up framing the provider's own URL from its own address bar,
+    so referer checks and X-Frame-Options see what they expect; the URL never
+    crosses our wire as data -- we answer handles, not URLs, from here on; and
+    the handle expires on its own, so a leaked frame URL stops resolving while
+    a leaked embed URL would live forever in a client bundle.
+    """
     if request.method == "OPTIONS":
         return ("", 204)
 
-    tmdb_id = request.args.get("tmdb_id") or request.args.get("id")
-    media_type = request.args.get("media_type", "movie")
-    season = request.args.get("season", 1)
-    episode = request.args.get("episode", 1)
-    refresh = request.args.get("refresh", "") in ("1", "true", "yes")
-
-    if not tmdb_id:
-        return _json_error("Invalid ID", 400)
-
-    parsed = _parse_tmdb_id(tmdb_id)
-    if parsed is None:
-        return _json_error("Invalid ID", 400)
-    tmdb_id = parsed
-
-    media_type = _normalize_media_type(media_type)
-    is_tv = media_type == "tv"
-
-    # Direct-catalog lookup needs a title, and the id alone does not carry one.
-    # A TMDB failure here is not fatal: the embed chain below does not need a
-    # title, so a title-less request still resolves rather than 404-ing on a
-    # metadata outage the player could have worked around.
-    title = ""
-    year = None
-    if not is_tv:
-        details = _tmdb_get(f"/movie/{tmdb_id}", {}) or {}
-        title = details.get("title") or ""
-        if details.get("release_date"):
-            year = details["release_date"][:4]
-
-    try:
-        episode_number = max(1, int(episode))
-    except (TypeError, ValueError):
-        episode_number = 1
-    try:
-        season_number = max(1, int(season))
-    except (TypeError, ValueError):
-        season_number = 1
-
-    # Server-side failover. Every configured provider is tried in priority
-    # order -- direct catalog first, then each embed -- and only when all of
-    # them are unreachable or empty does this answer "unavailable". The client
-    # no longer has to ask for a second source.
-    resolution = stream_providers.resolve_direct(
-        _direct_source_for,
-        tmdb_id=tmdb_id,
-        media_type=media_type,
-        title=title,
-        year=year,
-        season=season_number,
-        episode=episode_number,
-        refresh=refresh,
-    )
-
-    if not resolution.ok:
-        # 404 with an explicit `code`, not 503.
-        #
-        # 503 is the memory guard's status: `/api` answers 503 when the shared
-        # byte ceiling trips, so exhaustion and "we are shedding load" were the
-        # same number and the client could not tell a final answer from a
-        # transient one. The two are now distinguishable without a second
-        # round-trip -- `code` names this case and the guard keeps 503.
-        #
-        # The distinction that matters to the viewer is unchanged: this is a
-        # *decision*, not an outage. Every one of the six providers (the direct
-        # catalog plus the five embeds) was walked and none could serve the
-        # title, so re-asking can only re-walk providers that just failed.
-        #
-        # The chain is still returned, unresolved but in priority order, so a
-        # client walking it on its own timer has something to walk.
+    token = request.args.get("token") or ""
+    entry = playback_tokens.resolve(token, playback_tokens.KIND_FRAME)
+    if entry is None:
         return _json_error(
-            "No active stream sources",
-            404,
-            code="PROVIDERS_EXHAUSTED",
-            available=False,
-            providers=stream_providers.planned_candidate_entries(
-                tmdb_id, media_type, season_number, episode_number
-            ),
-            provider_attempts=resolution.attempts,
+            "Unknown or expired stream token", 400, code="TOKEN_INVALID"
         )
-
-    winner = resolution.winner
-    direct = winner.payload if winner.kind == "direct" else None
-    candidates = resolution.candidate_urls()
-
-    # Quality variants of the winning direct source are the player's mirrors;
-    # the remaining providers are the failover chain, ordered after them.
-    mirrors: list[dict] = []
-    sources: list[str] = []
-    if direct:
-        streams = direct.get("streams") or []
-        default = direct.get("stream_url", "")
-        mirrors = [
-            {"name": f"Server {index + 1}", "url": source["url"]}
-            for index, source in enumerate(streams)
-            if source.get("url") and source["url"] != default
-        ]
-        for url in [default] + [s.get("url", "") for s in streams] + candidates:
-            if url and url not in sources:
-                sources.append(url)
-    else:
-        # Embed failover: the chain is the source list, and each entry is also
-        # offered as a named mirror so the player can rotate without a resolve.
-        sources = list(candidates)
-        mirrors = [
-            {"name": candidate.label, "url": candidate.url}
-            for candidate in resolution.candidates
-        ]
-
-    locale = geo_locale.detect_locale(request)
-
-    payload = {
-        "success": True,
-        "available": True,
-        "activeSource": resolution.url,
-        "sources": sources,
-        "mirrors": mirrors,
-        "is_embed": resolution.is_embed,
-        "provider": winner.id,
-        # Where the viewer is, so the player can open on the right audio and
-        # subtitle track instead of whichever one hls.js happens to list first.
-        # A seed only -- the switcher menus override it, and an undetermined
-        # country still yields a language rather than an absent field.
-        "language": locale["language"],
-        "country": locale["country"],
-    }
-    # The player reads tracks from whichever payload it was handed, and
-    # `/api/get-stream` is what a re-resolve actually returns. Omitting
-    # subtitles here is what made the track list vanish on refresh even
-    # though `/api/movies/resolve` reported it.
-    if direct and direct.get("subtitles"):
-        payload["subtitles"] = direct["subtitles"]
-    # Pointed at, not inlined. The quality ladder and the audio renditions need a
-    # second bounded upstream fetch, and resolve is on the critical path to first
-    # frame -- so the player asks for this only once it is already playing, and
-    # a slow manifest costs the selector its contents rather than the video.
-    payload["manifest_endpoint"] = "/api/v1/stream/manifest"
-    payload["manifest_params"] = {
-        "tmdb_id": tmdb_id,
-        "type": media_type,
-        "title": title,
-        "season": season_number,
-        "episode": episode_number,
-    }
-    return jsonify(payload)
+    telemetry.record_event("frame")
+    # For an embed-only title this handle *is* the primary leg, so the view it
+    # opened at init is kept alive by the viewer actually walking into the
+    # provider; for a direct title it is an unplayed failover candidate and
+    # touch is a no-op until opened.
+    telemetry.touch_stream(token)
+    response = redirect(entry["url"], code=302)
+    # The provider's URL must not sit in a shared cache or in history.
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
-@app.route("/api/movies/stream", methods=["GET", "OPTIONS"])
-def stream_relay():
-    """Same-origin relay for Archive.org movie bytes (CORS + range safe)."""
+@app.route("/api/v1/playback/captions", methods=["GET", "OPTIONS"])
+def playback_captions():
+    """Serve the handle's caption file as sanitised, same-origin WebVTT.
+
+    A `<track>` element fetches its `src` with CORS, and archive download nodes
+    return neither `Access-Control-Allow-Origin` nor a WebVTT content type --
+    pointing a track straight at them fails silently in the browser, so the UI
+    reports a subtitle as selected while no cue ever fires. Fetching here is
+    what makes subtitles actually play, and it is also where the body is
+    sanitised: cue payload overrides and unknown tags are stripped before the
+    text reaches the player, because this content is untrusted like any other
+    body we relay.
+
+    Upstream may be SubRip or WebVTT and may be mislabelled either way, so the
+    body is sniffed and parsed uniformly -- `.srt` cannot render in a browser
+    at all, and a `.vtt` served as `text/plain` still needs the right type on
+    this origin. Host and size limits are enforced by `fetch_bounded_text`,
+    whose allowlist is the same one the media relay uses.
+    """
     if request.method == "OPTIONS":
         return ("", 204)
 
-    url = request.args.get("url", "").strip()
-    if not url:
-        return jsonify({"error": "Missing url parameter"}), 400
+    token = request.args.get("track") or ""
+    entry = playback_tokens.resolve(token, playback_tokens.KIND_CAPTION)
+    if entry is None:
+        return _json_error(
+            "Unknown or expired stream token", 400, code="TOKEN_INVALID"
+        )
+    url = entry["url"]
+    meta = entry.get("meta") or {}
+    region = meta.get("region") or None
+
+    try:
+        text = catalog_lib.fetch_bounded_text(
+            url, SUBTITLE_TIMEOUT_SECONDS, SUBTITLE_MAX_BYTES
+        )
+    except catalog_lib.ArchiveUrlRejected as error:
+        # Keyed on the exception type, not on wording: a refusal worded
+        # differently (a scheme, a port, a credential in the authority) used to
+        # surface as a 502, which reads as archive.org being down rather than
+        # as a request this server declined.
+        return _json_error(str(error), 400)
+    except ValueError as error:
+        # The byte cap: upstream would not hand over the whole file, so this
+        # is an upstream failure rather than a bad request.
+        return _json_error(str(error), 502)
+    except urllib.error.HTTPError as exc:
+        return _json_error(f"Caption upstream returned {exc.code}", 502)
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return _json_error("Caption upstream unavailable", 502)
+
+    try:
+        vtt = caption_engine.convert(text)
+    except caption_engine.CaptionError:
+        # An asset that parses to no cues is not a caption track. Serving the
+        # raw text anyway would render nothing while the UI keeps showing the
+        # track as available; a 502 lets the player drop the track honestly.
+        return _json_error("Caption asset has no playable cues", 502)
+
+    telemetry.record_event("caption")
+    telemetry.record_bytes(len(vtt), region)
+    telemetry.touch_stream(token, count=len(vtt))
+
+    response = Response(vtt, mimetype="text/vtt")
+    response.headers["Content-Type"] = "text/vtt; charset=utf-8"
+    # Cues are immutable for a given archive item, but the upstream node
+    # rotates; a short shared cache absorbs repeated seeks without pinning
+    # stale data.
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return response
+
+
+@app.route("/api/v1/playback/media", methods=["GET", "OPTIONS"])
+def playback_media():
+    """Relay the handle's progressive bytes: same-origin, range-safe.
+
+    The bytes come through this origin so the player gets `Access-Control-
+    Allow-Origin` and a `Range` that the archive node actually honours --
+    seeking a cross-origin file without both is a full re-download or a dead
+    scrubber. Range is passed through exactly as the browser sent it, and the
+    upstream's status (200 or 206) and Content-Range come back unchanged, so
+    the media element sees one honest, seekable resource.
+
+    Only `open_archive_stream`'s allowlisted hosts are reachable here, checked
+    per request -- the handle says which file, the allowlist says whether this
+    server may serve it at all.
+    """
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    token = request.args.get("token") or ""
+    entry = playback_tokens.resolve(token, playback_tokens.KIND_MEDIA)
+    if entry is None:
+        return _json_error(
+            "Unknown or expired stream token", 400, code="TOKEN_INVALID"
+        )
+    url = entry["url"]
+    region = entry.get("meta", {}).get("region") or None
 
     try:
         status, headers, body = catalog_lib.open_archive_stream(
             url, request.headers.get("Range")
         )
     except ValueError as error:
-        return jsonify({"error": str(error)}), 400
+        return _json_error(str(error), 400)
     except Exception as error:  # noqa: BLE001 - upstream failure is not ours
-        return jsonify({"error": f"Stream unavailable: {error}"}), 502
+        return _json_error(f"Stream unavailable: {error}", 502)
 
-    response = Response(body or "", status=status)
+    telemetry.record_event("media")
+
+    def counted():
+        sent = 0
+        try:
+            for chunk in body:
+                sent += len(chunk)
+                yield chunk
+        finally:
+            if sent:
+                telemetry.record_bytes(sent, region)
+                telemetry.touch_stream(token, count=sent)
+
+    response = Response(counted(), status=status)
     for key, value in headers.items():
         response.headers[key] = value
-    response.headers["Access-Control-Allow-Origin"] = "*"
+    # Whatever CORS the upstream happened to send is not ours to pass on; the
+    # shared hook re-adds the one allowlisted answer if any applies.
+    response.headers.pop("Access-Control-Allow-Origin", None)
+    # CORS is the shared hook's job (allowlist-exact), not a wildcard: see the
+    # CORS section. Range headers still need exposing, which the hook does.
     response.headers["Accept-Ranges"] = "bytes"
     response.headers["Cache-Control"] = "public, max-age=3600"
     return response
 
 
-def _manifest_inventory(entry: dict | None, original_language: str | None = None) -> dict:
-    """Quality/audio inventory for one resolved direct source.
+# ---------------------------------------------------------------------------
+# Locale: what language to play in, what language to caption in, which region
+# the viewer is in. Read (GET) without a session -- a signed-out visitor still
+# starts somewhere; written (POST) only to a profile, because a choice with
+# nowhere to live is a setting that silently vanishes on reload.
+# ---------------------------------------------------------------------------
 
-    Two very different sources have to answer the same question -- "what can the
-    player offer?" -- so both shapes are normalised here.
-
-    An HLS master is read for real: its ladder and its `#EXT-X-MEDIA` audio
-    renditions are parsed server-side, because the English dub of a foreign
-    release exists nowhere else. A progressive MP4 has no renditions at all, so
-    its file tiers from the archive listing are reported as variants with a
-    single (empty) audio list -- which is the truth, and is why the player must
-    treat an absent audio list as "no switcher" rather than as an error.
-    """
-    if not entry:
-        return {"variants": [], "audio": [], "subtitles": [], "source": None}
-
-    stream_url = entry.get("stream_url") or ""
-    if stream_url and ".m3u8" in urllib.parse.urlparse(stream_url).path.lower():
-        inventory = catalog_lib.fetch_hls_master(stream_url, original_language)
-        if inventory is not None:
-            inventory["source"] = "hls"
-            return inventory
-
-    variants = [
-        {
-            "quality": stream.get("quality"),
-            "height": int(stream.get("height") or 0),
-            "bandwidth": 0,
-            "url": stream.get("url") or "",
-            "size": int(stream.get("size") or 0),
-        }
-        for stream in (entry.get("streams") or [])
-        if stream.get("url")
-    ]
-    variants.sort(key=lambda item: (-item["height"], -item["size"]))
-    return {
-        "variants": variants,
-        "audio": [],
-        "subtitles": entry.get("subtitles") or [],
-        "source": "progressive",
-    }
+#: Config key -> profile column. The API contract is the config vocabulary
+#: (`language`, not `preferred_language`); the profile vocabulary is storage.
+LOCALE_CONFIG_COLUMNS = {
+    "language": "preferred_language",
+    "subtitle_language": "preferred_subtitle",
+    "region": "locale_region",
+}
 
 
-@app.route("/api/v1/stream/manifest", methods=["GET", "OPTIONS"])
-@app.route("/api/movies/manifest", methods=["GET", "OPTIONS"])
-def stream_manifest():
-    """Quality ladder and audio/subtitle renditions for one title.
+@app.route("/api/v1/locale/config", methods=["GET", "POST", "OPTIONS"])
+def locale_config():
+    """Read (GET) or set (POST) the playback locale.
 
-    Separate from `/api/movies/resolve` on purpose. Resolve has to be fast and
-    has to answer even when the source is merely reachable, whereas this answer
-    is only useful when it is complete -- and the cost of making it complete is
-    a second, bounded upstream fetch. Splitting them means a slow manifest costs
-    the quality selector its contents, not the video its playback.
+    GET answers without a session: seed values only (geo IP + Accept-Language
+    + English), with `sources` reported per field so a wrong answer can be
+    told apart from a wrong *saved preference*. POST requires a session and
+    validates strictly -- an unknown language, a three-letter region or a
+    missing value is a 400 naming the field, never a silent ignore, because a
+    setting that half-applies is a setting the viewer cannot trust.
 
-    Answers 200 with empty lists when the title resolves but its manifest cannot
-    be read, because "playable, one quality, no audio switcher" is a state the
-    player handles and an error is not.
+    `subtitle_language` may be `"off"`: turning captions off is a choice with
+    the same standing as picking one, and it is stored the same way.
     """
     if request.method == "OPTIONS":
         return ("", 204)
 
-    parsed = _parse_tmdb_id(request.args.get("tmdb_id"))
-    if parsed is None:
-        return _json_error("Invalid ID", 400)
+    if request.method == "GET":
+        user = _auth_user()
+        profile = _resolve_profile(user) if user else None
+        if profile is False:
+            return _auth_error("Unknown profile.", 404)
+        config = locale_settings.effective_config(
+            request, profile if isinstance(profile, dict) else None
+        )
+        return jsonify({"success": True, "config": config})
 
-    title = (request.args.get("title") or "").strip()
-    if not title:
-        tmdb_type = (request.args.get("type") or "movie").strip().lower()
-        details = _tmdb_get(f"/{tmdb_type}/{parsed}", {}) or {}
-        title = str(details.get("title") or details.get("name") or "").strip()
-    if not title:
-        return _json_error("A title is required to resolve a manifest", 400)
+    user = _auth_user()
+    if not user:
+        return _auth_error("Sign in to save locale preferences.")
+    if request.data and not request.is_json:
+        return _json_error("Content-Type must be application/json.", 400)
+    payload = request.get_json(silent=True)
+    if payload is None:
+        return _json_error("Request body must be a JSON object.", 400)
+    if not isinstance(payload, dict):
+        return _json_error("Request body must be a JSON object.", 400)
 
-    # Optional, and only used to decide whether an English audio rendition is a
-    # dub. Unvalidated beyond being non-empty and short: it is compared against
-    # a parsed manifest and never placed in a URL or a header.
-    original_language = (request.args.get("original_language") or "").strip()[:16] or None
+    unknown = [key for key in payload if key not in LOCALE_CONFIG_COLUMNS]
+    if unknown:
+        return _json_error(
+            f"Unknown config field: {unknown[0]}. "
+            "Expected language, subtitle_language or region.",
+            400,
+        )
+    try:
+        validated = locale_settings.validate_config(payload, field_prefix="config")
+    except ValueError as error:
+        return _json_error(str(error), 400)
+    if not validated:
+        return _json_error(
+            "Provide at least one of language, subtitle_language, region.", 400
+        )
+
+    profile = _resolve_profile(user)
+    if profile is False:
+        return _auth_error("Unknown profile.", 404)
+    if not isinstance(profile, dict):
+        return _auth_error("Create a profile before saving locale preferences.", 400)
+
+    updates = {
+        LOCALE_CONFIG_COLUMNS[key]: value
+        for key, value in validated.items()
+        if key in LOCALE_CONFIG_COLUMNS
+    }
+    store = authdb.get_store()
+    try:
+        updated = store.update_profile(profile["id"], user["id"], **updates)
+    except Exception:
+        app.logger.exception("locale config update failed")
+        return _auth_error("Could not save locale preferences. Try again.", 500)
+
+    config = locale_settings.effective_config(request, updated or profile)
+    return jsonify({"success": True, "config": config})
+
+
+# ---------------------------------------------------------------------------
+# HLS relay: manifests and segments
+#
+# hls.js cannot read a third-party playlist in the browser. The `.m3u8` and the
+# `.ts` chunks behind it are cross-origin, and the origin serving them answers
+# neither CORS nor the Referer check its CDN performs -- so the request dies
+# before a byte reaches the decoder, and no amount of player-side configuration
+# fixes it. Both hops are relayed from here instead: the manifest is fetched
+# with browser-looking headers and every URI line inside it rewritten onto
+# `/api/proxy/segment?token=...&u=...`, and the segments are streamed back
+# through with the same headers attached upstream.
+#
+# Both routes take a proxy handle minted by `/api/v1/playback/init`, never a
+# URL. The handle names one entry playlist; each URI the rewrite walks out to
+# is registered against that handle's host set (`amend_host`, seeded with the
+# entry's host, capped) before it is handed to the client, and the segment
+# route refuses any `u` whose host was not registered that way -- so a handle
+# cannot be pointed at an arbitrary origin even if the token leaks, and no raw
+# upstream URL crosses the wire in either direction. The Referer and User-Agent
+# upstream come from the handle, so the client cannot set them either.
+# ---------------------------------------------------------------------------
+
+#: A stock browser UA. An origin that gates playback on Referer gates it on a
+#: browser-looking User-Agent too, and `python-requests/...` is refused long
+#: before the Referer header is ever read.
+HLS_PROXY_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/126.0.0.0 Safari/537.36"
+)
+#: `(connect, read)` socket timeouts. The read half is the one that matters:
+#: without it a stalled segment pins a worker thread open for as long as the
+#: default -- which is forever.
+HLS_PROXY_TIMEOUT = (5.0, 20.0)
+#: Manifests are kilobytes. Anything past this is not a manifest, and reading
+#: an unbounded body here would be an allocation primitive reachable from a URL
+#: the client supplies.
+HLS_PROXY_MANIFEST_MAX_BYTES = 2 * 1024 * 1024
+#: Read size for the segment relay, so a worker holds one bounded buffer rather
+#: than a whole segment (commonly 2-10 MB) for the length of its transfer.
+HLS_PROXY_CHUNK_BYTES = 256 * 1024
+#: Longest `u=` the segment route will read. Playlists carry paths, not
+#: sentences; anything past this is a forged request or a pathological one and
+#: is refused before the string is joined, resolved or looked up.
+PROXY_URI_MAX_LENGTH = 4096
+
+
+def _hls_proxy_request_headers(referer: str) -> dict[str, str]:
+    headers = {
+        "User-Agent": HLS_PROXY_USER_AGENT,
+        "Accept": "*/*",
+        # Segments are not compressed upstream. Asking for identity also keeps
+        # the bytes this relay forwards identical to the bytes received.
+        "Accept-Encoding": "identity",
+    }
+    if referer:
+        headers["Referer"] = referer
+    return headers
+
+
+def _proxy_entry(token: str | None) -> dict | None:
+    """Resolve a proxy handle, or None when it is absent, foreign or expired.
+
+    The kind argument is the check: a media or download handle that guessed
+    this route answers None, so one token cannot be replayed across legs just
+    because both legs read `token=`.
+    """
+    return playback_tokens.resolve(token or "", playback_tokens.KIND_PROXY)
+
+
+#: `URI=` inside a tag line: the AES key, the fMP4 init segment, an alternate
+#: audio or subtitle rendition. Quoted or bare, and the quoted form may carry a
+#: comma, which is why the quoted alternative comes first.
+_HLS_URI_ATTRIBUTE = re.compile(r'URI=(?:"([^"]*)"|([^,\s]+))')
+
+
+def _rewrite_hls_manifest(manifest: str, manifest_url: str, token: str) -> str:
+    """Point every URI in `manifest` at `/api/proxy/segment?token=...&u=...`.
+
+    Two kinds of reference exist and both have to move, or the playlist parses
+    and playback still stops part-way through:
+
+    - a bare URI line -- a `.ts` chunk, or in a master a nested `.m3u8`;
+    - a `URI=` attribute inside a tag -- the decryption key, the init segment,
+      an alternate audio rendition. These are left alone by a rewriter that
+      only looks at bare lines, and the cost is a master whose video ladder
+      works while its English dub never loads.
+
+    Each reference is resolved against the URL the manifest itself was fetched
+    from first, because playlists routinely carry relative paths and a relative
+    path in the answer would resolve against this origin instead of upstream's.
+    The absolute form is then registered against the handle's host set -- that
+    registration is what permits the later segment fetch -- and only the `u=`
+    form crosses the wire, so the upstream origin itself never becomes data the
+    client holds.
+    """
+    def proxied(uri: str) -> str:
+        absolute = urllib.parse.urljoin(manifest_url, uri)
+        # Registration, not a permission check: an unregistrable host would
+        # still be refused at the segment route by the same host set, so a
+        # ceiling hit stops playback rather than leaking the raw URL here.
+        playback_tokens.amend_host(token, absolute)
+        return "/api/proxy/segment?" + urllib.parse.urlencode(
+            {"token": token, "u": absolute}
+        )
+
+    rewritten: list[str] = []
+    for line in manifest.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            rewritten.append(line)
+            continue
+        if stripped.startswith("#"):
+            if "URI=" in stripped:
+                def replace(match: re.Match, _proxied=proxied) -> str:
+                    uri = match.group(1) if match.group(1) is not None else match.group(2)
+                    if not uri:
+                        return match.group(0)
+                    return f'URI="{_proxied(uri)}"'
+
+                line = _HLS_URI_ATTRIBUTE.sub(replace, line)
+            rewritten.append(line)
+            continue
+        rewritten.append(proxied(stripped))
+    return "\n".join(rewritten)
+
+
+def _read_bounded(upstream, max_bytes: int) -> bytes:
+    """Read an upstream body in chunks, refusing anything over `max_bytes`.
+
+    Raised rather than truncated: a clipped manifest parses part-way and then
+    fails with no visible cause, which is worse than a clean refusal.
+    """
+    chunks: list[bytes] = []
+    size = 0
+    for chunk in upstream.iter_content(64 * 1024):
+        if not chunk:
+            continue
+        size += len(chunk)
+        if size > max_bytes:
+            raise ValueError("upstream body exceeds the size limit")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _hls_manifest_response(manifest_url: str, token: str, raw: bytes) -> Response:
+    manifest = raw.decode("utf-8", errors="replace")
+    response = Response(
+        _rewrite_hls_manifest(manifest, manifest_url, token), status=200
+    )
+    # Set directly rather than through `mimetype`, which would append a charset
+    # hls.js has no use for and which some CDN validators treat as a mismatch.
+    response.headers["Content-Type"] = "application/vnd.apple.mpegurl"
+    # No `Access-Control-Allow-Origin: *` here: the shared CORS hook answers
+    # allowlisted origins exactly and nobody else, the same rule every other
+    # route follows. A wildcard on a relay would let any site on the internet
+    # read bytes through this server.
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def _hls_is_playlist(url: str, content_type: str | None) -> bool:
+    """True when a request routed through the segment relay targets a playlist.
+
+    The manifest rewriter sends *every* URI line to `/api/proxy/segment`, so a
+    master's variant and rendition lines arrive here as playlists. Detecting
+    them is what keeps a master -> variant -> chunk chain on this origin:
+    handing the bytes back raw would leave the variant's own relative chunk
+    paths resolving against this server, where nothing serves them.
+    """
+    path = urllib.parse.urlparse(url).path.lower()
+    if path.endswith(".m3u8") or path.endswith(".m3u"):
+        return True
+    return "mpegurl" in (content_type or "").lower()
+
+
+@app.route("/api/proxy/manifest", methods=["GET", "OPTIONS"])
+def proxy_hls_manifest():
+    """Fetch the handle's entry playlist and rewrite it onto the segment relay.
+
+    The upstream URL and Referer both come from the handle, so this route
+    fetches exactly one host per token and the caller can influence neither.
+    Returns the rewritten playlist: every URI inside it is made absolute
+    against the manifest's own URL, registered against the handle, and pointed
+    at `/api/proxy/segment` with the same token -- so the segments that follow
+    go out with the headers hls.js is not allowed to send, from hosts this
+    handle was built to reach.
+    """
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    token = request.args.get("token") or ""
+    entry = _proxy_entry(token)
+    if entry is None:
+        return _json_error(
+            "Unknown or expired stream token", 400, code="TOKEN_INVALID"
+        )
+    url = entry["url"]
+    referer = entry.get("referer") or ""
 
     try:
-        season = max(1, request.args.get("season", default=1, type=int))
-        episode = max(1, request.args.get("episode", default=1, type=int))
-    except (TypeError, ValueError):
-        season, episode = 1, 1
+        with requests.get(
+            url,
+            headers=_hls_proxy_request_headers(referer),
+            timeout=HLS_PROXY_TIMEOUT,
+            stream=True,
+        ) as upstream:
+            if upstream.status_code != 200:
+                return _json_error(
+                    f"Manifest upstream returned {upstream.status_code}", 502
+                )
+            raw = _read_bounded(upstream, HLS_PROXY_MANIFEST_MAX_BYTES)
+    except requests.Timeout:
+        return _json_error("Manifest upstream timed out", 504)
+    except requests.RequestException:
+        return _json_error("Manifest upstream unavailable", 502)
+    except ValueError:
+        return _json_error("Manifest is too large", 502)
 
-    tmdb_type = (request.args.get("type") or "movie").strip().lower()
-    if tmdb_type not in ("movie", "tv"):
-        tmdb_type = "movie"
+    region = entry.get("meta", {}).get("region") or None
+    telemetry.record_event("manifest")
+    telemetry.record_bytes(len(raw), region)
+    telemetry.touch_stream(token, count=len(raw))
+    return _hls_manifest_response(url, token, raw)
 
-    entry = _direct_source_for(
-        title,
-        year=request.args.get("year", type=int),
-        refresh=request.args.get("refresh") in ("1", "true", "yes"),
+
+@app.route("/api/proxy/segment", methods=["GET", "OPTIONS"])
+def proxy_hls_segment():
+    """Relay one media segment (or nested playlist), on the handle's terms.
+
+    `u` is resolved against the handle's entry URL and then checked against the
+    handle's host set -- the set the rewrite built while serving the playlist.
+    A `u` naming a host that was never part of that playlist's own references
+    is refused, so this route cannot be aimed elsewhere even with a valid
+    token. Bytes stream straight through rather than buffering: a segment is
+    megabytes, several viewers pull several at once, and holding them whole is
+    how a relay turns into an OOM on a box with a fixed memory budget.
+    """
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    token = request.args.get("token") or ""
+    entry = _proxy_entry(token)
+    if entry is None:
+        return _json_error(
+            "Unknown or expired stream token", 400, code="TOKEN_INVALID"
+        )
+
+    raw_uri = (request.args.get("u") or "").strip()
+    if not raw_uri or len(raw_uri) > PROXY_URI_MAX_LENGTH:
+        return _json_error("Missing or invalid u parameter", 400)
+    url = urllib.parse.urljoin(entry["url"], raw_uri)
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        return _json_error("Invalid u parameter", 400)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return _json_error("Invalid u parameter", 400)
+    host = (parsed.hostname or "").lower()
+    if not host or host not in entry.get("hosts", set()):
+        return _json_error(
+            "Host is not part of this stream", 403, code="HOST_NOT_ALLOWED"
+        )
+
+    referer = entry.get("referer") or ""
+    region = entry.get("meta", {}).get("region") or None
+
+    try:
+        upstream = requests.get(
+            url,
+            headers=_hls_proxy_request_headers(referer),
+            timeout=HLS_PROXY_TIMEOUT,
+            stream=True,
+        )
+    except requests.Timeout:
+        return _json_error("Segment upstream timed out", 504)
+    except requests.RequestException:
+        return _json_error("Segment upstream unavailable", 502)
+
+    if upstream.status_code not in (200, 206):
+        upstream.close()
+        return _json_error(f"Segment upstream returned {upstream.status_code}", 502)
+
+    if _hls_is_playlist(url, upstream.headers.get("Content-Type")):
+        try:
+            with upstream:
+                raw = _read_bounded(upstream, HLS_PROXY_MANIFEST_MAX_BYTES)
+        except requests.Timeout:
+            return _json_error("Segment upstream timed out", 504)
+        except requests.RequestException:
+            return _json_error("Segment upstream unavailable", 502)
+        except ValueError:
+            return _json_error("Manifest is too large", 502)
+        telemetry.record_event("manifest")
+        telemetry.record_bytes(len(raw), region)
+        telemetry.touch_stream(token, count=len(raw))
+        return _hls_manifest_response(url, token, raw)
+
+    def generate():
+        sent = 0
+        try:
+            for chunk in upstream.iter_content(HLS_PROXY_CHUNK_BYTES):
+                if chunk:
+                    sent += len(chunk)
+                    yield chunk
+        except requests.RequestException:
+            # The status line is already on the wire, so a mid-stream failure
+            # cannot become an error response. Stopping is the honest signal:
+            # the client sees a short read and retries, which is what hls.js
+            # does for a failed segment anyway.
+            app.logger.warning("HLS segment relay cut short for %s", url)
+        finally:
+            upstream.close()
+            # After the last byte: the bytes counted per-stream (and the view's
+            # last-seen clock) move together with the bytes counted globally.
+            if sent:
+                telemetry.record_bytes(sent, region)
+                telemetry.touch_stream(token, count=sent)
+
+    telemetry.record_event("segment")
+    response = Response(
+        stream_with_context(generate()),
+        status=upstream.status_code,
     )
-    inventory = _manifest_inventory(entry, original_language)
-
-    return jsonify(
-        {
-            "success": True,
-            "tmdb_id": parsed,
-            "media_type": tmdb_type,
-            "title": title,
-            "season": season,
-            "episode": episode,
-            "available": bool(entry),
-            **inventory,
-        }
-    )
+    response.headers["Content-Type"] = "video/mp2t"
+    # Allowlist-exact CORS via the shared hook; no wildcard on a relay.
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    return response
 
 
 # `Content-Disposition` is the only reliable way to make a browser save a
@@ -1247,24 +1854,33 @@ def _safe_download_name(raw: str | None, fallback: str) -> str:
     return candidate[:120]
 
 
-@app.route("/api/movies/download", methods=["GET"])
-@app.route("/api/v1/stream/download", methods=["GET"])
-def movie_download():
-    """Stream a direct Archive.org file to the browser as an attachment.
 
-    Scope is deliberately narrow: only archive.org hosts (enforced by
-    `open_archive_stream`) and only a GET. The bytes are relayed rather than
-    redirected so the `Content-Disposition` header is same-origin and the save
-    dialog appears instead of the browser navigating away to the archive node.
+@app.route("/api/v1/playback/download", methods=["GET", "OPTIONS"])
+def playback_download():
+    """Relay the handle's file to the browser as an attachment.
+
+    The bytes come through this origin rather than as a redirect so the
+    `Content-Disposition` header is same-origin and the save dialog appears
+    instead of the browser navigating away to the archive node. Scope stays
+    narrow on purpose: the handle names one URL, and `open_archive_stream`
+    re-checks that URL against the Archive.org allowlist on the way out, so a
+    token is not a way around the allowlist -- it is only the pointer.
     """
-    url = (request.args.get("url") or "").strip()
-    if not url:
-        return _json_error("Missing url", 400)
+    if request.method == "OPTIONS":
+        return ("", 204)
 
-    # Prefer a name the caller derived from the title, otherwise fall back to
-    # the archive filename so the saved file is not called "download".
+    token = request.args.get("token") or ""
+    entry = playback_tokens.resolve(token, playback_tokens.KIND_DOWNLOAD)
+    if entry is None:
+        return _json_error(
+            "Unknown or expired stream token", 400, code="TOKEN_INVALID"
+        )
+    url = entry["url"]
+
+    # init derived the name from the title while the URL still existed there;
+    # the archive basename is only the fallback for a handle minted without one.
     fallback = os.path.basename(urllib.parse.urlparse(url).path) or "video"
-    filename = _safe_download_name(request.args.get("filename"), fallback)
+    filename = _safe_download_name(entry.get("meta", {}).get("filename"), fallback)
 
     try:
         status, headers, body = catalog_lib.open_archive_stream(url, None)
@@ -1273,7 +1889,20 @@ def movie_download():
     except Exception:  # noqa: BLE001 - upstream failure is not ours
         return _json_error("Download source unavailable", 502)
 
-    response = Response(body, status=status)
+    region = entry.get("meta", {}).get("region") or None
+    telemetry.record_event("download")
+
+    def counted():
+        sent = 0
+        try:
+            for chunk in body:
+                sent += len(chunk)
+                yield chunk
+        finally:
+            if sent:
+                telemetry.record_bytes(sent, region)
+
+    response = Response(counted(), status=status)
     for key, value in headers.items():
         if key.lower() == "content-disposition":
             continue
@@ -1287,6 +1916,7 @@ def movie_download():
     )
     response.headers["Cache-Control"] = "private, no-store"
     return response
+
 
 
 @app.route("/api/movies/feeds", methods=["GET", "OPTIONS"])
@@ -1797,20 +2427,9 @@ def get_media_by_id(id: str):
         result["number_of_episodes"] = details.get("number_of_episodes") or 0
         result["seasons"] = valid_seasons if valid_seasons else seasons
 
-    # Embed URLs for every provider in the chain, keyed by provider id.
-    #
-    # This dict used to be a hand-written literal naming three hosts, one of
-    # which (`vidsrc.me`) no longer resolves, and the client's source selector
-    # was built from the manifest rather than from it -- so the two disagreed and
-    # the retired host still reached the player. It is generated from the
-    # manifest now, so a provider cannot exist on only one side.
-    embed_urls = {}
-    for provider in stream_providers.active_embed_providers():
-        url = provider.build(tmdb_id, media_type, 1, 1)
-        if url:
-            embed_urls[provider.id] = url
-    result["embed_urls"] = embed_urls
-    result["default_embed"] = next(iter(embed_urls.values()), "")
+    # Embed targets used to be emitted here (`embed_urls`, `default_embed`) --
+    # the one place a raw third-party URL still crossed the wire. The embed
+    # chain now travels only from /api/v1/playback/init, as frame handles.
 
     return jsonify(result)
 
@@ -2083,6 +2702,38 @@ def api_admin_users():
     )
 
 
+@app.route("/api/admin/system/metrics", methods=["GET", "OPTIONS"])
+def admin_system_metrics():
+    """Live system metrics for an operator: traffic, streams, memory, handles.
+
+    Admin-only, and the guard order mirrors `/api/admin/users`: no session is
+    401, a session that is not on the allowlist is 403 (never 401 -- the
+    client clears its stored token on a 401, which would sign the operator out
+    of their own account for opening the wrong page).
+
+    The numbers are per worker process -- telemetry is deliberately in-memory
+    and honest about its scope (`scope.pid` says which process answered) --
+    and include the memory guard's own verdict, because "why did playback
+    503" is the question this endpoint exists to answer.
+    """
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    user = _auth_user()
+    if not user:
+        return _auth_error("Not signed in.")
+    if not authdb.is_admin_email(user.get("email")):
+        return _auth_error("You do not have access to this page.", 403)
+
+    return jsonify(
+        {
+            "success": True,
+            "metrics": telemetry.snapshot(),
+            "handles": playback_tokens.stats(),
+        }
+    )
+
+
 # ---------------------------------------------------------------------------
 # Profiles (a home is the signed-in account; max 4)
 # ---------------------------------------------------------------------------
@@ -2102,6 +2753,12 @@ def _serialize_profile(profile: dict) -> dict:
         "is_kids": bool(profile.get("is_kids")),
         "is_locked": bool(profile.get("is_locked")),
         "sort_order": profile.get("sort_order") or 0,
+        # Empty strings, never null: the client distinguishes "no preference,
+        # use the geo seed" from "I chose this" by emptiness, and a key that
+        # sometimes vanishes forces a null check into every reader.
+        "preferred_language": profile.get("preferred_language") or "",
+        "preferred_subtitle": profile.get("preferred_subtitle") or "",
+        "locale_region": profile.get("locale_region") or "",
     }
 
 
@@ -2192,6 +2849,31 @@ def api_profile_item(profile_id: str):
         updates["avatar_id"] = str(payload.get("avatar_id") or "")[:40] or None
     if "is_kids" in payload:
         updates["is_kids"] = 1 if payload.get("is_kids") else 0
+    # Locale choices ride the profile PATCH because that is the object they
+    # belong to; validation is shared with the /api/v1/locale/config surface
+    # so the two paths cannot drift on what counts as a valid language.
+    locale_fields = {
+        "language": "preferred_language",
+        "subtitle_language": "preferred_subtitle",
+        "region": "locale_region",
+    }
+    locale_payload = {
+        key: payload[name]
+        for key, name in (
+            ("language", "preferred_language"),
+            ("subtitle_language", "preferred_subtitle"),
+            ("region", "locale_region"),
+        )
+        if name in payload
+    }
+    if locale_payload:
+        try:
+            validated = locale_settings.validate_config(locale_payload, field_prefix="profile")
+        except ValueError as error:
+            return _auth_error(str(error), 400)
+        for key, column in locale_fields.items():
+            if key in validated:
+                updates[column] = validated[key]
     # A PIN is only ever set or replaced, never read back: sending an empty pin
     # clears the lock, which is the documented "remove PIN" path.
     if "pin" in payload:
