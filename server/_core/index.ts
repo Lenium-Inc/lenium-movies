@@ -238,12 +238,51 @@ async function proxyToFlask(req: express.Request, res: express.Response) {
     headers["content-length"] = String(Buffer.byteLength(serialized));
   }
 
+  // A connection-level failure -- Flask restarting, or not yet bound, so the
+  // kernel refuses the socket -- is transient by nature and worth a short
+  // retry with a backoff. It is the difference between a 502 on every request
+  // that happens to land during a reload and a request that simply waits a
+  // few hundred milliseconds for the process to come back. Anything that
+  // actually produced a Response is left alone: a real upstream error is an
+  // answer, not a connection failure, and a body has already started
+  // streaming to the player by then.
+  const CONNECTION_ATTEMPTS = 3;
+  const CONNECTION_RETRY_DELAY_MS = 150;
+
+  const openUpstream = async (): Promise<Response> => {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < CONNECTION_ATTEMPTS; attempt += 1) {
+      try {
+        // `redirect: "manual"` is load-bearing. A frame leg is a 302 whose
+        // Location points at a third-party embed host, and Node's fetch
+        // follows redirects by default: it would leave our own network to
+        // reach that host, throw ENOTFOUND wherever DNS is blocked, and the
+        // catch below would answer 502 "Movie backend unreachable" for a
+        // request Flask had already served correctly. The browser follows
+        // the redirect itself, which is the whole point of the frame leg, so
+        // the proxy relays the 302 (Location included) and stops here.
+        return await fetch(flaskUrl, {
+          method: req.method,
+          headers,
+          body: serialized,
+          redirect: "manual",
+        });
+      } catch (err) {
+        lastError = err;
+        // The client hung up mid-flight; retrying would be pointless.
+        if (req.destroyed || res.writableEnded) throw err;
+        if (attempt < CONNECTION_ATTEMPTS - 1) {
+          await new Promise(resolve =>
+            setTimeout(resolve, CONNECTION_RETRY_DELAY_MS * (attempt + 1))
+          );
+        }
+      }
+    }
+    throw lastError;
+  };
+
   try {
-    const response = await fetch(flaskUrl, {
-      method: req.method,
-      headers,
-      body: serialized,
-    });
+    const response = await openUpstream();
 
     // Copy status + headers, minus anything that fingerprints the stack,
     // names an internal hop, or conflicts with the body we stream through.
