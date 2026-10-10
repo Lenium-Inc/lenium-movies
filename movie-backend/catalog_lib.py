@@ -697,14 +697,61 @@ def choose_subtitles(files: list[dict], identifier: str) -> list[dict]:
     return subtitles
 
 
+#: Smallest runtime, in seconds, that a resolved *movie* source may have.
+#:
+#: Title+year matching alone can accept a same-named short, TV edit, or
+#: featurette that happens to share the film's year, and handing that to the
+#: main player looks like a broken stream (a viewer taps a 1h46m film and gets
+#: nine minutes). A full-length feature is comfortably above this line; a
+#: trailer or featurette is comfortably below it. The floor is applied only
+#: when a runtime is actually known -- an item that reports no duration is
+#: still allowed through, because refusing every unknown would empty the
+#: catalog for the sake of a rare bad match. Series are exempt: an episode's
+#: short runtime is normal, so the guard is a movie-only concern.
+MIN_MOVIE_RUNTIME_SECONDS = 15 * 60
+
+
+def parse_duration_seconds(raw) -> int | None:
+    """Runtime in whole seconds from an Archive.org `length` field, or None.
+
+    Archive.org carries `length` per file as either a plain count of seconds
+    (`"5820"`) or a clock string (`"1:37:00"`, `"9:21"`). Both shapes appear
+    across items, and the field is absent on many, so this returns None for
+    anything unparseable rather than guessing. A caller that gets None simply
+    has no duration evidence and must fall back to its other filters.
+    """
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    if ":" not in text:
+        try:
+            return max(0, int(float(text)))
+        except ValueError:
+            return None
+    parts = text.split(":")
+    if not all(p.strip().isdigit() for p in parts):
+        return None
+    seconds = 0
+    for part in parts:
+        seconds = seconds * 60 + int(part)
+    return seconds
+
+
 def choose_streams(
-    files: list[dict], identifier: str
+    files: list[dict], identifier: str, *, min_runtime_seconds: int | None = None
 ) -> tuple[list[dict], dict] | None:
     """Return (quality variants best -> worst, default stream).
 
     Only real h.264 MP4/M4V files are kept — .mkv/.ogv/.m2ts can't play in a
     <video> element and are ignored. One variant per quality tier, picking the
-    tallest (then largest) file within that tier."""
+    tallest (then largest) file within that tier.
+
+    `min_runtime_seconds`, when given, drops any file whose `length` is known
+    and shorter than the floor. A file with no readable `length` is kept: the
+    size floor below is the only evidence it has, and refusing every unknown
+    would discard perfectly good rips that simply omit the field."""
 
     def better(height: int, size: int, current: dict) -> bool:
         if height > current["height"]:
@@ -739,6 +786,14 @@ def choose_streams(
         size = int(file.get("size") or 0)
         if not 40_000_000 <= size <= 4_000_000_000:
             continue
+        # A known-too-short runtime discards the file outright. This is what
+        # keeps a same-title featurette or TV edit from becoming the primary
+        # stream; a file with no readable `length` passes and relies on the
+        # size floor above.
+        if min_runtime_seconds is not None:
+            runtime = parse_duration_seconds(file.get("length"))
+            if runtime is not None and runtime < min_runtime_seconds:
+                continue
         height = 0
         width = 0
         try:
@@ -784,7 +839,12 @@ def build_entry_by_identifier(
     single shared deadline so the whole search is capped, not each attempt."""
     metadata = http_json(META_URL.format(id=identifier), deadline=deadline)
     files = metadata.get("files") or []
-    resolved = choose_streams(files, identifier)
+    # This entry is always a film (`media_type: "movie"` below), so the
+    # movie-only runtime floor applies: a same-title short or TV edit that
+    # shares the year must not become the primary stream.
+    resolved = choose_streams(
+        files, identifier, min_runtime_seconds=MIN_MOVIE_RUNTIME_SECONDS
+    )
     if not resolved:
         return None
 

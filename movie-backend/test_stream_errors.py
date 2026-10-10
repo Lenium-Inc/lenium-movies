@@ -774,6 +774,97 @@ def test_scrape_title_stops_trying_candidates_after_deadline():
     assert len(attempts) < 5, f"kept trying candidates past the deadline: {attempts}"
 
 
+def test_choose_streams_drops_known_short_runtimes():
+    # A same-title short or TV edit that shares the film's year can pass
+    # title+year matching; the runtime floor is what keeps it out of the main
+    # player. Both Archive.org `length` shapes (bare seconds, clock string)
+    # must be honoured, and a file with no readable length must survive so a
+    # missing field never empties the catalog.
+    import catalog_lib
+
+    def _f(name, size, length=None, height=720):
+        entry = {"name": name, "size": size, "height": height}
+        if length is not None:
+            entry["length"] = length
+        return entry
+
+    # Each file gets its own quality tier so the runtime floor is what drops a
+    # file, not `choose_streams`' one-per-tier collapsing.
+    files = [
+        _f("feature.1080p.mp4", 800_000_000, "1:46:00", 1080),  # 6360s -> keep
+        _f("feature.540p.mp4", 800_000_000, "540", 540),  # 9min bare -> drop
+        _f("feature.480p.mp4", 800_000_000, "0:09:00", 480),  # 9min clock -> drop
+        _f("feature.nolen.mp4", 800_000_000, None, 360),  # no length -> keep
+    ]
+    resolved = catalog_lib.choose_streams(
+        files, "test-id", min_runtime_seconds=catalog_lib.MIN_MOVIE_RUNTIME_SECONDS
+    )
+    assert resolved is not None, "floor discarded every candidate"
+    kept = {stream["url"].rsplit("/", 1)[-1] for stream in resolved[0]}
+    assert "feature.540p.mp4" not in kept, f"short slipped through: {kept!r}"
+    assert "feature.480p.mp4" not in kept, f"TV edit slipped through: {kept!r}"
+    assert "feature.1080p.mp4" in kept, f"full feature was dropped: {kept!r}"
+    assert "feature.nolen.mp4" in kept, f"no-length file was wrongly dropped: {kept!r}"
+
+
+def test_parse_duration_seconds_handles_both_archive_shapes():
+    # Archive.org carries `length` as either a bare second count or a clock
+    # string; both must land on the same number, and anything unparseable must
+    # be None rather than a guess.
+    import catalog_lib
+
+    assert catalog_lib.parse_duration_seconds("5820") == 5820
+    assert catalog_lib.parse_duration_seconds("1:37:00") == 5820
+    assert catalog_lib.parse_duration_seconds("9:21") == 561
+    assert catalog_lib.parse_duration_seconds("") is None
+    assert catalog_lib.parse_duration_seconds(None) is None
+    assert catalog_lib.parse_duration_seconds("abc") is None
+
+
+def test_init_never_returns_a_trailer_url_as_the_primary_stream():
+    # Regression: a trailer must never reach the main player -- it lives only
+    # in the "Trailers" tab. A direct candidate whose `stream_url` looks like a
+    # trailer endpoint must be discarded and the request must fall through to
+    # the embed chain, minting a frame handle for an embed rather than for the
+    # rejected URL.
+    app, client = _client()
+    app.stream_providers.HEALTH.reset()
+    app.stream_providers.clear_probe_cache()
+    app.stream_providers.probe_embed = lambda *a, **k: True
+    app._direct_source_for = lambda *a, **k: {
+        "id": "603",
+        "title": "The Matrix",
+        "stream_url": "https://www.youtube.com/watch?v=vKQi3bBA1y8",
+        "streams": [
+            {
+                "quality": "720p",
+                "height": 720,
+                "width": 1280,
+                "size": 700_000_000,
+                "url": "https://www.youtube.com/watch?v=vKQi3bBA1y8",
+            }
+        ],
+        "year": "1999",
+    }
+    original = _stub_details(app, {"id": 603, "title": "The Matrix"})
+    try:
+        res = client.post("/api/movies/resolve", json={"id": "603"})
+    finally:
+        app.tmdb.fetch_media_details = original
+        _restore_chain(app)
+
+    assert res.status_code == 200, f"resolve failed: {res.status_code} {res.data[:200]!r}"
+    movie = res.get_json()["movie"]
+    assert "youtube" not in movie["stream_url"].lower(), (
+        f"trailer reached the primary stream: {movie['stream_url']!r}"
+    )
+    assert movie["stream_url"].startswith("/api/v1/playback/frame?token="), (
+        f"expected an embed frame handle, got: {movie['stream_url']!r}"
+    )
+    for tier in movie.get("streams", []):
+        assert "youtube" not in tier["url"].lower(), f"trailer leaked into a tier: {tier!r}"
+
+
 def _run():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failures = 0
