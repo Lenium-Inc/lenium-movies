@@ -94,12 +94,18 @@ class EmbedProvider:
     host: str
     priority: int
 
-    #: Path segment for a series. The default is the overwhelmingly common
-    #: `/embed/...` shape; vidsrc.cc is the one provider served under `/v2`,
-    #: which is exactly the kind of per-host exception that made the old
-    #: convention-based builder drift, so it is declared here instead of
-    #: inferred from the provider id.
-    path_prefix: str = "/embed"
+    #: The provider's two URL shapes, as format templates. `{id}` is the TMDB
+    #: id (already restricted to `[A-Za-z0-9-]`); `{season}` and `{episode}`
+    #: appear only in the TV shape.
+    #:
+    #: The shapes are declared rather than derived from the host because they
+    #: genuinely differ: vidsrc.cc is served under `/v2`, vidsrc.me keys the id
+    #: in a query string, and 2Embed addresses a movie by bare id with no
+    #: `movie` segment at all. The old builder inferred one `/embed/...`
+    #: convention from the provider id, which is exactly the kind of drift that
+    #: produced URLs the client then refused to recognise.
+    movie_url: str
+    tv_url: str
 
     def build(self, tmdb_id: int | str, media_type: str, season: int, episode: int) -> str:
         """Addressable URL for this provider, or "" if the target cannot be keyed.
@@ -114,13 +120,20 @@ class EmbedProvider:
         if not safe:
             return ""
 
-        if media_type == "tv":
-            return f"https://{self.host}{self.path_prefix}/tv/{safe}/{season}/{episode}"
-        return f"https://{self.host}{self.path_prefix}/movie/{safe}"
+        template = self.tv_url if media_type == "tv" else self.movie_url
+        try:
+            return template.format(id=safe, season=season, episode=episode)
+        except (KeyError, IndexError, ValueError):
+            # A placeholder the template never declared is a manifest typo.
+            # Refusing to build is a title with no URL, which the resolver
+            # already reports as skipped -- far better than emitting a
+            # malformed URL that fails somewhere downstream.
+            return ""
 
 
 def _safe_id(value: object) -> str:
-    """Provider ids reach a URL path, so only `[A-Za-z0-9-]` is ever allowed.
+    """Target ids reach a provider URL (path or query), so only `[A-Za-z0-9-]`
+    is ever allowed.
 
     `/api/get-stream` validates with `_parse_tmdb_id`, but this registry is
     also driven by manifest data and must not be the weaker link. The character
@@ -139,15 +152,50 @@ def _safe_id(value: object) -> str:
 #: which source a viewer is offered first.
 #:
 #: Labels say what a source *is* rather than counting it. "Server 3" told a
-#: viewer nothing about the four hosts behind it and gave them no reason to try
+#: viewer nothing about the hosts behind it and gave them no reason to try
 #: the next one when the frame went blank; the label now carries the quality
-#: tier and the language/subtitle audience that actually differs between them.
+#: tier that actually differs between them.
 EMBED_PROVIDERS: tuple[EmbedProvider, ...] = (
-    EmbedProvider("vidsrc-pro", "Prime HD", "vidsrc.pro", 10),
-    EmbedProvider("embed-su", "Home Stream", "embed.su", 20),
-    EmbedProvider("vidsrc-cc", "Cinema Plus", "vidsrc.cc", 30, "/v2/embed"),
-    EmbedProvider("mycima-api", "International Cut", "mycima.vidsrc.pm", 40),
-    EmbedProvider("autoembed", "Backup Stream", "player.autoembed.cc", 50),
+    EmbedProvider(
+        "vidsrc-pro",
+        "Prime HD",
+        "vidsrc.pro",
+        10,
+        "https://vidsrc.pro/embed/movie/{id}",
+        "https://vidsrc.pro/embed/tv/{id}/{season}/{episode}",
+    ),
+    EmbedProvider(
+        "vidsrc-cc",
+        "Cinema Plus",
+        "vidsrc.cc",
+        20,
+        "https://vidsrc.cc/v2/embed/movie/{id}",
+        "https://vidsrc.cc/v2/embed/tv/{id}/{season}/{episode}",
+    ),
+    EmbedProvider(
+        "vidsrc-me",
+        "Home Stream",
+        "vidsrc.me",
+        30,
+        "https://vidsrc.me/embed/movie?tmdb={id}",
+        "https://vidsrc.me/embed/tv?tmdb={id}&season={season}&episode={episode}",
+    ),
+    EmbedProvider(
+        "2embed",
+        "Studio HD",
+        "www.2embed.cc",
+        40,
+        "https://www.2embed.cc/embed/{id}",
+        "https://www.2embed.cc/embedtv/{id}&s={season}&e={episode}",
+    ),
+    EmbedProvider(
+        "autoembed",
+        "Backup Stream",
+        "vidsrc.to",
+        50,
+        "https://vidsrc.to/embed/movie/{id}",
+        "https://vidsrc.to/embed/tv/{id}/{season}/{episode}",
+    ),
 )
 
 DIRECT_PROVIDER_ID = "archive_direct"

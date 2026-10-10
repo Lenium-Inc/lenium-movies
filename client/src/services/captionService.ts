@@ -169,7 +169,7 @@ export function getDubbedAudioUrl(
 
     if (
       hostname.includes("vidsrc") ||
-      hostname.includes("embed.su") ||
+      hostname.includes("2embed") ||
       hostname.includes("autoembed")
     ) {
       url.searchParams.set("dub", preferredLanguage);

@@ -16,9 +16,9 @@
  * than showing up as a silent "this source does not play".
  *
  * `type` is what the UI keys its badges off: `global` providers are
- * English-first, `fast` is the HLS-first mirror, and `arabic` is the
- * Arabic-language mirror (Mycima / ArabEmbed) that serves dubbed and
- * subtitled prints.
+ * English-first, `fast` is the HLS-first mirror, and `arabic` is reserved for
+ * an Arabic-language mirror (Mycima used to carry that tier) that serves dubbed
+ * and subtitled prints.
  */
 
 /** Ids are `[A-Za-z0-9-]`; anything else could break out of the URL path. */
@@ -53,16 +53,6 @@ export const STREAM_PROVIDERS: StreamProvider[] = [
         : `https://vidsrc.pro/embed/tv/${id}/${s}/${e}`,
   },
   {
-    id: "embed-su",
-    name: "Home Stream",
-    quality: "1080p",
-    type: "fast",
-    getUrl: (id, type, s = 1, e = 1) =>
-      type === "movie"
-        ? `https://embed.su/embed/movie/${id}`
-        : `https://embed.su/embed/tv/${id}/${s}/${e}`,
-  },
-  {
     id: "vidsrc-cc",
     name: "Cinema Plus",
     quality: "1080p",
@@ -73,14 +63,24 @@ export const STREAM_PROVIDERS: StreamProvider[] = [
         : `https://vidsrc.cc/v2/embed/tv/${id}/${s}/${e}`,
   },
   {
-    id: "mycima-api",
-    name: "International Cut",
-    quality: "720p / 1080p",
-    type: "arabic",
+    id: "vidsrc-me",
+    name: "Home Stream",
+    quality: "1080p",
+    type: "fast",
     getUrl: (id, type, s = 1, e = 1) =>
       type === "movie"
-        ? `https://mycima.vidsrc.pm/embed/movie/${id}`
-        : `https://mycima.vidsrc.pm/embed/tv/${id}/${s}/${e}`,
+        ? `https://vidsrc.me/embed/movie?tmdb=${id}`
+        : `https://vidsrc.me/embed/tv?tmdb=${id}&season=${s}&episode=${e}`,
+  },
+  {
+    id: "2embed",
+    name: "Studio HD",
+    quality: "720p / 1080p",
+    type: "global",
+    getUrl: (id, type, s = 1, e = 1) =>
+      type === "movie"
+        ? `https://www.2embed.cc/embed/${id}`
+        : `https://www.2embed.cc/embedtv/${id}&s=${s}&e=${e}`,
   },
   {
     id: "autoembed",
@@ -89,8 +89,8 @@ export const STREAM_PROVIDERS: StreamProvider[] = [
     type: "global",
     getUrl: (id, type, s = 1, e = 1) =>
       type === "movie"
-        ? `https://player.autoembed.cc/embed/movie/${id}`
-        : `https://player.autoembed.cc/embed/tv/${id}/${s}/${e}`,
+        ? `https://vidsrc.to/embed/movie/${id}`
+        : `https://vidsrc.to/embed/tv/${id}/${s}/${e}`,
   },
 ];
 

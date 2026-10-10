@@ -147,7 +147,7 @@ def test_env_disable_removes_a_provider():
     finally:
         del os.environ["STREAM_PROVIDER_DISABLED"]
     assert "vidsrc-pro" not in ids and "autoembed" not in ids
-    assert "embed-su" in ids
+    assert "vidsrc-me" in ids
 
 
 def test_unknown_ids_in_env_order_degrade_to_the_default_chain():
@@ -177,7 +177,12 @@ def test_build_addresses_movie_and_tv_for_every_provider():
         assert provider.build(603, "movie", 1, 1), f"{provider.id} has no movie url"
         tv = provider.build(603, "tv", 2, 5)
         assert tv, f"{provider.id} has no tv url"
-        assert tv.endswith("/2/5"), f"{provider.id} tv url lost the episode: {tv}"
+        assert tv != provider.build(603, "tv", 3, 6), (
+            f"{provider.id} tv url ignores season/episode: {tv}"
+        )
+        assert tv != provider.build(603, "movie", 2, 5), (
+            f"{provider.id} tv url is the movie url: {tv}"
+        )
 
 
 def test_build_produces_the_exact_urls_the_client_selector_offers():
@@ -192,14 +197,14 @@ def test_build_produces_the_exact_urls_the_client_selector_offers():
     expected = {
         ("vidsrc-pro", "movie"): "https://vidsrc.pro/embed/movie/603",
         ("vidsrc-pro", "tv"): "https://vidsrc.pro/embed/tv/603/2/5",
-        ("embed-su", "movie"): "https://embed.su/embed/movie/603",
-        ("embed-su", "tv"): "https://embed.su/embed/tv/603/2/5",
         ("vidsrc-cc", "movie"): "https://vidsrc.cc/v2/embed/movie/603",
         ("vidsrc-cc", "tv"): "https://vidsrc.cc/v2/embed/tv/603/2/5",
-        ("mycima-api", "movie"): "https://mycima.vidsrc.pm/embed/movie/603",
-        ("mycima-api", "tv"): "https://mycima.vidsrc.pm/embed/tv/603/2/5",
-        ("autoembed", "movie"): "https://player.autoembed.cc/embed/movie/603",
-        ("autoembed", "tv"): "https://player.autoembed.cc/embed/tv/603/2/5",
+        ("vidsrc-me", "movie"): "https://vidsrc.me/embed/movie?tmdb=603",
+        ("vidsrc-me", "tv"): "https://vidsrc.me/embed/tv?tmdb=603&season=2&episode=5",
+        ("2embed", "movie"): "https://www.2embed.cc/embed/603",
+        ("2embed", "tv"): "https://www.2embed.cc/embedtv/603&s=2&e=5",
+        ("autoembed", "movie"): "https://vidsrc.to/embed/movie/603",
+        ("autoembed", "tv"): "https://vidsrc.to/embed/tv/603/2/5",
     }
     for provider in stream_providers.EMBED_PROVIDERS:
         for media_type in ("movie", "tv"):
@@ -226,16 +231,27 @@ def test_manifest_matches_the_client_manifest_entry_for_entry():
     # Quote-agnostic on purpose: the manifest is a TypeScript file that Prettier
     # reformats, and a regex pinned to one quote style would fail the build over
     # a formatting change rather than over a provider change.
-    entries = re.findall(
-        r'id:\s*["\']([^"\']+)["\'],\s*name:\s*["\']([^"\']+)["\']',
-        client_manifest,
+    matches = list(
+        re.finditer(
+            r'id:\s*["\']([^"\']+)["\'],\s*name:\s*["\']([^"\']+)["\']',
+            client_manifest,
+        )
     )
-    assert entries, "no providers parsed out of the client manifest"
+    assert matches, "no providers parsed out of the client manifest"
+    entries = [(m.group(1), m.group(2)) for m in matches]
     assert [(p.id, p.label) for p in stream_providers.EMBED_PROVIDERS] == entries
-    # The movie URL of each provider, one per entry, is what names its host.
-    # (TV URLs repeat the same host, so matching on them would double every one
-    # and make the comparison vacuous.)
-    hosts = re.findall(r"https://([^/`]+)/(?:v2/)?embed/movie/", client_manifest)
+    # Each entry's first URL names its host. The shapes differ per provider --
+    # a path key, a query key, a bare id -- so the host is read off the first
+    # `https://` inside that entry's own block rather than off any one shape.
+    # (TV URLs repeat the same host, so matching on them as well would double
+    # every one and make the comparison vacuous.)
+    hosts = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(client_manifest)
+        block = client_manifest[match.start() : end]
+        found = re.search(r"https://([^/`?#]+)", block)
+        assert found, f"no url in client manifest entry {entries[index][0]!r}"
+        hosts.append(found.group(1))
     assert [p.host for p in stream_providers.EMBED_PROVIDERS] == hosts
 
 
@@ -243,6 +259,8 @@ def test_is_embed_host_matches_subdomains_but_not_lookalikes():
     assert stream_providers.is_embed_host("vidsrc.pro")
     assert stream_providers.is_embed_host("www.vidsrc.pro")
     assert stream_providers.is_embed_host("VIDSRC.PRO")
+    # The one provider addressed under a `www.` authority.
+    assert stream_providers.is_embed_host("www.2embed.cc")
     assert not stream_providers.is_embed_host("notvidsrc.pro")
     assert not stream_providers.is_embed_host("vidsrc.pro.evil.com")
     assert not stream_providers.is_embed_host("")

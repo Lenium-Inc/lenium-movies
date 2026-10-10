@@ -43,10 +43,13 @@ function parsePythonManifest(): Array<{
     host: string;
     priority: number;
   }> = [];
-  // The optional fifth argument is the provider's path prefix (only vidsrc.cc
-  // needs `/v2/embed` instead of `/embed`), so it is captured but the parity
-  // assertions below check id/label/host -- which is what the two sides have to
-  // agree on for a frame to be recognised as an embed.
+  // The remaining arguments are the provider's URL templates (`movie_url`,
+  // `tv_url`), which vary in shape per host -- a query-string key for
+  // vidsrc.me, a bare id path for 2Embed. They are captured but not compared
+  // here: the parity assertions below check id/label/host -- which is what the
+  // two sides have to agree on for a frame to be recognised as an embed -- and
+  // the exact strings are pinned on both sides in the URL-shape table at the
+  // bottom of this file.
   const pattern =
     /EmbedProvider\(\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*(\d+)/g;
   for (let i = 0; i < tuple[1].length; i += 1) {
@@ -146,14 +149,18 @@ describe("embed URL shapes", () => {
   it.each([
     ["vidsrc-pro", "movie", "https://vidsrc.pro/embed/movie/603"],
     ["vidsrc-pro", "tv", "https://vidsrc.pro/embed/tv/603/2/5"],
-    ["embed-su", "movie", "https://embed.su/embed/movie/603"],
-    ["embed-su", "tv", "https://embed.su/embed/tv/603/2/5"],
     ["vidsrc-cc", "movie", "https://vidsrc.cc/v2/embed/movie/603"],
     ["vidsrc-cc", "tv", "https://vidsrc.cc/v2/embed/tv/603/2/5"],
-    ["mycima-api", "movie", "https://mycima.vidsrc.pm/embed/movie/603"],
-    ["mycima-api", "tv", "https://mycima.vidsrc.pm/embed/tv/603/2/5"],
-    ["autoembed", "movie", "https://player.autoembed.cc/embed/movie/603"],
-    ["autoembed", "tv", "https://player.autoembed.cc/embed/tv/603/2/5"],
+    ["vidsrc-me", "movie", "https://vidsrc.me/embed/movie?tmdb=603"],
+    [
+      "vidsrc-me",
+      "tv",
+      "https://vidsrc.me/embed/tv?tmdb=603&season=2&episode=5",
+    ],
+    ["2embed", "movie", "https://www.2embed.cc/embed/603"],
+    ["2embed", "tv", "https://www.2embed.cc/embedtv/603&s=2&e=5"],
+    ["autoembed", "movie", "https://vidsrc.to/embed/movie/603"],
+    ["autoembed", "tv", "https://vidsrc.to/embed/tv/603/2/5"],
   ])("%s builds the %s url the backend expects", (id, mediaType, expected) => {
     expect(urlFor(id, mediaType as "movie" | "tv")).toBe(expected);
   });

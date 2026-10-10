@@ -43,7 +43,8 @@ with a provenance assumption, not an audited rights determination. Nothing in th
 code would notice if an entry were wrong.
 
 **Embed.** Anything not in the direct catalog resolves to a third-party iframe
-(`vidsrc` and six sibling hosts, in priority order). The UI states that it is an
+(`vidsrc.pro`, `vidsrc.cc`, `vidsrc.me`, `2embed`, and `autoembed`, in priority
+order). The UI states that it is an
 embed. That host decides what plays, where it plays, and whether it plays. We
 probe providers server-side to skip dead ones, but we do not control, audit, or
 have a contractual relationship with them. Some are the kind of site that hosts

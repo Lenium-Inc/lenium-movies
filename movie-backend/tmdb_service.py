@@ -574,10 +574,10 @@ def normalize_tmdb_item(item: Dict, media_type: str) -> Optional[Dict]:
 
     # The catalogue hands out the first embed in the chain so a card has
     # something to point at before anything is resolved. It used to hardcode
-    # `vidsrc.me`, a host that has been gone for months: every card carried a
-    # dead URL, which is what made a title look unavailable while the provider
-    # chain behind it was perfectly healthy. Built from the manifest instead, so
-    # the field cannot name a retired provider again.
+    # `vidsrc.me`: when that host died every card carried a dead URL, which is
+    # what made a title look unavailable while the provider chain behind it was
+    # perfectly healthy. Built from the manifest instead, so the field cannot
+    # name a retired provider again.
     stream_url = ""
     for provider in stream_providers.active_embed_providers():
         candidate = provider.build(tmdb_id, media_type, 1, 1)
