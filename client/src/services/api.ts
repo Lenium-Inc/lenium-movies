@@ -1070,7 +1070,7 @@ export async function fetchEpisodeDetails(
   params.set("tmdb_id", tmdbId);
   params.set("season", String(season));
   params.set("episode", String(episode));
-  const response = await fetch(
+  const response = await fetchWithRetry(
     `${MOVIE_API_BASE_URL}/api/episodes?${params.toString()}`
   );
   if (response.status === 404) return null;
@@ -1088,6 +1088,33 @@ function isEpisodeDetailPayload(
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
   return typeof record.episode === "object" && record.episode !== null;
+}
+
+/**
+ * One `Response` for a URL, re-fetched on `429` with exponential backoff.
+ *
+ * The episode matrix fans out across a show's whole catalogue, and a single
+ * page load used to fire dozens of `/api/episodes` calls at once -- enough to
+ * trip the backend's limiter, which answers 429 and drops every in-flight
+ * request. Backing off and retrying (0.5s, 1s, 2s) rides out the window
+ * instead of failing the row. Non-429 responses -- including 404 and 5xx -- are
+ * returned as-is so callers keep their own handling; only a genuine network
+ * throw propagates. The final attempt is a bare `fetch`, so after the retries
+ * are spent the caller sees the same error shape it always did.
+ */
+export async function fetchWithRetry(
+  url: string,
+  init?: RequestInit,
+  retries = 3,
+  delay = 500
+): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    const response = await fetch(url, init);
+    if (response.status !== 429 || attempt >= retries) return response;
+    await new Promise(resolve =>
+      setTimeout(resolve, delay * Math.pow(2, attempt))
+    );
+  }
 }
 
 export interface SearchSuggestion {

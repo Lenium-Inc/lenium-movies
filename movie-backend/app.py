@@ -1030,6 +1030,22 @@ def playback_init():
     sources: list[str] = []
     subtitles: list[dict] = []
 
+    # A direct source is expected to be a progressive file off archive.org.
+    # Anything that looks like a trailer host or a short-clip endpoint is a
+    # regression -- a trailer must never reach the main player (it belongs only
+    # in the "Trailers" tab, which fetches separately via the trailer routes).
+    # This is a cheap final guard behind `choose_streams`' own filename/size
+    # filters, not a substitute for them.
+    def _is_trailer_endpoint(raw: str) -> bool:
+        lowered = raw.lower()
+        if any(
+            host in lowered
+            for host in ("youtube.com", "youtu.be", "youtube-nocookie.com")
+        ):
+            return True
+        path = urllib.parse.urlparse(raw).path.lower()
+        return any(token in path for token in ("/trailer", "trailer.", "/clip", "featurette"))
+
     if direct:
         # One handle per raw URL, not per call: the same file named by the
         # default stream and by its own quality tier must produce one token,
@@ -1042,49 +1058,70 @@ def playback_init():
                 play_cache[raw] = _play_url(raw, region)
             return play_cache[raw]
 
-        primary_url, primary_format = cached_play(direct.get("stream_url") or "")
-        if primary_url:
-            sources.append(primary_url)
-        seen_sources = {primary_url}
-        for index, tier in enumerate(direct.get("streams") or []):
-            tier_url = str(tier.get("url") or "")
-            if not tier_url:
-                continue
-            play, fmt = cached_play(tier_url)
-            if not play:
-                continue
-            quality = str(tier.get("quality") or "")
-            try:
-                height = int(tier.get("height") or 0)
-            except (TypeError, ValueError):
-                height = 0
-            try:
-                size = int(tier.get("size") or 0)
-            except (TypeError, ValueError):
-                size = 0
-            streams.append(
-                {
-                    "quality": quality,
-                    "height": height,
-                    "width": tier.get("width") or 0,
-                    "size": size,
-                    "url": play,
-                    "format": fmt,
-                    "download_url": _download_url(
-                        tier_url, _download_filename(title, quality, tier_url), region
-                    ),
-                }
-            )
-            if play not in seen_sources:
-                seen_sources.add(play)
-                sources.append(play)
-            if tier_url != (direct.get("stream_url") or ""):
-                mirrors.append(
-                    {"name": f"Server {index + 1}", "url": play}
+        primary_raw = direct.get("stream_url") or ""
+        if primary_raw and _is_trailer_endpoint(primary_raw):
+            # A trailer leaked into the direct candidate. Treat the whole
+            # direct hit as unusable and fall through to the embed chain below
+            # rather than boot the player on a nine-minute clip.
+            print(f"[Catalog] discarded trailer-like direct stream for {title!r}: {primary_raw}")
+            direct = None
+        else:
+            primary_url, primary_format = cached_play(primary_raw)
+            if primary_url:
+                sources.append(primary_url)
+            seen_sources = {primary_url}
+            for index, tier in enumerate(direct.get("streams") or []):
+                tier_url = str(tier.get("url") or "")
+                if not tier_url or _is_trailer_endpoint(tier_url):
+                    continue
+                play, fmt = cached_play(tier_url)
+                if not play:
+                    continue
+                quality = str(tier.get("quality") or "")
+                try:
+                    height = int(tier.get("height") or 0)
+                except (TypeError, ValueError):
+                    height = 0
+                try:
+                    size = int(tier.get("size") or 0)
+                except (TypeError, ValueError):
+                    size = 0
+                streams.append(
+                    {
+                        "quality": quality,
+                        "height": height,
+                        "width": tier.get("width") or 0,
+                        "size": size,
+                        "url": play,
+                        "format": fmt,
+                        "download_url": _download_url(
+                            tier_url, _download_filename(title, quality, tier_url), region
+                        ),
+                    }
                 )
-        subtitles = _caption_tracks(direct.get("subtitles"), region)
-    else:
-        primary_url, primary_format = _frame_url(resolution.url, region), "frame"
+                if play not in seen_sources:
+                    seen_sources.add(play)
+                    sources.append(play)
+                if tier_url != (direct.get("stream_url") or ""):
+                    mirrors.append(
+                        {"name": f"Server {index + 1}", "url": play}
+                    )
+            subtitles = _caption_tracks(direct.get("subtitles"), region)
+
+    if not direct:
+        # Prefer the first embed candidate over `resolution.url`: when the
+        # discarded winner was the direct hit, `resolution.url` still points at
+        # that same rejected URL, and minting a frame handle for it would put
+        # the trailer right back into the player.
+        embed_url = next(
+            (
+                entry["url"]
+                for entry in resolution.candidate_entries()
+                if entry.get("is_embed") and entry.get("url")
+            ),
+            resolution.url,
+        )
+        primary_url, primary_format = _frame_url(embed_url, region), "frame"
 
     # The embed failover chain, as frame handles. Direct entries a resolution
     # may include are dropped on purpose: every direct candidate is already in
@@ -3835,5 +3872,12 @@ if __name__ == "__main__":
         host=_host,
         port=int(os.environ.get("PORT", "5000")),
         debug=_debug,
+        # Serve each request on its own thread. Werkzeug's dev server defaults
+        # to a single-threaded socket, so one slow request (a provider probe, a
+        # cold season resolve) blocks every other one behind it and the proxy
+        # in front sees a stalled backend it can only answer 502 for. This is
+        # the development server; production still runs gunicorn, whose worker
+        # count the deployment owns.
+        threaded=True,
         request_handler=_QuietRequestHandler,
     )

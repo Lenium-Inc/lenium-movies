@@ -1,9 +1,9 @@
-import { useCallback, useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { Check, ChevronDown, Play, Loader2 } from "lucide-react";
 import { useStatsRevision } from "@/hooks/useStats";
 import { getProgressFraction } from "@/services/stats";
 import { formatRuntime } from "@/lib/format";
-import { fetchEpisodeDetails } from "@/services/api";
+import { fetchSeasonDetails } from "@/services/api";
 import type { StreamEpisode, StreamMovie } from "@/services/api";
 
 interface EpisodeMatrixProps {
@@ -57,11 +57,21 @@ export function EpisodeMatrix({ movie, onPlay }: EpisodeMatrixProps) {
   // All seasons collapsed by default - clean, scannable UI
   const [openSeasons, setOpenSeasons] = useState<Set<number>>(new Set());
 
-  // Episode detail state - preloaded for all episodes
+  // Episode metadata, keyed `${season}-${number}`. Populated lazily, one whole
+  // season at a time, as seasons are expanded.
   const [episodeDetails, setEpisodeDetails] = useState<
     Map<string, StreamEpisode>
   >(new Map());
-  const [loadingDetails, setLoadingDetails] = useState<Set<string>>(new Set());
+
+  // Seasons that still need their details fetched. A season is removed from
+  // this set the moment its fetch starts (success or failure) so a season is
+  // never requested twice, and so a failed season does not spin forever.
+  const [pendingSeasons, setPendingSeasons] = useState<Set<number>>(
+    () => new Set(grouped.map(([season]) => season))
+  );
+  const [loadingSeasons, setLoadingSeasons] = useState<Set<number>>(new Set());
+  // Guards against a season being claimed by two effects in the same commit.
+  const claimedSeasons = useRef<Set<number>>(new Set());
 
   const fraction = getProgressFraction(movie.id);
   const watched = fraction > 0.6;
@@ -75,89 +85,95 @@ export function EpisodeMatrix({ movie, onPlay }: EpisodeMatrixProps) {
     });
   };
 
-  // Preload episode details for all episodes when component mounts
+  // Episode metadata is fetched lazily, one whole season per request, and only
+  // once that season is actually expanded.
+  //
+  // The old version prefetched every episode of every season on mount as
+  // individual /api/episodes calls -- a 4-season show fired dozens of requests
+  // in parallel and tripped the backend's 429 limiter. /api/season answers with
+  // an entire season in a single call, so the fan-out collapses to one request
+  // per expansion, and expansion-only loading keeps a collapsed show at zero
+  // metadata requests.
   useEffect(() => {
     if (!movie.id || !/^\d+$/.test(movie.id)) return;
+    const controller = new AbortController();
 
-    const loadAllEpisodeDetails = async () => {
-      for (const episode of episodes) {
-        const key = `${episode.season}-${episode.number}`;
-        if (episodeDetails.has(key) || loadingDetails.has(key)) continue;
-
-        setLoadingDetails(prev => new Set(prev).add(key));
-
-        try {
-          const details = await fetchEpisodeDetails(
-            movie.id,
-            episode.season,
-            episode.number
-          );
-          if (details) {
-            setEpisodeDetails(prev =>
-              new Map(prev).set(key, { ...episode, ...details })
-            );
+    const loadSeason = async (season: number) => {
+      setLoadingSeasons(previous => new Set(previous).add(season));
+      try {
+        const payload = await fetchSeasonDetails(movie.id, season);
+        if (controller.signal.aborted) return;
+        const list = payload?.episodes;
+        if (!list?.length) return;
+        setEpisodeDetails(previous => {
+          const next = new Map(previous);
+          for (const episode of list) {
+            // A real season from TMDB always numbers its episodes and carries
+            // the optional metadata; the bulk type is widened to
+            // `number | null` only because the shelf's synthesized rows can
+            // lack one. Narrow it back to the shape the matrix renders.
+            if (episode.number == null) continue;
+            const { number, runtime, vote_average, ...rest } = episode;
+            next.set(`${episode.season}-${number}`, {
+              ...rest,
+              number,
+              ...(runtime != null ? { runtime } : {}),
+              ...(vote_average != null ? { vote_average } : {}),
+            });
           }
-        } catch (error) {
-          console.warn(
-            `Failed to fetch episode details for S${episode.season}E${episode.number}:`,
-            error
-          );
-        } finally {
-          setLoadingDetails(prev => {
-            const next = new Set(prev);
-            next.delete(key);
+          return next;
+        });
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          console.warn(`Failed to fetch details for season ${season}:`, error);
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setLoadingSeasons(previous => {
+            const next = new Set(previous);
+            next.delete(season);
             return next;
           });
         }
       }
     };
 
-    loadAllEpisodeDetails();
-  }, [movie.id, episodes]);
+    const run = async () => {
+      // At most three season fetches are in flight at a time. Each is a single
+      // bulk request, but a page can expand several seasons in quick succession
+      // (or remount with rows already open), and an unbounded burst is what
+      // tripped the limiter in the first place.
+      const queue = grouped
+        .map(([season]) => season)
+        .filter(
+          season =>
+            openSeasons.has(season) &&
+            pendingSeasons.has(season) &&
+            !claimedSeasons.current.has(season)
+        );
+      if (!queue.length) return;
 
-  // Also load details when a season is expanded (for any not yet loaded)
-  useEffect(() => {
-    if (!movie.id || !/^\d+$/.test(movie.id)) return;
+      for (const season of queue) claimedSeasons.current.add(season);
+      setPendingSeasons(previous => {
+        const next = new Set(previous);
+        for (const season of queue) next.delete(season);
+        return next;
+      });
 
-    const loadVisibleEpisodeDetails = async () => {
-      for (const [season, list] of grouped) {
-        if (!openSeasons.has(season)) continue;
-
-        for (const episode of list) {
-          const key = `${episode.season}-${episode.number}`;
-          if (episodeDetails.has(key) || loadingDetails.has(key)) continue;
-
-          setLoadingDetails(prev => new Set(prev).add(key));
-
-          try {
-            const details = await fetchEpisodeDetails(
-              movie.id,
-              episode.season,
-              episode.number
-            );
-            if (details) {
-              setEpisodeDetails(prev =>
-                new Map(prev).set(key, { ...episode, ...details })
-              );
-            }
-          } catch (error) {
-            console.warn(
-              `Failed to fetch episode details for S${episode.season}E${episode.number}:`,
-              error
-            );
-          } finally {
-            setLoadingDetails(prev => {
-              const next = new Set(prev);
-              next.delete(key);
-              return next;
-            });
-          }
+      let cursor = 0;
+      const workers = Array.from({ length: Math.min(3, queue.length) }, async () => {
+        while (cursor < queue.length) {
+          const season = queue[cursor];
+          cursor += 1;
+          await loadSeason(season);
         }
-      }
+      });
+      await Promise.all(workers);
     };
 
-    loadVisibleEpisodeDetails();
-  }, [openSeasons, movie.id, grouped, episodeDetails, loadingDetails]);
+    void run();
+    return () => controller.abort();
+  }, [openSeasons, movie.id, grouped, pendingSeasons]);
 
   return (
     <section className="mt-8 rounded-xl border border-white/10 bg-[#121212] p-5">
@@ -214,7 +230,7 @@ export function EpisodeMatrix({ movie, onPlay }: EpisodeMatrixProps) {
                   {list.map(episode => {
                     const key = `${season}-${episode.number}`;
                     const details = episodeDetails.get(key);
-                    const isLoading = loadingDetails.has(key);
+                    const isLoading = loadingSeasons.has(season);
 
                     return (
                       <li
