@@ -58,9 +58,9 @@ export function sanitizeSubtitles(value: unknown): StreamSubtitle[] {
   return tracks;
 }
 
-/** An alternative playable embed/web source served by the backend's
- * `/api/get-stream` contract (`mirrors`). The player lets the viewer switch
- * between `stream_url` and these mirrors at runtime. */
+/** An alternative playable source carried by the v1 init payload (`mirrors`).
+ * The player lets the viewer switch between `stream_url` and these mirrors at
+ * runtime. */
 export interface StreamMirror {
   name: string;
   url: string;
@@ -117,7 +117,7 @@ export interface StreamMovie {
   season?: number;
   /** Episode the returned `stream_url` targets (TV payloads). */
   episode?: number;
-  /** Alternate embed sources returned by `/api/get-stream`. */
+  /** Alternate embed sources returned by `/api/v1/playback/init`. */
   mirrors?: StreamMirror[];
   /**
    * The resolver's ordered provider chain (winner first), carried onto the movie
@@ -365,7 +365,7 @@ export class StreamNotFoundError extends Error {
 /**
  * Thrown when the backend walked every configured provider and none of them
  * could serve the title (HTTP 404 with `code: "PROVIDERS_EXHAUSTED"` from
- * `/api/get-stream`).
+ * `/api/v1/playback/init`).
  *
  * This is deliberately distinct from a transport error. It reports a
  * *decision* -- the whole chain was tried -- so retrying it can only re-walk
@@ -650,9 +650,13 @@ export async function resolveStream(
   };
 }
 
-/** An id-based direct stream source returned by `/api/get-stream`. */
+/**
+ * A playable source returned by `/api/v1/playback/init` (`getStreamSource`)
+ * or carried inside the resolve payload's `movie`. URLs are backend handles
+ * (`/api/v1/playback/...?token=...`), never raw upstream links.
+ */
 export interface StreamSource {
-  /** Primary embed/web URL (`activeSource`). */
+  /** Primary embed/web URL (`movie.stream_url`). */
   url: string;
   /** Ordered list of candidate source URLs (primary first) for auto-cycling. */
   sources?: string[];
@@ -699,22 +703,31 @@ export interface GetStreamRequest {
 function isGetStreamPayload(value: unknown): value is {
   success: boolean;
   available?: boolean;
-  activeSource: string;
-  sources?: string[];
-  mirrors: StreamMirror[];
-  subtitles?: StreamSubtitle[];
-  is_embed?: boolean;
+  movie: {
+    stream_url: string;
+    sources?: string[];
+    mirrors?: StreamMirror[];
+    subtitles?: StreamSubtitle[];
+    is_embed?: boolean;
+    provider?: string;
+  };
   provider?: string;
+  language?: string | null;
 } {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
-  return record.success === true && typeof record.activeSource === "string";
+  if (record.success !== true) return false;
+  const movie = record.movie;
+  if (typeof movie !== "object" || movie === null) return false;
+  const streamUrl = (movie as Record<string, unknown>).stream_url;
+  return typeof streamUrl === "string";
 }
 
 /**
  * Stream resolution is the slowest call in the app. A Render free-tier
  * instance that has scaled to zero needs 15-20s to boot before it answers
- * /api/get-stream, and `fetch` has no default timeout, so a cold start was
+ * `/api/v1/playback/init`, and `fetch` has no default timeout, so a cold
+ * start was
  * indistinguishable from a hung request -- the resolver had no way to say "still
  * waiting" and the UI had nothing to show but the generic spinner.
  *
@@ -725,7 +738,8 @@ function isGetStreamPayload(value: unknown): value is {
 export const STREAM_RESOLVE_TIMEOUT_MS = 30_000;
 
 /**
- * Budget for `/api/movies/resolve`. This endpoint does more than `get-stream`:
+ * Budget for `/api/movies/resolve`. This endpoint does more than the init
+ * leg the player polls:
  * on a catalog miss it can scrape Archive.org synchronously for up to five
  * candidate identifiers, each a 30s x 2 metadata fetch plus a 25s stream probe.
  * It was previously called with a bare `fetch` and no timeout at all, so a slow
@@ -781,32 +795,41 @@ async function readProviderExhaustion(response: Response): Promise<unknown[] | n
 }
 
 /**
- * Resolve a direct playable source for an already-known TMDB title through the
- * backend's `/api/get-stream` endpoint. The backend returns an `activeSource`
- * (the URL the player boots on) plus a `mirrors` list of alternate servers.
+ * Resolve a playable source for an already-known TMDB title through the
+ * backend's `/api/v1/playback/init` endpoint (the player leg; the details
+ * sheet's warm resolve reaches the same handler via the `/api/movies/resolve`
+ * alias). The answer carries `movie.stream_url` (a tokenised frame or media
+ * handle), the `sources`/`mirrors` lists the player can cycle, the caption
+ * tracks for that source, and the viewer's detected language.
  *
- * For TV entries pass the selected `season`/`episode` so the baked embed URL —
- * and every mirror — targets the exact episode the viewer picked.
+ * For TV entries pass the selected `season`/`episode` so every returned leg —
+ * the primary handle and every mirror — targets the exact episode picked.
  *
  * @throws `StreamTimeoutError` if the backend does not answer within
  * `STREAM_RESOLVE_TIMEOUT_MS`, which usually means a cold start rather than a
- * dead service. @throws `Error` when the backend is unreachable or returns an
- * unexpected shape.
+ * dead service. @throws `StreamExhaustedError` when every provider was walked
+ * and none could serve the title. @throws `Error` when the backend is
+ * unreachable or returns an unexpected shape.
  */
 export async function getStreamSource(
   input: GetStreamRequest
 ): Promise<StreamSource> {
-  const params = new URLSearchParams();
-  params.set("tmdb_id", input.tmdbId);
-  params.set("media_type", input.mediaType);
+  const body: Record<string, unknown> = {
+    tmdb_id: input.tmdbId,
+    media_type: input.mediaType,
+  };
   if (input.mediaType === "tv") {
-    params.set("season", String(input.season ?? 1));
-    params.set("episode", String(input.episode ?? 1));
+    body.season = input.season ?? 1;
+    body.episode = input.episode ?? 1;
   }
-  if (input.refresh) params.set("refresh", "1");
+  if (input.refresh) body.refresh = true;
   const response = await fetchWithTimeout(
-    `${MOVIE_API_BASE_URL}/api/get-stream?${params.toString()}`,
-    {},
+    `${MOVIE_API_BASE_URL}/api/v1/playback/init`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
     STREAM_RESOLVE_TIMEOUT_MS
   );
   if (!response.ok) {
@@ -818,16 +841,17 @@ export async function getStreamSource(
   }
   const payload: unknown = await response.json();
   if (!isGetStreamPayload(payload)) {
-    throw new Error("Movie backend returned an unexpected get-stream shape");
+    throw new Error("Movie backend returned an unexpected playback-init shape");
   }
-  if (payload.available === false) {
+  if (payload.available === false || payload.movie.stream_url === "") {
     throw new StreamExhaustedError();
   }
-  const mirrors = Array.isArray(payload.mirrors) ? payload.mirrors : [];
+  const movie = payload.movie;
+  const mirrors = Array.isArray(movie.mirrors) ? movie.mirrors : [];
   const rawSources =
-    Array.isArray(payload.sources) && payload.sources.length > 0
-      ? payload.sources
-      : [payload.activeSource, ...mirrors.map(m => m.url)];
+    Array.isArray(movie.sources) && movie.sources.length > 0
+      ? movie.sources
+      : [movie.stream_url, ...mirrors.map(m => m.url)];
   const sources = Array.from(
     new Set(
       rawSources.filter(
@@ -835,9 +859,9 @@ export async function getStreamSource(
       )
     )
   );
-  const subtitles = sanitizeSubtitles(payload.subtitles);
+  const subtitles = sanitizeSubtitles(movie.subtitles);
   return {
-    url: payload.activeSource,
+    url: movie.stream_url,
     sources,
     mirrors,
     /**
@@ -846,10 +870,24 @@ export async function getStreamSource(
      * server-side, so the client no longer has to infer this from the host --
      * it just renders whatever the resolver picked, embed or not.
      */
-    isEmbed: payload.is_embed === true,
+    isEmbed: movie.is_embed === true,
     /** Id of the provider that served this source, for diagnostics. */
     provider:
-      typeof payload.provider === "string" ? payload.provider : undefined,
+      typeof payload.provider === "string"
+        ? payload.provider
+        : typeof movie.provider === "string"
+          ? movie.provider
+          : undefined,
+    /**
+     * Base language code the backend detected for this viewer. The v1 init
+     * payload reports it at the top level; the player opens on a track
+     * matching it so a viewer who speaks something other than English does
+     * not have to hunt for their language on every title.
+     */
+    language:
+      typeof payload.language === "string" && payload.language
+        ? payload.language
+        : null,
     // Only meaningful for a direct source; an embed payload carries none.
     ...(subtitles.length > 0 ? { subtitles } : {}),
   };

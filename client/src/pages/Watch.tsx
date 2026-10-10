@@ -691,7 +691,7 @@ export function WatchPage() {
               // source it was actually given instead of re-deriving "is this
               // playable natively?" from the host.
               ...(source.isEmbed ? { is_embed: true } : {}),
-              // /api/get-stream reports the tracks for the source it just
+              // The init leg reports the tracks for the source it just
               // picked. Dropping them here left the player with subtitles only
               // when the resolve call happened to be the one that won.
               ...(source.subtitles ? { subtitles: source.subtitles } : {}),
@@ -700,7 +700,7 @@ export function WatchPage() {
             };
           } catch (error) {
             console.warn(
-              `[WatchPage] get-stream failed for "${base.title}" (S${targetSeason}E${targetEpisode}), using resolved stream`,
+              `[WatchPage] playback-init failed for "${base.title}" (S${targetSeason}E${targetEpisode}), using resolved stream`,
               error
             );
           }

@@ -72,8 +72,9 @@ describe("getStreamSource timeout handling", () => {
       status: 200,
       json: async () => ({
         success: true,
-        activeSource: "https://cdn.test/a.m3u8",
-        mirrors: [],
+        provider: "archive_direct",
+        language: "en",
+        movie: { stream_url: "https://cdn.test/a.m3u8", mirrors: [] },
       }),
     }));
     vi.stubGlobal("fetch", fetchMock);
@@ -108,8 +109,9 @@ describe("getStreamSource timeout handling", () => {
       status: 200,
       json: async () => ({
         success: true,
-        activeSource: "https://cdn.test/a.m3u8",
-        mirrors: [],
+        provider: "vidsrc",
+        language: "en",
+        movie: { stream_url: "https://cdn.test/a.m3u8", mirrors: [] },
       }),
     }));
     vi.stubGlobal("fetch", fetchMock);
@@ -121,19 +123,21 @@ describe("getStreamSource timeout handling", () => {
       episode: 5,
     });
 
-    const url = String(fetchMock.mock.calls[0]?.[0]);
-    expect(url).toContain("tmdb_id=1399");
-    expect(url).toContain("season=2");
-    expect(url).toContain("episode=5");
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    expect(body.tmdb_id).toBe("1399");
+    expect(body.media_type).toBe("tv");
+    expect(body.season).toBe(2);
+    expect(body.episode).toBe(5);
   });
 });
 
 /**
- * `/api/get-stream` distinguishes "the chain is exhausted" from "the server is
- * busy", and the Watch page's response to the two is opposite: an exhausted
- * chain is a final answer and re-asking only re-walks providers that already
- * failed, while a shed request clears on its own and is worth waiting for.
- * The two used to share a status, so neither could be told apart.
+ * `/api/v1/playback/init` distinguishes "the chain is exhausted" from "the
+ * server is busy", and the Watch page's response to the two is opposite: an
+ * exhausted chain is a final answer and re-asking only re-walks providers that
+ * already failed, while a shed request clears on its own and is worth waiting
+ * for. The two used to share a status, so neither could be told apart.
  */
 describe("getStreamSource provider exhaustion", () => {
   beforeEach(() => {
@@ -236,13 +240,17 @@ describe("getStreamSource provider exhaustion", () => {
   });
 
   it("rejects a 200 that says available:false rather than parsing it as a source", async () => {
-    // `isGetStreamPayload` only requires `success` and a string `activeSource`,
-    // so a defensive backend could return an empty url with success:true. That
+    // The guard requires `success` and a string `movie.stream_url`, so a
+    // defensive backend could return an empty url with success:true. That
     // must not reach the player as a source that can never play.
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
-        jsonResponse(200, { success: true, available: false, activeSource: "", mirrors: [] })
+        jsonResponse(200, {
+          success: true,
+          available: false,
+          movie: { stream_url: "", mirrors: [] },
+        })
       )
     );
 

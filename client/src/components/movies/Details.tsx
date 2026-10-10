@@ -190,7 +190,7 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
           };
         } catch (error) {
           console.warn(
-            `[Details] get-stream failed for "${base.title}" (S${targetSeason}E${targetEpisode}), using resolved source`,
+            `[Details] playback-init failed for "${base.title}" (S${targetSeason}E${targetEpisode}), using resolved source`,
             error
           );
           if (mediaType === "tv") {
@@ -297,7 +297,7 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
           };
         } catch (error) {
           console.warn(
-            `[Details] get-stream failed for download "${source.title}" (S${season}E${episode})`,
+            `[Details] playback-init failed for download "${source.title}" (S${season}E${episode})`,
             error
           );
         }
