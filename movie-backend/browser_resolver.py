@@ -40,8 +40,16 @@ _UA = (
 #: Headless Chrome refuses to play media with sound unless told otherwise, and
 #: a player that never starts never asks the CDN for anything -- so the resolver
 #: would sit on a page that has the film loaded and report "no source".
+#:
+#: The autoplay policy is only there to get the element to start; the resolver
+#: reads the provider's JSON off the wire and never watches or listens to the
+#: page. Without `--mute-audio` that means every render plays the title out of
+#: the machine's speakers, which is a surprising thing for a background lookup
+#: to do. Muting costs nothing here: the segment requests are the same either
+#: way, and detection does not depend on audible output.
 _ARGS = [
     "--autoplay-policy=no-user-gesture-required",
+    "--mute-audio",
     "--disable-blink-features=AutomationControlled",
     "--no-sandbox",
 ]
