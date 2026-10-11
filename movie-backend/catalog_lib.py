@@ -243,8 +243,10 @@ def open_archive_stream(url: str, range_header: str | None):
     return response.status, headers_out, chunks()
 
 
-def fetch_bounded_text(url: str, timeout: float, max_bytes: int) -> str:
-    """Fetch a small text file, enforcing the archive.org allowlist and a byte cap.
+def fetch_bounded_text(
+    url: str, timeout: float, max_bytes: int, *, allow_any_host: bool = False
+) -> str:
+    """Fetch a small text file, enforcing a byte cap and (by default) the allowlist.
 
     Subtitle files are tens of KB, so the cap is a hard ceiling rather than a
     budget: without it this helper would happily pull an arbitrarily large
@@ -253,14 +255,24 @@ def fetch_bounded_text(url: str, timeout: float, max_bytes: int) -> str:
     caption file would fail part-way through playback with no visible cause.
 
     Kept beside `open_archive_stream` so both routes share one allowlist check
-    rather than each restating it.
+    rather than each restating it. `allow_any_host` lifts that check for a
+    caption the resolver already fetched elsewhere and minted with `any_host` --
+    the same opt-in the media relay trusts -- because a provider caption's CDN
+    is never on the archive list, and a caption route that only reached
+    archive.org returned every provider track as a 400 with no way for the
+    player to tell why.
     """
-    validate_archive_url(url, require_download_path=True)
+    if not allow_any_host:
+        validate_archive_url(url, require_download_path=True)
     req = urllib.request.Request(
         url,
         headers={"User-Agent": UA, "Accept": "text/vtt, text/plain, */*"},
     )
-    with _archive_opener().open(req, timeout=timeout) as response:
+    # The archive-only opener re-validates every redirect hop; a provider host
+    # is outside that world, so an any-host fetch uses the default opener and
+    # is bounded by the byte cap and timeout instead.
+    opener = _archive_opener() if not allow_any_host else urllib.request.build_opener()
+    with opener.open(req, timeout=timeout) as response:
         raw = response.read(max_bytes + 1)
     if len(raw) > max_bytes:
         raise ValueError("file exceeds the maximum subtitle size")

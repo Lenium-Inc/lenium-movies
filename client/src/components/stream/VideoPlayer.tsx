@@ -13,7 +13,7 @@ import {
   Volume2,
   VolumeX,
   Maximize,
-  Settings,
+  ChevronDown,
   Languages,
   Volume2 as Volume2Icon,
   X,
@@ -771,6 +771,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           setCurrentHlsSubtitle(hls.subtitleTrack);
         });
 
+        // ABR moves the rung on its own when it is in charge, so the label is
+        // mirrored from the level the instance actually switched to -- not from
+        // the last row the viewer clicked. Otherwise a weak-network downswitch
+        // would keep showing the taller rung the player just abandoned, which
+        // is exactly the moment the viewer most needs an honest number.
+        hls.on(
+          Hls.Events.LEVEL_SWITCHED,
+          (_event: unknown, data: { level?: number }) => {
+            const level = hls.levels?.[data?.level ?? -1];
+            const height = Number(level?.height) || 0;
+            setHlsQuality(height > 0 ? `${height}p` : "Auto");
+          }
+        );
+
         hls.on(
           Hls.Events.ERROR,
           (_event: unknown, data: { fatal?: boolean }) => {
@@ -824,6 +838,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               setDashLevels([]);
             }
           });
+          // Same contract as hls.js's LEVEL_SWITCHED: ABR may move the rung on
+          // its own, so the label is read back from the representation the
+          // player actually rendered rather than from the last clicked row.
+          player.on(
+            MediaPlayer.events.QUALITY_CHANGE_RENDERED,
+            (e: { mediaType?: string; newRepresentation?: { height?: number } }) => {
+              if (e?.mediaType !== "video") return;
+              const height = Number(e?.newRepresentation?.height) || 0;
+              setDashQuality(height > 0 ? `${height}p` : "Auto");
+            }
+          );
           player.on(MediaPlayer.events.ERROR, (e: { error?: { code?: string } }) => {
             // A fatal manifest/segment error is the same end state as a fatal
             // hls.js error: there is nothing left to retry, tell the caller.
@@ -1543,9 +1568,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     setSubtitleMenuOpen(false);
                   }}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-white/10 hover:bg-white/20 text-xs font-semibold tracking-wider transition-all"
+                  aria-label="Quality"
+                  aria-expanded={qualityMenuOpen}
                 >
-                  <Settings className="w-4 h-4" />
                   <span>{activeQuality}</span>
+                  <ChevronDown
+                    aria-hidden
+                    className={`w-3.5 h-3.5 transition-transform ${
+                      qualityMenuOpen ? "rotate-180" : ""
+                    }`}
+                  />
                 </button>
                 {qualityMenuOpen && (
                   <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-28 bg-zinc-900 border border-white/10 rounded-lg shadow-xl overflow-hidden py-1 z-50">

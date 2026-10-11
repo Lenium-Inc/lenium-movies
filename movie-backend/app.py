@@ -800,18 +800,29 @@ def _download_filename(title: str, quality: str, url: str) -> str:
 def _download_url(url: str, filename: str, region: str | None = None) -> str | None:
     """A download handle for `url`, or None when this host cannot be downloaded.
 
-    Downloadability is decided here by the same allowlist the relay enforces,
-    because the client can no longer classify a URL it never sees: `null` is
-    the honest answer for a tier the download route would refuse, rather than
-    a handle that 400s when clicked.
+    Downloadability is decided here because the client can no longer classify a
+    URL it never sees: `null` is the honest answer for a tier the download route
+    would refuse, rather than a handle that 400s when clicked.
+
+    Two facts decide it. First the container: an HLS or DASH manifest is a list
+    of segment URLs, not a single file, and saving it as one would require a
+    server-side remux this host does not do -- so a manifest is always `None`,
+    never a broken button. Second the host: a progressive file on the archive
+    allowlist gets the long-standing archive download handle; a progressive file
+    elsewhere (an extracted provider's MP4) is reachable only through the media
+    relay, so its handle is minted with `any_host` and the download route serves
+    it the same way that relay does -- gated on the unforgeable handle, which a
+    client cannot mint.
     """
+    # A manifest is never a download, whatever its host.
+    if proxy_util.stream_format(url) in ("hls", "dash"):
+        return None
     try:
         catalog_lib.validate_archive_url(url, require_download_path=True)
-    except Exception:  # noqa: BLE001 - not downloadable == no handle, not an error
-        return None
-    token = playback_tokens.issue(
-        playback_tokens.KIND_DOWNLOAD, url, meta={"filename": filename, "region": region or ""}
-    )
+        meta: dict = {"filename": filename, "region": region or ""}
+    except Exception:  # noqa: BLE001 - off-list host, not an error
+        meta = {"filename": filename, "region": region or "", "any_host": True}
+    token = playback_tokens.issue(playback_tokens.KIND_DOWNLOAD, url, meta=meta)
     return f"/api/v1/playback/download?token={token}"
 
 
@@ -1457,7 +1468,14 @@ def playback_captions():
 
     try:
         text = catalog_lib.fetch_bounded_text(
-            url, SUBTITLE_TIMEOUT_SECONDS, SUBTITLE_MAX_BYTES
+            url,
+            SUBTITLE_TIMEOUT_SECONDS,
+            SUBTITLE_MAX_BYTES,
+            # A provider caption's CDN is never on the archive allowlist. The
+            # handle carries the resolver's `any_host` opt-in; without honouring
+            # it here, every provider track returned a 400 and the player showed
+            # a subtitle menu that could never fire a cue.
+            allow_any_host=bool(meta.get("any_host")),
         )
     except catalog_lib.ArchiveUrlRejected as error:
         # Keyed on the exception type, not on wording: a refusal worded
@@ -2296,7 +2314,19 @@ def playback_download():
     filename = _safe_download_name(entry.get("meta", {}).get("filename"), fallback)
 
     try:
-        status, headers, body = catalog_lib.open_archive_stream(url, None)
+        try:
+            status, headers, body = catalog_lib.open_archive_stream(url, None)
+        except ValueError:
+            # The allowlist refuses an off-list host by design. A progressive
+            # provider file is relayed through the media route under the same
+            # `any_host` opt-in -- a handle a client cannot mint -- so the
+            # download uses that identical leg rather than a second, narrower
+            # allowlist that would reject the very source playback just served.
+            if not entry.get("meta", {}).get("any_host"):
+                raise
+            status, headers, body = _open_any_host_stream(
+                url, None, entry.get("referer") or ""
+            )
     except ValueError as error:
         return _json_error(str(error), 400)
     except Exception:  # noqa: BLE001 - upstream failure is not ours

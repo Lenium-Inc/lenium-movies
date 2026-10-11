@@ -118,7 +118,7 @@ def _fake_archive(body, content_type="text/plain;charset=UTF-8"):
             headers["Content-Type"] = content_type
         return 200, headers, iter([body])
 
-    def _text(url, timeout, max_bytes):
+    def _text(url, timeout, max_bytes, allow_any_host=False):
         if len(body) > max_bytes:
             raise ValueError("file exceeds the maximum subtitle size")
         return body
@@ -133,7 +133,7 @@ def _fake_archive_failing():
     def _open(url, range_header=None):
         raise OSError("upstream node refused the connection")
 
-    def _text(url, timeout, max_bytes):
+    def _text(url, timeout, max_bytes, allow_any_host=False):
         raise OSError("upstream node refused the connection")
 
     import app as application
@@ -334,7 +334,7 @@ def test_captions_route_rejects_truncated_caption_file():
     # the helper rejects rather than truncates.
     _, client = _client()
 
-    def _truncating(url, timeout, max_bytes):
+    def _truncating(url, timeout, max_bytes, allow_any_host=False):
         raise ValueError("file exceeds the maximum subtitle size")
 
     import app as application
@@ -355,7 +355,7 @@ def test_captions_route_honours_allowlist_inside_helper():
     _, client = _client()
     import app as application
 
-    def _rejecting(url, timeout, max_bytes):
+    def _rejecting(url, timeout, max_bytes, allow_any_host=False):
         raise application.catalog_lib.ArchiveUrlRejected(
             "stream URL must be http or https"
         )
@@ -366,7 +366,7 @@ def test_captions_route_honours_allowlist_inside_helper():
 
     # A plain ValueError is the byte cap, which is an upstream refusal and stays
     # a 502 -- the two cases are no longer told apart by message text.
-    def _oversized(url, timeout, max_bytes):
+    def _oversized(url, timeout, max_bytes, allow_any_host=False):
         raise ValueError("file exceeds the maximum subtitle size")
 
     application.catalog_lib.fetch_bounded_text = _oversized
