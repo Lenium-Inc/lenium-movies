@@ -66,8 +66,19 @@ const abuse = new AbuseTracker();
  * request, which defeats the limiter entirely. Set it to the real hop count
  * (1 for a single load balancer, 0 when running directly). Overridable because
  * deployments differ, and a wrong default here silently weakens the control.
+ *
+ * The default is environment-shaped because that is the only thing that is
+ * ever reliably known here: development runs vite and this server directly on
+ * the machine, with no proxy in front, so trusting the header at all let any
+ * caller mint a fresh bucket per request by rewriting `X-Forwarded-For`.
+ * Production runs behind Render's load balancer and needs the hop, so it
+ * declares `NODE_ENV=production` and gets 1 unless it says otherwise.
  */
-const TRUST_PROXY_HOPS = Number.parseInt(process.env.TRUST_PROXY_HOPS ?? "1", 10);
+const TRUST_PROXY_HOPS = Number.parseInt(
+  process.env.TRUST_PROXY_HOPS ??
+    (process.env.NODE_ENV === "production" ? "1" : "0"),
+  10
+);
 
 /**
  * Identify the client for budgeting purposes.

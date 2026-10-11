@@ -28,9 +28,21 @@ describe("RateLimiter", () => {
       limiter.check("resolver", "a", t0);
     }
     expect(limiter.check("resolver", "a", t0).allowed).toBe(false);
-    // One token costs 6s at the resolver rate.
-    const after = limiter.check("resolver", "a", t0 + 6 * SECOND);
+    // One token costs the inverse of the refill rate. Derived rather than
+    // spelled out so retuning the tier cannot leave this test asserting a
+    // number the limiter no longer uses.
+    const oneTokenMs = Math.ceil(1 / DEFAULT_TIERS.resolver.ratePerSec) * SECOND;
+    const after = limiter.check("resolver", "a", t0 + oneTokenMs);
     expect(after.allowed).toBe(true);
+  });
+
+  it("budgets the resolver for a browsing session, not a single page", () => {
+    // A title spends two resolver calls (metadata, then its stream) and a show
+    // adds one per opened season, so a bucket smaller than one session made the
+    // limiter the slowest part of the product: the burst emptied after a few
+    // titles and every later resolve waited on the refill.
+    const callsPerSession = 6;
+    expect(DEFAULT_TIERS.resolver.burst).toBeGreaterThanOrEqual(callsPerSession);
   });
 
   it("fails open on metadata and closed on the resolver", () => {

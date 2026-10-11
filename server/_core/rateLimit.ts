@@ -43,8 +43,15 @@ export const DEFAULT_TIERS: Record<Tier, TierConfig> = {
   // 60 burst, sustained ~1/s. Generous: browsing a catalogue legitimately
   // pages through dozens of these.
   metadata: { ratePerSec: 1, burst: 60, failOpen: true },
-  // 10 burst, sustained ~1 per 6s. These trigger a scrape each.
-  resolver: { ratePerSec: 1 / 6, burst: 10, failOpen: false },
+  // Expensive: each of these can make the backend scrape a provider. The
+  // budget is sized for a person, not for the work one request does, because
+  // a page legitimately spends several of these -- a title resolves once for
+  // its metadata and once for its stream, and a show adds one per opened
+  // season -- and a bucket smaller than a single browsing session turned the
+  // limiter into the slowest part of the product. The scrape itself stays
+  // bounded upstream, by the per-title cache and its miss cooldown, so this
+  // budget only has to stop one address from walking the whole catalogue.
+  resolver: { ratePerSec: 1 / 2, burst: 30, failOpen: false },
   // Credential endpoints. 5 burst, sustained ~1 per 5s, and fail-closed.
   // These are the one place where being generous is a security hole rather
   // than a nicety: an unlimited login endpoint is a free credential-stuffing

@@ -38,6 +38,27 @@ describe("classifyDownloadUrl", () => {
     expect(classifyDownloadUrl(EMBED).kind).toBe("embed");
   });
 
+  it("detects the backend's tokenised frame handle", () => {
+    // The shape an embed actually arrives in from /api/v1/playback/init. With
+    // no host and no extension it used to fall through to "unsupported", which
+    // told the viewer a working source simply had no file -- true, but not the
+    // message that explains why the save button is off.
+    expect(
+      classifyDownloadUrl("/api/v1/playback/frame?token=opaque").kind
+    ).toBe("embed");
+    expect(
+      classifyDownloadUrl(
+        "https://vy.example/api/v1/playback/frame?token=opaque"
+      ).kind
+    ).toBe("embed");
+  });
+
+  it("does not mistake a media relay handle for an embed", () => {
+    expect(
+      classifyDownloadUrl("/api/v1/playback/media?token=opaque").kind
+    ).not.toBe("embed");
+  });
+
   it("matches embed subdomains", () => {
     expect(
       classifyDownloadUrl("https://player.vidsrc.cc/v2/embed/movie/1").kind

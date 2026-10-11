@@ -1,4 +1,4 @@
-import { isExternalEmbedUrl } from "./streamUtils";
+import { isEmbedSourceUrl } from "./streamUtils";
 
 /**
  * Whether a resolved source can actually be saved as one file.
@@ -45,16 +45,18 @@ function extensionOf(pathname: string): string {
 /**
  * Classify a single resolved URL for download.
  *
- * Ordering matters: an embed host is checked first because a third-party page
- * URL has no meaningful extension, and a playlist is checked before the
- * container table so a `.m3u8` is never mistaken for a saveable file.
+ * Ordering matters: an embed is checked first because a third-party page URL
+ * (and the backend's tokenised frame handle, which is the shape an embed
+ * actually arrives in) has no meaningful extension, and a playlist is checked
+ * before the container table so a `.m3u8` is never mistaken for a saveable
+ * file.
  */
 export function classifyDownloadUrl(url: string | null | undefined): DownloadCandidate {
   if (!url || typeof url !== "string" || !url.trim()) {
     return { kind: "unsupported", url: "" };
   }
   const candidate = url.trim();
-  if (isExternalEmbedUrl(candidate)) {
+  if (isEmbedSourceUrl(candidate)) {
     return { kind: "embed", url: candidate };
   }
   let pathname = "";

@@ -1,5 +1,5 @@
 /**
- * Provider chain for the embed player, derived from the StreamVy manifest.
+ * Provider chain for the embed player.
  *
  * Playback is tiered:
  *
@@ -15,21 +15,26 @@
  * order for client-side failover if that URL dies mid-play. A request only
  * fails once every enabled provider has been attempted.
  *
- * This module is the client-side half of that contract: it turns a manifest
- * entry into a concrete URL for a given title, and hands the player a
- * ready-made failover chain when the backend has not supplied one. The two
- * manifests are asserted identical in `embedSources.test.ts`, so a provider
- * cannot exist on only one side.
+ * This module is the client-side half of that contract, and it is now one-way:
+ * it reads the chain the server sent and turns it into something the picker can
+ * render. It no longer builds provider URLs of its own. `/api/v1/playback/init`
+ * answers with tokenised frame handles (`/api/v1/playback/frame?token=...`),
+ * never raw third-party URLs, so a locally-built URL would be a *different*
+ * thing from what the server vetted -- one that skips the backend's health
+ * record, its bench cooldowns, and its ordering, and that points the browser at
+ * a host this deploy may no longer serve. When the payload carries no chain,
+ * the honest answer is "nothing to walk", not a guess.
+ *
+ * The manifest metadata (`EMBED_SOURCES`) is kept: it is what labels the picker
+ * tabs and what `EMBED_HOSTS` recognises a frame host from. It is asserted
+ * against the Python manifest in `embedSources.test.ts`.
  */
 
 import {
   STREAM_PROVIDERS,
   STREAM_PROVIDER_HOSTS,
-  safeStreamId,
   type StreamProvider,
 } from "@/lib/streamProviders";
-
-export type EmbedMedia = "movie" | "tv";
 
 /**
  * Permissions every provider frame is granted.
@@ -55,13 +60,13 @@ export const EMBED_ALLOW =
   "autoplay; encrypted-media; fullscreen; picture-in-picture; accelerometer; gyroscope";
 
 /**
- * One entry of the `providers` array `/api/movies/resolve` returns.
+ * One entry of the `providers` array `/api/v1/playback/init` returns.
  *
  * The backend sends this shape rather than its internal provider records because
  * the client's only job with the chain is to walk it in order: it needs a name
  * to show if it ever has to, a URL to load, and whether the URL is a frame or a
  * file. Anything richer would be a second contract to keep in step with the
- * resolver.
+ * resolver. `url` is a tokenised handle on this origin, not a provider URL.
  */
 export interface BackendProviderCandidate {
   name?: string | null;
@@ -73,58 +78,55 @@ export interface BackendProviderCandidate {
  * Turn the backend's `providers` array into a playable chain.
  *
  * Order is the backend's decision and is preserved exactly -- it is the order it
- * probed in, and reversing it would put a host it already ruled out first.
+ * probed in, and reversing it would put a host it already ruled out first. This
+ * is the only source of chain entries: nothing is appended from the local
+ * manifest, because a manifest entry has no token behind it and therefore no
+ * frame the browser is allowed to load.
  *
- * Each URL is matched back to its manifest entry by host so the label and
- * audience type come from one place rather than from whatever string the server
- * happened to send. A URL naming no known provider is kept anyway: the resolver
- * may know about a host this deploy's manifest does not, and dropping its URL
- * would throw away a candidate the server offered.
- *
- * `fallback` (the manifest chain for this target) is appended for any provider
- * the backend did not mention. Those were never vetted, but they are addressable
- * and cost nothing to try, and a chain that shrinks when the resolver is unsure
- * is a chain with nowhere left to go.
+ * Each URL is matched back to its manifest entry -- by the label the server
+ * sent first, then by host -- so the id and audience badge come from one place
+ * rather than from whatever string the payload happened to carry. The label is
+ * tried first because a tokenised handle has no host to read: it is a path on
+ * this origin, and the provider it will redirect to is opaque. A URL naming no
+ * known provider is kept anyway: the resolver may know about a host this
+ * deploy's manifest does not, and dropping its URL would throw away a candidate
+ * the server offered. Entries the backend marked as files rather than frames
+ * are skipped -- a progressive URL belongs in the direct player, not in an
+ * `<iframe>`.
  */
 export function chainFromBackend(
-  providers: readonly BackendProviderCandidate[] | null | undefined,
-  fallback: readonly ResolvedEmbedSource[]
+  providers: readonly BackendProviderCandidate[] | null | undefined
 ): ResolvedEmbedSource[] {
   const out: ResolvedEmbedSource[] = [];
   const seenUrls = new Set<string>();
   const seenIds = new Set<string>();
 
   for (const entry of providers ?? []) {
+    if (entry?.is_embed === false) continue;
     const url = entry?.url?.trim();
     if (!url) continue;
     if (seenUrls.has(url)) continue;
 
-    const host = hostOf(url);
-    const known = fallback.find(source => source.host === host);
+    const label = entry?.name?.trim() || "";
+    const urlHost = hostOf(url);
+    const known =
+      EMBED_SOURCES.find(source => source.label === label) ??
+      (urlHost ? EMBED_SOURCES.find(source => source.host === urlHost) : undefined);
     const id = known?.id ?? `server-${out.length}`;
     if (seenIds.has(id)) continue;
 
+    const resolvedLabel = label || known?.label || "Alternate source";
     seenUrls.add(url);
     seenIds.add(id);
-    out.push(
-      known
-        ? { ...known, url }
-        : {
-            id,
-            label: entry?.name?.trim() || "Alternate source",
-            title: entry?.name?.trim() || "Alternate source",
-            host,
-            url,
-            quality: null,
-            type: "embed",
-          }
-    );
-  }
-
-  for (const source of fallback) {
-    if (seenIds.has(source.id)) continue;
-    seenIds.add(source.id);
-    out.push(source);
+    out.push({
+      id,
+      label: resolvedLabel,
+      title: resolvedLabel,
+      host: known?.host || urlHost,
+      quality: known?.quality ?? null,
+      type: known?.type ?? "embed",
+      url,
+    });
   }
 
   return out;
@@ -132,7 +134,7 @@ export function chainFromBackend(
 
 function hostOf(url: string): string {
   try {
-    return new URL(url).hostname;
+    return new URL(url).hostname.toLowerCase();
   } catch {
     return "";
   }
@@ -157,21 +159,14 @@ export interface EmbedSource {
   type: StreamProvider["type"] | "embed";
 }
 
-export interface EmbedTarget {
-  tmdbId?: number | string | null;
-  mediaType: EmbedMedia;
-  season?: number;
-  episode?: number;
-}
-
 export interface ResolvedEmbedSource extends EmbedSource {
   url: string;
 }
 
 /**
- * Order matters: the first source is preselected and the backend's failover
- * chain follows the same order, so the most reliable provider is first and the
- * shakiest last.
+ * The manifest, as picker metadata. Order matters: the first source is
+ * preselected and the backend's failover chain follows the same order, so the
+ * most reliable provider is first and the shakiest last.
  *
  * These ids and hosts mirror `movie-backend/stream_providers.py`, which is the
  * authority for which provider actually served a title. The two are asserted
@@ -184,47 +179,10 @@ export const EMBED_SOURCES: readonly EmbedSource[] = Object.freeze(
     id: provider.id,
     label: provider.name,
     title: provider.name,
-    host: new URL(provider.getUrl("1", "movie")).hostname,
+    host: provider.host,
     quality: provider.quality,
     type: provider.type,
   }))
 );
 
 export const EMBED_HOSTS: readonly string[] = STREAM_PROVIDER_HOSTS;
-
-/**
- * Every provider in the manifest is keyed on TMDB, so `tmdb=` is the only key
- * that is read. A target that cannot be placed in a URL path yields no
- * candidates at all rather than a chain of URLs that 404 or — worse — point
- * somewhere unintended.
- */
-function buildUrl(
-  provider: StreamProvider,
-  target: EmbedTarget
-): string | null {
-  const tmdb = safeStreamId(target.tmdbId);
-  if (!tmdb) return null;
-  const isTv = target.mediaType === "tv";
-  const season = Number.isFinite(target.season) ? Number(target.season) : 1;
-  const episode = Number.isFinite(target.episode) ? Number(target.episode) : 1;
-  return provider.getUrl(tmdb, isTv ? "tv" : "movie", season, episode);
-}
-
-/**
- * Resolve every provider that can serve this target, in failover order.
- * Providers that can't address the target are dropped rather than rendered
- * as a broken tab.
- */
-export function resolveEmbedSources(
-  target: EmbedTarget
-): ResolvedEmbedSource[] {
-  const out: ResolvedEmbedSource[] = [];
-  for (const provider of STREAM_PROVIDERS) {
-    const url = buildUrl(provider, target);
-    if (!url) continue;
-    const meta = EMBED_SOURCES.find(source => source.id === provider.id);
-    if (!meta) continue;
-    out.push({ ...meta, url });
-  }
-  return out;
-}

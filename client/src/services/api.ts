@@ -192,11 +192,6 @@ export function pickStreamVariant(
   return { url: movie.stream_url };
 }
 
-/** Same-origin relay URL for archive.org movie bytes (see /api/movies/stream). */
-export function proxiedStreamUrl(url: string): string {
-  return `${MOVIE_API_BASE_URL}/api/movies/stream?url=${encodeURIComponent(url)}`;
-}
-
 /**
  * Same-origin URL that saves an Archive.org file via the versioned download
  * alias. Both routes use the same Archive.org-only Flask relay.
@@ -544,6 +539,12 @@ function isResolvePayload(value: unknown): value is {
 export interface StreamResolveOptions {
   /** TMDB ID for direct resolution (preferred over title/year search). */
   tmdbId?: string;
+  /**
+   * Feature film or series. Omitted, the backend defaults to `"movie"`, so a
+   * series resolved without it is looked up in the wrong catalog and answers
+   * "not found" -- the title is right, the media kind is not.
+   */
+  mediaType?: "movie" | "tv";
   /** Season of a series to resolve (ignored for movies). */
   season?: number;
   /** Episode of a series to resolve (ignored for movies). */
@@ -603,6 +604,10 @@ export async function resolveStream(
   options?: StreamResolveOptions
 ): Promise<ResolvedStream> {
   const body: Record<string, unknown> = year ? { title, year } : { title };
+  // Always send the media kind, even when it is the default. The backend falls
+  // back to `"movie"` on an absent field, and a series resolved as a film is a
+  // lookup in the wrong catalog -- the title matches, the answer is "not found".
+  body.media_type = options?.mediaType ?? "movie";
   if (options) {
     if (options.tmdbId) body.id = options.tmdbId;
     if (options.season) body.season = options.season;
@@ -1102,6 +1107,23 @@ function isEpisodeDetailPayload(
  * throw propagates. The final attempt is a bare `fetch`, so after the retries
  * are spent the caller sees the same error shape it always did.
  */
+/**
+ * A 429's `Retry-After`, in milliseconds, or null when the server did not say.
+ *
+ * The header is authoritative and the fallback is not: the resolver tier
+ * refills one token per six seconds, so a fixed 0.5/1/2s backoff lands all of
+ * its retries inside a single empty window and re-429s every time -- which is
+ * how a viewer waiting on one title used to accumulate an abuse score meant
+ * for a scraper.
+ */
+function retryAfterMs(response: Response): number | null {
+  const raw = response.headers.get("Retry-After");
+  if (!raw) return null;
+  const seconds = Number(raw);
+  if (!Number.isFinite(seconds) || seconds < 0) return null;
+  return seconds * 1000;
+}
+
 export async function fetchWithRetry(
   url: string,
   init?: RequestInit,
@@ -1111,9 +1133,10 @@ export async function fetchWithRetry(
   for (let attempt = 0; ; attempt++) {
     const response = await fetch(url, init);
     if (response.status !== 429 || attempt >= retries) return response;
-    await new Promise(resolve =>
-      setTimeout(resolve, delay * Math.pow(2, attempt))
-    );
+    // Honour the server's own clock where it sent one, with the exponential
+    // fallback only for a 429 that arrived without the header.
+    const wait = retryAfterMs(response) ?? delay * Math.pow(2, attempt);
+    await new Promise(resolve => setTimeout(resolve, wait));
   }
 }
 

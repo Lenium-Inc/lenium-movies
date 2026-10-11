@@ -8,7 +8,6 @@
  */
 import {
   pickStreamVariant,
-  proxiedStreamUrl,
   type StreamMovie,
   type StreamQuality,
   type StreamVariant,
@@ -216,11 +215,16 @@ export async function evict(): Promise<void> {
 /**
  * Fire-and-forget warm-up: cache the leading bytes of `movie`'s start variant
  * so Play starts instantly. Skips when the movie is already being cached.
+ *
+ * The URL is used as-is. It is already a same-origin playback handle
+ * (`/api/v1/playback/media?token=…`), so wrapping it in a second relay only
+ * produced a request to a route that no longer exists -- the warm-up 404'd on
+ * every resolve and cached nothing, while looking like a broken stream.
  */
 export function prefetchForPlayback(movie: StreamMovie): void {
   const { variant, url, started } = pickStart(movie);
   if (!variant || started) return;
-  void prefetchMovie(movie, variant, proxiedStreamUrl(url));
+  void prefetchMovie(movie, variant, url);
 }
 
 /** Same warm-up, but for the silent pre-cache engine (modal open / hover). */

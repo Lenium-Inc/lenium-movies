@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   EMBED_ALLOW,
-  resolveEmbedSources,
   type ResolvedEmbedSource,
 } from "@/lib/embedSources";
 import { cn } from "@/lib/utils";
 import { titleUnavailable } from "@/lib/playbackCopy";
+
+/**
+ * Stand-in for "the backend sent no chain". A module-level constant rather
+ * than `[]` at the call site, because `sources` is a dependency of the reset
+ * effect below: a fresh array every render would re-run that effect forever.
+ */
+const NO_SOURCES: ResolvedEmbedSource[] = [];
 
 /**
  * How long a candidate gets before the next one in the chain is tried.
@@ -39,20 +45,18 @@ let preferredSourceId: string | null = null;
 
 export interface EmbedPlayerProps {
   /**
-   * Pre-resolved provider chain, in failover order.
+   * The provider chain, in failover order, exactly as
+   * `/api/v1/playback/init` returned it.
    *
-   * The backend now walks the provider chain itself and returns the order it
-   * settled on, so this is the normal input. It is authoritative for *which*
-   * provider serves the title, which the local registry cannot know: the
-   * backend skips benched and unreachable providers, and mirroring that here
-   * would immediately re-probe the ones it just ruled out.
+   * Every entry's `url` is a tokenised frame handle on this origin
+   * (`/api/v1/playback/frame?token=...`) -- the backend mints one per
+   * candidate, having already walked its own health record and bench
+   * cooldowns. This component never builds a candidate of its own: a locally
+   * assembled provider URL would skip all of that and point the browser at a
+   * host this deploy may not serve. An absent or empty chain therefore renders
+   * the unavailable state rather than a guess.
    */
   sources?: ResolvedEmbedSource[];
-  /** Used only when the backend supplied no chain, to build one locally. */
-  tmdbId?: number | string | null;
-  mediaType?: "movie" | "tv";
-  season?: number;
-  episode?: number;
   title: string;
   poster?: string;
   className?: string;
@@ -86,10 +90,6 @@ export interface EmbedPlayerProps {
 
 export function EmbedPlayer({
   sources: providedSources,
-  tmdbId,
-  mediaType = "movie",
-  season,
-  episode,
   title,
   poster,
   className,
@@ -99,11 +99,8 @@ export function EmbedPlayer({
   onExhausted,
 }: EmbedPlayerProps) {
   const sources = useMemo<ResolvedEmbedSource[]>(
-    () =>
-      providedSources?.length
-        ? providedSources
-        : resolveEmbedSources({ tmdbId, mediaType, season, episode }),
-    [providedSources, tmdbId, mediaType, season, episode]
+    () => providedSources ?? NO_SOURCES,
+    [providedSources]
   );
 
   const controlled = activeSourceId !== undefined;

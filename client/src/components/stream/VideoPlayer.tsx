@@ -342,6 +342,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const controlsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hlsRef = useRef<any>(null);
+  const dashPlayerRef = useRef<any>(null);
 
   const effectiveIsLoading = externalIsLoading || isLoading;
 
@@ -385,14 +386,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, [initialQuality]);
 
   const streamType = useMemo(() => {
+    // The backend hands back same-origin *handles*, not the upstream URL, and
+    // a handle's path is opaque -- `/api/proxy/dash?token=…` carries no `.mpd`.
+    // So the container is read off which route names the handle (the routes
+    // that mint them encode it), and only then off a real extension. Getting
+    // this wrong is not cosmetic: a DASH playlist fed to `<video src>` fails
+    // with a media error the viewer can only read as "broken".
+    let pathname: string;
     try {
-      const pathname = new URL(streamUrl).pathname.toLowerCase();
-      if (pathname.endsWith(".m3u8")) return "hls";
-      if (pathname.endsWith(".mpd")) return "dash";
-      return "mp4";
+      pathname = new URL(streamUrl, window.location.origin).pathname.toLowerCase();
     } catch {
       return "mp4";
     }
+    if (pathname.endsWith("/proxy/manifest") || pathname.endsWith(".m3u8")) return "hls";
+    if (pathname.endsWith("/proxy/dash") || pathname.endsWith(".mpd")) return "dash";
+    return "mp4";
   }, [streamUrl]);
 
   // Two ways a quality list can exist. Preferred: the ladder hls.js parsed out
@@ -532,6 +540,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (!video || !streamUrl) return;
 
     let hls: any = null;
+    // DASH loads its player asynchronously, so a source can be swapped (or the
+    // component unmounted) while the library is still in flight. The flag stops
+    // that late arrival from attaching to a video element that has moved on.
+    let dashCancelled = false;
     setIsLoading(true);
     // Ladder and poster are per-source; drop stale values so a manifest from
     // the previous mirror never leaks into the next one.
@@ -561,6 +573,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     const cleanup = () => {
       hls?.destroy();
+      // A DASH player may still be importing. Flipping the flag first stops
+      // that arrival from attaching to a video element that has moved on.
+      dashCancelled = true;
+      dashPlayerRef.current?.destroy?.();
+      dashPlayerRef.current = null;
       video.pause();
       video.removeAttribute("src");
       video.load();
@@ -667,11 +684,54 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         onSourceError?.();
       }
     } else if (streamType === "dash") {
-      if (video.canPlayType("application/dash+xml")) {
-        video.src = streamUrl;
-      } else {
-        onSourceError?.();
-      }
+      // No browser plays an `.mpd` natively, so a DASH source has to go
+      // through dash.js -- the same role hls.js plays for `.m3u8`. Without it
+      // this branch was an immediate `onSourceError`, which is why every
+      // provider film (they resolve to DASH, ~11 MPDs for every 1 playlist)
+      // looked broken even though the backend had the bytes.
+      //
+      // Imported lazily, not at module scope: dash.js reads `navigator` while
+      // it loads, so a static import makes every test file that touches this
+      // component die in Node before it can assert anything.
+      import("dashjs")
+        .then(({ MediaPlayer }) => {
+          if (dashCancelled) return;
+          const player = MediaPlayer().create();
+          player.updateSettings({
+            streaming: {
+              buffer: { fastSwitchEnabled: true },
+              retryAttempts: { MPD: 1, MediaSegment: 3 },
+            },
+          });
+          player.on(MediaPlayer.events.STREAM_INITIALIZED, () => {
+            if (dashCancelled) return;
+            setIsLoading(false);
+            setPosterSettled(true);
+            attemptAutoplay();
+            initAmbientCanvas();
+          });
+          player.on(MediaPlayer.events.ERROR, (e: { error?: { code?: string } }) => {
+            // A fatal manifest/segment error is the same end state as a fatal
+            // hls.js error: there is nothing left to retry, tell the caller.
+            if (dashCancelled) return;
+            const code = e?.error?.code;
+            if (
+              code === "manifestError" ||
+              code === "downloadError" ||
+              code === "codecUnsupportedError"
+            ) {
+              player.destroy();
+              onSourceError?.();
+            }
+          });
+          player.initialize(video, streamUrl, false);
+          dashPlayerRef.current = player;
+        })
+        .catch(() => {
+          // The library failed to load at all. Saying so is the same contract
+          // as a media element that cannot play the container.
+          if (!dashCancelled) onSourceError?.();
+        });
     } else {
       video.src = streamUrl;
     }

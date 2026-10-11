@@ -108,6 +108,11 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
 
   // Fetch trailer in background (by title/year)
   useEffect(() => {
+    // Title lookup is the fallback for a row with no TMDB id. When an id is
+    // present the id-based effect below owns the trailer, and letting a
+    // title search also write would race it -- the slower response wins, and
+    // a slower null erases a trailer that was already correct.
+    if (movie.providerId) return;
     let active = true;
     setTrailer(null);
     void fetchTrailer(movie.title, movie.year)
@@ -120,13 +125,16 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
     return () => {
       active = false;
     };
-  }, [movie.title, movie.year]);
+  }, [movie.title, movie.year, movie.providerId]);
 
   // Fetch YouTube trailer by TMDB ID for autoplaying background
   useEffect(() => {
     if (!movie.providerId) return;
     let active = true;
-    void fetchTrailerByTmdbId(movie.providerId)
+    // The media kind has to ride along: a TMDB id is only meaningful against
+    // its own type, and asking the movie endpoint for a series id returns the
+    // wrong trailer (or none) -- which is why this sheet showed no trailer.
+    void fetchTrailerByTmdbId(movie.providerId, movie.mediaType)
       .then(info => {
         if (active && info) setTrailer(info);
       })
@@ -136,7 +144,7 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
     return () => {
       active = false;
     };
-  }, [movie.providerId]);
+  }, [movie.providerId, movie.mediaType]);
 
   // Tear the background embed down if it is unplayable, so this dialog falls
   // back to the backdrop instead of showing the player's error card.
@@ -163,7 +171,13 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
     try {
       let base = resolved?.stream ?? null;
       if (!base) {
-        const stream = await resolveStream(movie.title, movie.year);
+        // Resolve by TMDB ID when the card carries one. A title-only lookup
+        // for a series searches the film catalog, finds nothing, and answers
+        // "unavailable" -- the title is right, the media kind is not.
+        const stream = await resolveStream(movie.title, movie.year, {
+          tmdbId: /^\d+$/.test(movie.providerId) ? movie.providerId : undefined,
+          mediaType: movie.mediaType,
+        });
         setResolved(stream);
         base = stream.stream;
       }
@@ -195,6 +209,8 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
           );
           if (mediaType === "tv") {
             const stream = await resolveStream(movie.title, movie.year, {
+              tmdbId: /^\d+$/.test(movie.providerId) ? movie.providerId : undefined,
+              mediaType: "tv",
               season: targetSeason,
               episode: targetEpisode,
             });
@@ -276,7 +292,12 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
       let source: StreamMovie | null = resolved?.stream ?? null;
 
       if (!source) {
-        source = (await resolveStream(movie.title, movie.year)).stream;
+        source = (
+          await resolveStream(movie.title, movie.year, {
+            tmdbId: /^\d+$/.test(movie.providerId) ? movie.providerId : undefined,
+            mediaType: movie.mediaType,
+          })
+        ).stream;
       }
       // A TV title's primary source is the S1E1 embed, so ask for the episode
       // currently selected in the sheet.
@@ -346,11 +367,15 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
 
     void (async () => {
       try {
-        const stream = await resolveStream(
-          movie.title,
-          movie.year,
-          movie.mediaType === "tv" ? { season: 1, episode: 1 } : undefined
-        );
+        const isSeries = movie.mediaType === "tv";
+        const stream = await resolveStream(movie.title, movie.year, {
+          tmdbId: /^\d+$/.test(movie.providerId) ? movie.providerId : undefined,
+          mediaType: movie.mediaType,
+          // A series warms the episode the sheet will open on, so the first
+          // Play click is already resolved rather than a cold lookup.
+          season: isSeries ? 1 : undefined,
+          episode: isSeries ? 1 : undefined,
+        });
         if (disposed) return;
         setResolved(stream);
         prefetchForOpen(stream.stream);
@@ -365,7 +390,7 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
       disposed = true;
       clearTimeout(loadTimer);
     };
-  }, [movie.id, movie.title, movie.year]);
+  }, [movie.id, movie.title, movie.year, movie.providerId, movie.mediaType]);
 
   // Skeleton placeholder for metadata
   const SkeletonMetadata = () => (

@@ -809,6 +809,7 @@ def choose_streams(
         if current is None or better(height, size, current):
             by_tier[label] = {
                 "quality": label,
+                "label": label,
                 "url": stream_download_url(identifier, name),
                 "height": height,
                 "width": width,
@@ -818,12 +819,23 @@ def choose_streams(
         return None
 
     streams = [by_tier[label] for label in QUALITY_ORDER if label in by_tier]
-    default = next((s for s in streams if s["quality"] == "720p"), None)
-    if default is None:
-        default = next(
-            (s for s in streams if s["quality"] in ("1080p", "4K")), streams[0]
-        )
+    default = _pick_default(streams)
     return streams, default
+
+
+def _pick_default(streams: list[dict]) -> dict:
+    """Choose the stream to start playback on.
+
+    Smallest file at 480p or better, else the smallest file overall. Startup
+    time on a progressive MP4 is a function of bytes fetched before the first
+    frame renders, and Archive.org's throughput is often a few hundred KB/s --
+    so the old rule (720p, else the tallest available) would hand a viewer a
+    1.8 GB remux as the thing to buffer before anything appeared on screen.
+    Quality is still one click away; a blank player is not.
+    """
+    watchable = [s for s in streams if s.get("height", 0) >= 480]
+    pool = watchable or streams
+    return min(pool, key=lambda s: s.get("size") or 0)
 
 
 def build_entry_by_identifier(
@@ -918,6 +930,45 @@ def year_mismatch(requested_year, candidate_year) -> bool:
         return int(requested_year) != int(candidate_year)
     except (TypeError, ValueError):
         return False
+
+
+#: A standalone year inside an identifier or title. Bounded on both sides by
+#: non-digits so "1080p" is not mistaken for one, and clamped to the window a
+#: film release could plausibly fall in.
+_YEAR_HINT = re.compile(r"(?<!\d)(18[89]\d|19\d{2}|20[0-2]\d)(?!\d)")
+#: A YYYYMM upload stamp ("nosferatu_201508"). The month is not a release
+#: year, but the leading four digits are, and they are what tells a 2015 scan
+#: of a 1922 film apart from the 2024 remake that shares its title.
+_MONTH_STAMP = re.compile(r"(?<!\d)((?:18[89]|19\d|20[0-2])\d)(0[1-9]|1[0-2])(?!\d)")
+
+
+def year_hint(doc: dict | None) -> int | None:
+    """A year written into the item's identifier or title, if there is one.
+
+    Most Archive.org uploads carry no `year` metadata at all, which leaves the
+    year guard blind -- and that blindness is not hypothetical. "Nosferatu"
+    exists as a silent 1922 film and a 2024 remake with the identical name,
+    the archive records no year for either, and both matched an exact title,
+    so a request for the 2024 remake was served the 1922 one. The year is
+    nearly always in the identifier ("Nosferatu1922") or the title, so read it
+    there rather than treat a missing field as permission to guess.
+    """
+    if not doc:
+        return None
+    declared = doc.get("year")
+    if declared and str(declared).isdigit():
+        return int(declared)
+    for field in (doc.get("identifier"), doc.get("title")):
+        if not field:
+            continue
+        text = str(field)
+        stamp = _MONTH_STAMP.search(text)
+        if stamp:
+            return int(stamp.group(1))
+        match = _YEAR_HINT.search(text)
+        if match:
+            return int(match.group(1))
+    return None
 
 
 def accept_candidate(
@@ -1036,7 +1087,7 @@ def pick_best_docs(
         score = match_title(requested, doc.get("title") or "")
         if score < 0.7:
             continue
-        if not accept_candidate(requested_year, doc.get("year"), score):
+        if not accept_candidate(requested_year, year_hint(doc), score):
             continue
         candidates.append((doc, score))
     candidates.sort(

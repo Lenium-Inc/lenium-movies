@@ -53,6 +53,7 @@ import catalog_service
 import geo_locale
 import locale_settings
 import playback_tokens
+import proxy_util
 import stream_providers
 import taste
 import telemetry
@@ -463,6 +464,7 @@ _MEMORY_GUARDED_PATHS = frozenset(
         "/api/v1/playback/media",
         "/api/v1/playback/download",
         "/api/proxy/manifest",
+        "/api/proxy/dash",
         "/api/proxy/segment",
     }
 )
@@ -984,7 +986,17 @@ def playback_init():
             language = str(profile["preferred_language"])
     region = locale["country"] or ""
 
-    resolution = stream_providers.resolve_direct(
+    # Runtime is the trailer guard's budget signal: a 90-minute film and a
+    # 4-minute clip are told apart by duration, and the duration check lives in
+    # the resolution chain -- so it has to be in hand before resolution runs.
+    runtime = details.get("runtime")
+    if runtime is not None:
+        try:
+            runtime = int(runtime)
+        except (ValueError, TypeError):
+            runtime = None
+
+    resolution = stream_providers.resolve(
         _direct_source_for,
         tmdb_id=tmdb_id,
         media_type=media_type,
@@ -993,49 +1005,39 @@ def playback_init():
         season=season,
         episode=episode,
         refresh=refresh,
+        runtime=runtime,
     )
 
     if not resolution.ok:
-        # 404 with an explicit code, not 503: every provider was walked and
-        # none could serve the title, so re-asking only re-walks what just
-        # failed. The planned chain is still handed back -- as frame handles,
-        # never raw URLs -- so a client walking it on its own timer has
-        # something to walk.
-        planned = [
-            {
-                "name": entry["name"],
-                "url": _frame_url(entry["url"], region),
-                "is_embed": True,
-            }
-            for entry in stream_providers.planned_candidate_entries(
-                tmdb_id, media_type, season, episode
-            )
-            if entry.get("url")
-        ]
+        # 404 with an explicit code, not 503: every tier was walked and none
+        # could serve the title, so re-asking only re-walks what just failed.
+        # The attempt log is still handed back so a client walking on its own
+        # timer has a reason to show rather than a bare failure.
         return _json_error(
             "No active stream sources",
             404,
             code="PROVIDERS_EXHAUSTED",
             available=False,
-            providers=planned,
+            providers=[],
             provider_attempts=resolution.attempts,
         )
 
-    winner = resolution.winner
-    direct = winner.payload if winner.kind == "direct" else None
-    is_embed = resolution.is_embed
-
+    # Resolution hands back handles, never raw URLs: every entry in
+    # `resolution.streams` was already exchanged for a same-origin leg by
+    # `proxy_util.playable`, with the upstream Referer carried inside it. So
+    # this section only orders them and labels them, and recovers the two
+    # facts the client cannot derive from an opaque path -- the container, and
+    # whether the underlying file may be downloaded at all.
     streams: list[dict] = []
     mirrors: list[dict] = []
     sources: list[str] = []
     subtitles: list[dict] = []
 
-    # A direct source is expected to be a progressive file off archive.org.
-    # Anything that looks like a trailer host or a short-clip endpoint is a
-    # regression -- a trailer must never reach the main player (it belongs only
-    # in the "Trailers" tab, which fetches separately via the trailer routes).
-    # This is a cheap final guard behind `choose_streams`' own filename/size
-    # filters, not a substitute for them.
+    # A trailer must never reach the main player (it belongs only in the
+    # "Trailers" tab, which fetches separately via the trailer routes). The
+    # resolution chain rejects a short *manifest*, but a progressive file has
+    # no cheap duration probe -- so the URL is recovered from the handle it
+    # arrived on and checked here as a final guard.
     def _is_trailer_endpoint(raw: str) -> bool:
         lowered = raw.lower()
         if any(
@@ -1046,115 +1048,92 @@ def playback_init():
         path = urllib.parse.urlparse(raw).path.lower()
         return any(token in path for token in ("/trailer", "trailer.", "/clip", "featurette"))
 
-    if direct:
-        # One handle per raw URL, not per call: the same file named by the
-        # default stream and by its own quality tier must produce one token,
-        # or the client's URL Set sees two distinct strings and offers the
-        # viewer the identical source twice under different labels.
-        play_cache: dict[str, tuple[str, str]] = {}
-
-        def cached_play(raw: str) -> tuple[str, str]:
-            if raw not in play_cache:
-                play_cache[raw] = _play_url(raw, region)
-            return play_cache[raw]
-
-        primary_raw = direct.get("stream_url") or ""
-        if primary_raw and _is_trailer_endpoint(primary_raw):
-            # A trailer leaked into the direct candidate. Treat the whole
-            # direct hit as unusable and fall through to the embed chain below
-            # rather than boot the player on a nine-minute clip.
-            print(f"[Catalog] discarded trailer-like direct stream for {title!r}: {primary_raw}")
-            direct = None
-        else:
-            primary_url, primary_format = cached_play(primary_raw)
-            if primary_url:
-                sources.append(primary_url)
-            seen_sources = {primary_url}
-            for index, tier in enumerate(direct.get("streams") or []):
-                tier_url = str(tier.get("url") or "")
-                if not tier_url or _is_trailer_endpoint(tier_url):
-                    continue
-                play, fmt = cached_play(tier_url)
-                if not play:
-                    continue
-                quality = str(tier.get("quality") or "")
-                try:
-                    height = int(tier.get("height") or 0)
-                except (TypeError, ValueError):
-                    height = 0
-                try:
-                    size = int(tier.get("size") or 0)
-                except (TypeError, ValueError):
-                    size = 0
-                streams.append(
-                    {
-                        "quality": quality,
-                        "height": height,
-                        "width": tier.get("width") or 0,
-                        "size": size,
-                        "url": play,
-                        "format": fmt,
-                        "download_url": _download_url(
-                            tier_url, _download_filename(title, quality, tier_url), region
-                        ),
-                    }
-                )
-                if play not in seen_sources:
-                    seen_sources.add(play)
-                    sources.append(play)
-                if tier_url != (direct.get("stream_url") or ""):
-                    mirrors.append(
-                        {"name": f"Server {index + 1}", "url": play}
-                    )
-            subtitles = _caption_tracks(direct.get("subtitles"), region)
-
-    if not direct:
-        # Prefer the first embed candidate over `resolution.url`: when the
-        # discarded winner was the direct hit, `resolution.url` still points at
-        # that same rejected URL, and minting a frame handle for it would put
-        # the trailer right back into the player.
-        embed_url = next(
-            (
-                entry["url"]
-                for entry in resolution.candidate_entries()
-                if entry.get("is_embed") and entry.get("url")
-            ),
-            resolution.url,
-        )
-        primary_url, primary_format = _frame_url(embed_url, region), "frame"
-
-    # The embed failover chain, as frame handles. Direct entries a resolution
-    # may include are dropped on purpose: every direct candidate is already in
-    # `sources`/`mirrors`, and this array is what the embed player walks --
-    # a progressive file here would end up in an <iframe>.
-    providers = [
-        {
-            "name": entry["name"],
-            "url": _frame_url(entry["url"], region),
-            "is_embed": True,
-        }
-        for entry in resolution.candidate_entries()
-        if entry.get("is_embed") and entry.get("url")
-    ]
-    if not providers:
-        providers = [
-            {
-                "name": entry["name"],
-                "url": _frame_url(entry["url"], region),
-                "is_embed": True,
-            }
-            for entry in stream_providers.planned_candidate_entries(
-                tmdb_id, media_type, season, episode
-            )
-            if entry.get("url")
-        ]
-
-    runtime = details.get("runtime")
-    if runtime is not None:
+    # One entry per raw URL, not per call: the same file named twice must not
+    # mint two handles, or the client's URL Set sees two distinct strings and
+    # offers the viewer the identical source under different labels.
+    seen_sources: set[str] = set()
+    for index, stream in enumerate(resolution.streams):
+        play = str(stream.get("url") or "")
+        if not play:
+            continue
+        raw = proxy_util.raw_url_of(play)
+        if raw and _is_trailer_endpoint(raw):
+            print(f"[Catalog] discarded trailer-like direct stream for {title!r}: {raw}")
+            continue
+        if play not in seen_sources:
+            seen_sources.add(play)
+            sources.append(play)
+        label = str(stream.get("label") or "")
         try:
-            runtime = int(runtime)
-        except (ValueError, TypeError):
-            runtime = None
+            height = int(stream.get("height") or 0)
+        except (TypeError, ValueError):
+            height = 0
+        try:
+            size = int(stream.get("size") or 0)
+        except (TypeError, ValueError):
+            size = 0
+        streams.append(
+            {
+                "quality": label,
+                "height": height,
+                "width": stream.get("width") or 0,
+                "size": size,
+                "url": play,
+                "format": str(stream.get("format") or "") or proxy_util.format_of_handle(play),
+                "download_url": (
+                    _download_url(raw, _download_filename(title, label, raw), region)
+                    if raw
+                    else None
+                ),
+            }
+        )
+        if index:
+            # "Server N" rather than a provider name: the viewer used to pick
+            # an iframe host here, and there is no host to name any more --
+            # these are mirrors of one file, not different sources.
+            mirrors.append({"name": f"Server {index}", "url": play})
+
+    subtitles = [
+        {
+            "label": str(entry.get("label") or "").strip()[:80],
+            "lang": str(entry.get("lang") or "").strip()[:24] or "eng",
+            "url": str(entry.get("url") or ""),
+        }
+        for entry in resolution.subtitles
+        if entry.get("url")
+    ]
+
+    if not sources:
+        # Every stream the chain produced was rejected by the trailer guard, so
+        # the resolution's "ok" is not an answer the player can use. It becomes
+        # the same exhaustion the client already knows how to show, rather than
+        # a 200 with a `stream_url` the player would boot and stall on.
+        return _json_error(
+            "No active stream sources",
+            404,
+            code="PROVIDERS_EXHAUSTED",
+            available=False,
+            providers=[],
+            provider_attempts=resolution.attempts,
+        )
+
+    primary_url = sources[0]
+    primary_format = (
+        next(
+            (str(s["format"]) for s in streams if s["url"] == primary_url),
+            "mp4",
+        )
+        if primary_url
+        else "mp4"
+    )
+    is_embed = resolution.is_embed
+    provider_id = resolution.provider
+
+    # No embed chain. A resolution that produced no direct stream already
+    # answered 404 above, so this is unreachable -- it stays an explicit empty
+    # rather than a planned-chain fallback, because the client walks this
+    # array and there is nothing left for it to walk.
+    providers: list[dict] = []
 
     director = details.get("director")
     cast = details.get("cast", [])
@@ -1174,7 +1153,7 @@ def playback_init():
         "format": primary_format,
         "is_embed": is_embed,
         "available": resolution.ok,
-        "provider": winner.id,
+        "provider": provider_id,
         "sources": sources,
         "mirrors": mirrors,
         "streams": streams,
@@ -1221,7 +1200,7 @@ def playback_init():
             "exact": True,
             "available": True,
             "format": primary_format,
-            "provider": winner.id,
+            "provider": provider_id,
             "language": language,
             "country": region,
             "movie": movie,
@@ -1375,20 +1354,60 @@ def playback_captions():
     return response
 
 
+def _open_any_host_stream(url: str, range_header: str | None, referer: str):
+    """A bounded, range-safe relay for a host the archive allowlist refuses.
+
+    Reached only for a handle this process minted with `meta["any_host"]` --
+    and a handle cannot be minted by a client, so this is an explicit opt-in by
+    the resolver rather than a hole a request can aim through. Range is passed
+    through verbatim and the upstream's status and Content-Range come back
+    unchanged, so the media element still sees one honest, seekable resource.
+
+    This is the same contract `open_archive_stream` gives the archive leg; only
+    the host check differs, and that check is what the `any_host` flag already
+    settled server-side.
+    """
+    headers = {"User-Agent": HLS_PROXY_USER_AGENT, "Accept": "*/*"}
+    if range_header:
+        headers["Range"] = range_header
+    if referer:
+        headers["Referer"] = referer
+    upstream = requests.get(url, headers=headers, timeout=HLS_PROXY_TIMEOUT, stream=True)
+    if upstream.status_code not in (200, 206):
+        upstream.close()
+        raise ValueError(f"Stream upstream returned {upstream.status_code}")
+    headers_out: dict[str, str] = {}
+    for header in ("Content-Length", "Content-Type", "Accept-Ranges", "Content-Range"):
+        value = upstream.headers.get(header)
+        if value:
+            headers_out[header] = value
+
+    def chunks(read_size: int = 256 * 1024):
+        try:
+            for block in upstream.iter_content(read_size):
+                if block:
+                    yield block
+        finally:
+            upstream.close()
+
+    return upstream.status_code, headers_out, chunks()
+
+
 @app.route("/api/v1/playback/media", methods=["GET", "OPTIONS"])
 def playback_media():
     """Relay the handle's progressive bytes: same-origin, range-safe.
 
     The bytes come through this origin so the player gets `Access-Control-
-    Allow-Origin` and a `Range` that the archive node actually honours --
-    seeking a cross-origin file without both is a full re-download or a dead
-    scrubber. Range is passed through exactly as the browser sent it, and the
-    upstream's status (200 or 206) and Content-Range come back unchanged, so
-    the media element sees one honest, seekable resource.
+    Allow-Origin` and a `Range` that the upstream actually honours -- seeking a
+    cross-origin file without both is a full re-download or a dead scrubber.
+    Range is passed through exactly as the browser sent it, and the upstream's
+    status (200 or 206) and Content-Range come back unchanged, so the media
+    element sees one honest, seekable resource.
 
-    Only `open_archive_stream`'s allowlisted hosts are reachable here, checked
-    per request -- the handle says which file, the allowlist says whether this
-    server may serve it at all.
+    Archive.org download URLs are the default and are checked per request by
+    `open_archive_stream`. A source the resolver found elsewhere -- an
+    extracted provider's progressive file -- arrives on a handle minted with
+    `any_host`, and only that handle is relayed outside the allowlist.
     """
     if request.method == "OPTIONS":
         return ("", 204)
@@ -1403,9 +1422,21 @@ def playback_media():
     region = entry.get("meta", {}).get("region") or None
 
     try:
-        status, headers, body = catalog_lib.open_archive_stream(
-            url, request.headers.get("Range")
-        )
+        try:
+            status, headers, body = catalog_lib.open_archive_stream(
+                url, request.headers.get("Range")
+            )
+        except ValueError:
+            # The allowlist refuses an off-list host by design. When the
+            # resolver already decided this title's only source lives there,
+            # it minted the handle with `any_host` -- that flag is the one
+            # signal that the refusal is expected rather than an attempt to
+            # turn this route into a general fetcher.
+            if not entry.get("meta", {}).get("any_host"):
+                raise
+            status, headers, body = _open_any_host_stream(
+                url, request.headers.get("Range"), entry.get("referer") or ""
+            )
     except ValueError as error:
         return _json_error(str(error), 400)
     except Exception as error:  # noqa: BLE001 - upstream failure is not ours
@@ -1567,6 +1598,10 @@ HLS_PROXY_TIMEOUT = (5.0, 20.0)
 #: an unbounded body here would be an allocation primitive reachable from a URL
 #: the client supplies.
 HLS_PROXY_MANIFEST_MAX_BYTES = 2 * 1024 * 1024
+#: Caption files are tens of kilobytes. Anything past this is not a caption
+#: file, and the subtitle relay reads its body whole in order to convert it --
+#: so the cap is what keeps that read bounded.
+CAPTION_PROXY_MAX_BYTES = 4 * 1024 * 1024
 #: Read size for the segment relay, so a worker holds one bounded buffer rather
 #: than a whole segment (commonly 2-10 MB) for the length of its transfer.
 HLS_PROXY_CHUNK_BYTES = 256 * 1024
@@ -1576,7 +1611,7 @@ HLS_PROXY_CHUNK_BYTES = 256 * 1024
 PROXY_URI_MAX_LENGTH = 4096
 
 
-def _hls_proxy_request_headers(referer: str) -> dict[str, str]:
+def _hls_proxy_request_headers(referer: str, entry: dict | None = None) -> dict[str, str]:
     headers = {
         "User-Agent": HLS_PROXY_USER_AGENT,
         "Accept": "*/*",
@@ -1586,6 +1621,13 @@ def _hls_proxy_request_headers(referer: str) -> dict[str, str]:
     }
     if referer:
         headers["Referer"] = referer
+    # Headers the CDN insisted on at resolve time. A signed CloudFront `Cookie`
+    # and an `Origin` cannot cross the wire from the player -- a browser drops a
+    # cross-origin Cookie before it is sent, and the player is never told the
+    # value -- so they ride inside the handle and are reapplied here. Only the
+    # fixed key set survives `normalize_upstream_headers`, so this cannot be
+    # turned into a header-injection primitive by a malformed resolve.
+    headers.update(proxy_util.upstream_headers_of(entry))
     return headers
 
 
@@ -1654,6 +1696,73 @@ def _rewrite_hls_manifest(manifest: str, manifest_url: str, token: str) -> str:
             continue
         rewritten.append(proxied(stripped))
     return "\n".join(rewritten)
+
+
+#: DASH locations that name a retrievable file. `SegmentTemplate` carries an
+#: init segment and a numbered chunk pattern; `SegmentURL` carries a plain list;
+#: `<BaseURL>` prefixes both. All three resolve against the MPD's own URL, and
+#: all three have to move, or the MPD parses and playback dies on the first
+#: chunk with nothing on screen to explain why.
+_DASH_ATTR = re.compile(
+    r'\b(initialization|media|sourceURL|media)="([^"]+)"'
+)
+_DASH_BASEURL = re.compile(r"<BaseURL>([^<]+)</BaseURL>")
+#: A `$RepresentationID$` / `$Number%05d$` / `$Time$` substitution token.
+_DASH_TOKEN = re.compile(r"\$[^$]*\$")
+
+
+def _encode_dash_uri(uri: str) -> str:
+    """Percent-encode a template-bearing URI for a `u=` query value.
+
+    A DASH `SegmentTemplate` location is not a URI yet: it contains
+    `$RepresentationID$` and `$Number%05d$`, and the *player* is what fills
+    them in. Those tokens have to reach the player verbatim -- the `%` inside
+    `%05d` is a printf spec, not a percent-encoding, and a player that never
+    sees a literal `$Number%05d$` silently requests the unexpanded path and
+    dies on the first chunk with a 404 and nothing on screen to say why.
+
+    So the encoding walks around the tokens. Everything between them is encoded
+    normally, which is what keeps an upstream `&` or `=` from being read as
+    this route's own query structure.
+    """
+    out: list[str] = []
+    last = 0
+    for match in _DASH_TOKEN.finditer(uri):
+        out.append(urllib.parse.quote(uri[last:match.start()], safe=""))
+        out.append(match.group(0))
+        last = match.end()
+    out.append(urllib.parse.quote(uri[last:], safe=""))
+    return "".join(out)
+
+
+def _rewrite_dash_manifest(manifest: str, manifest_url: str, token: str) -> str:
+    """Point every location in `MPD` at `/api/proxy/segment?token=...&u=...`.
+
+    The DASH equivalent of `_rewrite_hls_manifest`. Same registration contract:
+    each reference is resolved against the MPD's URL, registered against the
+    handle's host set (which is what later permits the chunk fetch), and only
+    the `u=` form crosses the wire.
+    """
+    safe_token = urllib.parse.quote(token, safe="")
+
+    def proxied(uri: str) -> str:
+        absolute = urllib.parse.urljoin(manifest_url, uri)
+        playback_tokens.amend_host(token, absolute)
+        return f"/api/proxy/segment?token={safe_token}&u={_encode_dash_uri(absolute)}"
+
+    def swap(match: re.Match) -> str:
+        uri = match.group(2)
+        if not uri:
+            return match.group(0)
+        return f'{match.group(1)}="{proxied(uri)}"'
+
+    def swap_base(match: re.Match) -> str:
+        uri = match.group(1).strip()
+        if not uri or "$" in uri:
+            return match.group(0)
+        return f"<BaseURL>{proxied(uri)}</BaseURL>"
+
+    return _DASH_ATTR.sub(swap, _DASH_BASEURL.sub(swap_base, manifest))
 
 
 def _read_bounded(upstream, max_bytes: int) -> bytes:
@@ -1732,7 +1841,7 @@ def proxy_hls_manifest():
     try:
         with requests.get(
             url,
-            headers=_hls_proxy_request_headers(referer),
+            headers=_hls_proxy_request_headers(referer, entry),
             timeout=HLS_PROXY_TIMEOUT,
             stream=True,
         ) as upstream:
@@ -1753,6 +1862,62 @@ def proxy_hls_manifest():
     telemetry.record_bytes(len(raw), region)
     telemetry.touch_stream(token, count=len(raw))
     return _hls_manifest_response(url, token, raw)
+
+
+@app.route("/api/proxy/dash", methods=["GET", "OPTIONS"])
+def proxy_dash_manifest():
+    """Fetch the handle's MPD and rewrite it onto the segment relay.
+
+    The DASH twin of `/api/proxy/manifest`. Most provider-sourced films are DASH
+    rather than HLS -- the resolver sees roughly eleven MPDs for every one
+    playlist -- and an MPD whose `SegmentTemplate` paths stayed absolute would
+    send the player straight to the CDN with no Cookie, which the CDN then
+    refuses. Rewriting those paths onto `/api/proxy/segment` is what lets the
+    signed request be made from here, where the Cookie lives.
+    """
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    token = request.args.get("token") or ""
+    entry = _proxy_entry(token)
+    if entry is None:
+        return _json_error(
+            "Unknown or expired stream token", 400, code="TOKEN_INVALID"
+        )
+    url = entry["url"]
+    referer = entry.get("referer") or ""
+
+    try:
+        with requests.get(
+            url,
+            headers=_hls_proxy_request_headers(referer, entry),
+            timeout=HLS_PROXY_TIMEOUT,
+            stream=True,
+        ) as upstream:
+            if upstream.status_code != 200:
+                return _json_error(
+                    f"MPD upstream returned {upstream.status_code}", 502
+                )
+            raw = _read_bounded(upstream, HLS_PROXY_MANIFEST_MAX_BYTES)
+    except requests.Timeout:
+        return _json_error("MPD upstream timed out", 504)
+    except requests.RequestException:
+        return _json_error("MPD upstream unavailable", 502)
+    except ValueError:
+        return _json_error("MPD is too large", 502)
+
+    region = entry.get("meta", {}).get("region") or None
+    telemetry.record_event("manifest")
+    telemetry.record_bytes(len(raw), region)
+    telemetry.touch_stream(token, count=len(raw))
+
+    response = Response(
+        _rewrite_dash_manifest(raw.decode("utf-8", errors="replace"), url, token),
+        status=200,
+    )
+    response.headers["Content-Type"] = "application/dash+xml"
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.route("/api/proxy/segment", methods=["GET", "OPTIONS"])
@@ -1799,7 +1964,7 @@ def proxy_hls_segment():
     try:
         upstream = requests.get(
             url,
-            headers=_hls_proxy_request_headers(referer),
+            headers=_hls_proxy_request_headers(referer, entry),
             timeout=HLS_PROXY_TIMEOUT,
             stream=True,
         )
@@ -1853,7 +2018,15 @@ def proxy_hls_segment():
         stream_with_context(generate()),
         status=upstream.status_code,
     )
-    response.headers["Content-Type"] = "video/mp2t"
+    # DASH chunks are fMP4 (`.m4s`) and HLS segments are MPEG-TS (`.ts`). Label
+    # each by its own extension: the upstream CDN answers `application/octet-
+    # stream` for both, and a player given the wrong type either refuses the
+    # segment or guesses a container that does not match the bytes.
+    seg_path = urllib.parse.urlparse(url).path.lower()
+    if seg_path.endswith((".m4s", ".mp4", ".m4v", ".cmfv", ".cmfa")):
+        response.headers["Content-Type"] = "video/mp4"
+    else:
+        response.headers["Content-Type"] = "video/mp2t"
     # Allowlist-exact CORS via the shared hook; no wildcard on a relay.
     response.headers["Cache-Control"] = "public, max-age=3600"
     return response
@@ -1890,6 +2063,68 @@ def _safe_download_name(raw: str | None, fallback: str) -> str:
     # extension the caller appended.
     return candidate[:120]
 
+
+
+@app.route("/api/proxy/subtitle", methods=["GET", "OPTIONS"])
+def proxy_subtitle():
+    """Relay one caption file, any host, converted to WebVTT.
+
+    Provider captions live on CDNs that are deliberately *not* on the archive
+    allowlist -- the archive leg of this server has no reason to reach them and
+    should not start. So this route does the opposite of every other relay
+    here: it admits a host the allowlist would refuse, and its scoping is the
+    handle alone. That is safe for the same reason the manifest relay is: only
+    server code can mint a handle, and a handle names exactly one URL, so a
+    caller cannot aim this route anywhere the resolver did not already choose.
+
+    The upstream URL never crosses the wire. Range is not forwarded either: a
+    caption file is tens of kilobytes and is read whole so it can be converted,
+    which is also why the body is size-capped rather than streamed.
+    """
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    token = request.args.get("track") or request.args.get("token") or ""
+    entry = playback_tokens.resolve(token, playback_tokens.KIND_CAPTION)
+    if entry is None:
+        return _json_error(
+            "Unknown or expired caption token", 400, code="TOKEN_INVALID"
+        )
+
+    referer = entry.get("referer") or ""
+    try:
+        upstream = requests.get(
+            entry["url"],
+            headers=_hls_proxy_request_headers(referer, entry),
+            timeout=(5.0, 12.0),
+        )
+    except requests.Timeout:
+        return _json_error("Caption upstream timed out", 504)
+    except requests.RequestException:
+        return _json_error("Caption upstream unavailable", 502)
+    if upstream.status_code != 200:
+        return _json_error(f"Caption upstream returned {upstream.status_code}", 502)
+    # Captions are tens of KB; anything past this is not a caption file, and
+    # reading an unbounded body would make this route a file-fetching primitive.
+    raw = upstream.content[:CAPTION_PROXY_MAX_BYTES]
+
+    text = raw.decode("utf-8", errors="replace")
+    if not text.lstrip("\ufeff").lstrip().upper().startswith("WEBVTT"):
+        text = catalog_lib.srt_to_vtt(text)
+
+    telemetry.record_event("caption")
+    return Response(
+        text,
+        status=200,
+        content_type="text/vtt; charset=utf-8",
+        headers={
+            # `charset=utf-8` is not decoration: a `text/vtt` response decoded as
+            # Latin-1 mangles every non-ASCII cue into mojebake, and caption text
+            # is exactly where non-ASCII lives.
+            "Cache-Control": "public, max-age=300",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @app.route("/api/v1/playback/download", methods=["GET", "OPTIONS"])

@@ -1,19 +1,30 @@
 /**
  * Stream provider registry.
  *
- * Every entry here is a *pure URL builder* keyed on an exact TMDB id. Nothing
- * in this file searches by title, guesses a slug, or scrapes a provider's
- * catalogue page — a search string sent to an embed host reliably resolves to
- * whatever the provider thinks you meant, which is how a viewer ends up
- * watching the wrong film on a source that reported success. The title-based
- * guessing that used to sit here is gone; `tmdbId` is the only key.
+ * This is the client's copy of the `EMBED_PROVIDERS` manifest in
+ * `movie-backend/stream_providers.py`, which is the authority. It is mirrored
+ * here for exactly three jobs, none of which is playback:
  *
- * The manifest is duplicated in `movie-backend/stream_providers.py`, which is
- * the authority for which provider actually served a title (it walks the chain
- * server-side, liveness-probes each host, and benches the ones that are down).
- * The two are asserted against each other in `embedSources.test.ts`, so a
- * provider added on one side and forgotten on the other fails the build rather
- * than showing up as a silent "this source does not play".
+ *   1. recognising a third-party host as an embed (`EMBED_HOSTS`), so a stale
+ *      or raw provider URL is never handed to `<video>`/hls.js as if it were
+ *      an MP4;
+ *   2. labelling the provider tabs the picker draws, so a switcher reads
+ *      identically on both sides;
+ *   3. asserting parity with the Python manifest in `embedSources.test.ts`,
+ *      which fails the build when a provider is added on one side only.
+ *
+ * Frames are never addressed from here. Every URL the player loads comes from
+ * `/api/v1/playback/init` as a tokenised handle (`/api/v1/playback/frame
+ * ?token=...`), so the set of hosts this process ever fetches is decided by
+ * server-side resolution alone. `getUrl` below mirrors the backend's
+ * `EmbedProvider.build()` so the two URL shapes can be asserted against each
+ * other -- it is a manifest field, not a playback path.
+ *
+ * Every entry is a *pure URL builder* keyed on an exact TMDB id. Nothing here
+ * searches by title, guesses a slug, or scrapes a provider's catalogue page --
+ * a search string sent to an embed host reliably resolves to whatever the
+ * provider thinks you meant, which is how a viewer ends up watching the wrong
+ * film on a source that reported success. `tmdbId` is the only key.
  *
  * `type` is what the UI keys its badges off: `global` providers are
  * English-first, `fast` is the HLS-first mirror, and `arabic` is reserved for
@@ -33,6 +44,13 @@ export interface StreamProvider {
   name: string;
   quality: string;
   type: "global" | "arabic" | "fast";
+  /**
+   * Host the provider's frames load from. Mirrors `EmbedProvider.host` on the
+   * backend exactly -- including `www.2embed.cc` keeping its `www.` -- because
+   * `EMBED_HOSTS` is matched against a request hostname and a missing label
+   * here is a provider the client then treats as a media file.
+   */
+  host: string;
   getUrl: (
     tmdbId: string,
     type: "movie" | "tv",
@@ -47,6 +65,7 @@ export const STREAM_PROVIDERS: StreamProvider[] = [
     name: "Prime HD",
     quality: "1080p / 4K",
     type: "global",
+    host: "vidsrc.pro",
     getUrl: (id, type, s = 1, e = 1) =>
       type === "movie"
         ? `https://vidsrc.pro/embed/movie/${id}`
@@ -57,16 +76,29 @@ export const STREAM_PROVIDERS: StreamProvider[] = [
     name: "Cinema Plus",
     quality: "1080p",
     type: "global",
+    host: "vidsrc.cc",
     getUrl: (id, type, s = 1, e = 1) =>
       type === "movie"
         ? `https://vidsrc.cc/v2/embed/movie/${id}`
         : `https://vidsrc.cc/v2/embed/tv/${id}/${s}/${e}`,
   },
   {
+    id: "vidlink",
+    name: "VidLink",
+    quality: "1080p",
+    type: "global",
+    host: "vidlink.pro",
+    getUrl: (id, type, s = 1, e = 1) =>
+      type === "movie"
+        ? `https://vidlink.pro/movie/${id}`
+        : `https://vidlink.pro/tv/${id}/${s}/${e}`,
+  },
+  {
     id: "vidsrc-me",
     name: "Home Stream",
     quality: "1080p",
     type: "fast",
+    host: "vidsrc.me",
     getUrl: (id, type, s = 1, e = 1) =>
       type === "movie"
         ? `https://vidsrc.me/embed/movie?tmdb=${id}`
@@ -77,6 +109,7 @@ export const STREAM_PROVIDERS: StreamProvider[] = [
     name: "Studio HD",
     quality: "720p / 1080p",
     type: "global",
+    host: "www.2embed.cc",
     getUrl: (id, type, s = 1, e = 1) =>
       type === "movie"
         ? `https://www.2embed.cc/embed/${id}`
@@ -87,6 +120,7 @@ export const STREAM_PROVIDERS: StreamProvider[] = [
     name: "Backup Stream",
     quality: "720p / 1080p",
     type: "global",
+    host: "vidsrc.to",
     getUrl: (id, type, s = 1, e = 1) =>
       type === "movie"
         ? `https://vidsrc.to/embed/movie/${id}`
@@ -94,17 +128,32 @@ export const STREAM_PROVIDERS: StreamProvider[] = [
   },
 ];
 
+/**
+ * The manifest's URL for a target, or `""` when the target cannot be keyed.
+ *
+ * Mirrors `EmbedProvider.build()` in `stream_providers.py`: same `safeStreamId`
+ * gate, same templates, same refusal to emit anything when the id fails the
+ * character class. Used by the parity tests and by `providerHost`; never by the
+ * player, which only ever loads a handle the backend minted.
+ */
+export function buildProviderUrl(
+  provider: StreamProvider,
+  tmdbId: unknown,
+  type: "movie" | "tv",
+  season = 1,
+  episode = 1
+): string {
+  const safe = safeStreamId(tmdbId);
+  if (!safe) return "";
+  return provider.getUrl(safe, type, season, episode);
+}
+
 /** Default selection for the source picker: the first, highest-priority entry. */
 export const DEFAULT_STREAM_PROVIDER: StreamProvider = STREAM_PROVIDERS[0];
 
-/** The host a provider's frames load from, read off its own URL builder. */
+/** The host a provider's frames load from, read off its own manifest entry. */
 export function providerHost(provider?: StreamProvider): string {
-  if (!provider) return "";
-  try {
-    return new URL(provider.getUrl("1", "movie")).hostname.toLowerCase();
-  } catch {
-    return "";
-  }
+  return provider?.host ?? "";
 }
 
 /**

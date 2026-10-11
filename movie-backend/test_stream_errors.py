@@ -16,6 +16,7 @@ Same harness approach as test_hardening.py: throwaway SQLite, Flask's test
 client, no framework, no network.
 """
 
+import json
 import os
 import sys
 import tempfile
@@ -50,7 +51,10 @@ _PATCHED = (
     ("_direct_hit_cache",),
     ("_direct_miss_cache",),
     ("_direct_source_locks",),
-    ("stream_providers", "probe_embed"),
+    # The tier tests below replace this to control the extract tier, so it has
+    # to be restored with the rest or every later test in this file runs against
+    # a stub -- and, worse, against a stub that reaches the live network.
+    ("stream_providers", "extractors", "extract_chain"),
 )
 
 
@@ -203,23 +207,47 @@ def test_rejects_oversized_id():
 # --- provider exhaustion is a decision, not an error ------------------------
 
 
-def _exhaust_the_chain(application, direct=None):
-    """Force every provider to come back empty.
+def _stub_extract(streams=None, subtitles=None, provider="stub", referer=""):
+    """Route the extract tier to a canned result; returns the original.
 
-    The direct catalog is stubbed to miss and every embed is stubbed
-    unreachable, which is the only state in which the route is allowed to say
-    "unavailable". Anything less and the response would be a real answer.
+    The extract tier walks live provider pages, so a test that let it run would
+    be asserting against somebody else's uptime -- and a test that wanted
+    exhaustion could not get it, because a reachable extractor answers. With no
+    `streams` the tier reports a miss, which is the only state in which the
+    route is allowed to say "unavailable".
+    """
+    import stream_providers
+
+    original = stream_providers.extractors.extract_chain
+
+    def _chain(*args, **kwargs):
+        if not streams:
+            return None
+        return stream_providers.extractors.Extraction(
+            provider,
+            [dict(s) for s in streams],
+            [dict(s) for s in (subtitles or [])],
+            referer,
+        )
+
+    stream_providers.extractors.extract_chain = _chain
+    return original
+
+
+def _exhaust_the_chain(application, direct=None):
+    """Force every tier to come back empty.
+
+    Both tiers are stubbed to miss: the extract tier because it would
+    otherwise hit live provider pages, and the direct catalog because that is
+    the only state in which the route is allowed to say "unavailable".
+    Anything less and the response would be a real answer.
     """
     application._direct_source_for = lambda *a, **k: direct
-    application.stream_providers.HEALTH.reset()
-    application.stream_providers.clear_probe_cache()
-    application.stream_providers.probe_embed = lambda *a, **k: False
+    _stub_extract(None)
 
 
 def _restore_chain(application):
     _restore(_SAVED)
-    application.stream_providers.HEALTH.reset()
-    application.stream_providers.clear_probe_cache()
 
 
 def _stub_details(application, details):
@@ -259,27 +287,14 @@ def test_init_answers_404_only_after_every_provider_failed():
     )
     assert body.get("available") is False, f"exhaustion did not report available:false: {body!r}"
 
-    # Exhaustion still advertises the chain, in priority order and in the one
-    # shape every resolver client reads -- now as frame handles: the client
-    # walks this list on its own per-candidate timer, so it needs *something*
-    # addressable, but the URL behind each entry is not its to hold. A raw
-    # https:// URL here would undo the whole point of the handle layer.
+    # Exhaustion advertises no chain at all. There is no embed tier left to
+    # walk, and a planned list of iframe hosts would hand the client exactly
+    # what this rewrite removed -- so an empty array is the honest answer, and
+    # an entry in it is a regression.
     providers = body.get("providers")
-    assert isinstance(providers, list) and providers, (
-        f"exhaustion advertised no candidates: {body!r}"
+    assert isinstance(providers, list) and providers == [], (
+        f"exhaustion advertised candidates the client must not walk: {body!r}"
     )
-    assert all({"name", "url", "is_embed"} <= set(entry) for entry in providers), (
-        f"candidate entries are not in the documented shape: {providers!r}"
-    )
-    assert all(entry["is_embed"] for entry in providers), (
-        f"a planned embed candidate claimed to be a file: {providers!r}"
-    )
-    assert all(
-        entry["url"].startswith("/api/v1/playback/frame?token=") for entry in providers
-    ), f"exhaustion leaked a raw provider URL: {providers!r}"
-    assert [entry["name"] for entry in providers] == [
-        provider.label for provider in app.stream_providers.EMBED_PROVIDERS
-    ], f"exhaustion chain is out of priority order: {providers!r}"
 
 
 def test_init_exhaustion_reports_what_each_provider_did():
@@ -297,25 +312,32 @@ def test_init_exhaustion_reports_what_each_provider_did():
         _restore_chain(app)
 
     attempts = body.get("provider_attempts")
-    assert isinstance(attempts, list) and attempts, f"no per-provider diagnostics: {body!r}"
-    assert all({"id", "kind", "outcome"} <= set(a) for a in attempts), (
+    assert isinstance(attempts, list) and attempts, f"no per-tier diagnostics: {body!r}"
+    assert all({"tier", "ok"} <= set(a) for a in attempts), (
         f"incomplete attempt records: {attempts!r}"
     )
-    embeds = [a for a in attempts if a["kind"] == "embed"]
-    assert len(embeds) == len(app.stream_providers.EMBED_PROVIDERS), (
-        f"the route gave up before walking the chain: {attempts!r}"
+    assert [a["tier"] for a in attempts] == ["extract", "archive"], (
+        f"the route gave up before walking the chain in order: {attempts!r}"
+    )
+    assert all(a["ok"] is False for a in attempts), (
+        f"a failed tier reported success: {attempts!r}"
     )
 
 
-def test_init_never_reports_exhaustion_while_a_provider_is_working():
+def test_init_never_reports_exhaustion_while_a_tier_is_working():
     # The inverse, because exhaustion is terminal for the client: if a single
-    # reachable provider is enough to answer, the retry budget is not spent and
-    # the viewer sees a frame instead of an error card. A 503 would be even
-    # worse than it was before -- with the guard owning that status, exhaustion
-    # spilling into it would also mean claiming the memory ceiling was hit.
+    # reachable tier is enough to answer, the retry budget is not spent and
+    # the viewer gets a playable leg instead of an error card. A 503 would be
+    # even worse than it was before -- with the guard owning that status,
+    # exhaustion spilling into it would also mean claiming the memory ceiling
+    # was hit.
     app, client = _client()
     _exhaust_the_chain(app)
-    app.stream_providers.probe_embed = lambda *a, **k: True
+    # One reachable tier is enough: the archive is the tier that actually runs,
+    # so it is the one that has to be able to rescue the request.
+    app._direct_source_for = lambda *a, **k: {
+        "streams": [{"url": "https://archive.org/download/x/f.mp4", "label": "720p"}]
+    }
     original = _stub_details(app, {"id": 603, "title": "The Matrix"})
     try:
         res = client.get("/api/v1/playback/init?tmdb_id=603")
@@ -323,21 +345,24 @@ def test_init_never_reports_exhaustion_while_a_provider_is_working():
         app.tmdb.fetch_media_details = original
         _restore_chain(app)
 
-    assert res.status_code == 200, f"a live provider still produced {res.status_code}"
+    assert res.status_code == 200, f"a live tier still produced {res.status_code}"
     body = res.get_json()
     assert body["success"] is True
     assert body["available"] is True
     movie = body["movie"]
-    assert movie["is_embed"] is True
-    assert movie["format"] == "frame", f"an embed claimed a playable format: {movie!r}"
-    assert movie["stream_url"].startswith("/api/v1/playback/frame?token="), (
-        f"embed stream_url is not a frame handle: {movie['stream_url']!r}"
+    # No iframe anywhere in the payload: `is_embed` is False by construction and
+    # there is no failover chain for a player to walk into a frame.
+    assert movie["is_embed"] is False, f"an embed reached the payload: {movie!r}"
+    assert movie["format"] == "mp4", f"a source claimed the wrong container: {movie!r}"
+    assert movie["stream_url"].startswith("/api/v1/playback/media?token="), (
+        f"stream_url is not a playback handle: {movie['stream_url']!r}"
     )
-    assert movie["providers"], "no failover chain on a successful resolve"
-    assert all(
-        entry["url"].startswith("/api/v1/playback/frame?token=")
-        for entry in movie["providers"]
-    ), f"a provider URL crossed the wire raw: {movie['providers']!r}"
+    assert movie["providers"] == [], (
+        f"a failover chain survived the no-iframe rewrite: {movie['providers']!r}"
+    )
+    assert all(url.startswith("/api/") for url in movie["sources"]), (
+        f"a source URL crossed the wire raw: {movie['sources']!r}"
+    )
     # The locale seed rides on the success payload too, so the player can build
     # its default audio/subtitle tracks without a second round trip.
     assert isinstance(body.get("language"), str) and body["language"], (
@@ -345,18 +370,16 @@ def test_init_never_reports_exhaustion_while_a_provider_is_working():
     )
 
 
-def test_init_prefers_a_direct_source_over_every_embed():
-    # Direct is a real file the native player can boot, with no third-party
-    # frame in the path. It must win whenever the catalog has the title.
+def test_init_serves_a_direct_catalog_source_natively():
+    # A direct file off the catalog is a real source the native player boots
+    # with no third-party frame in the path. It must be relayed behind a
+    # same-origin handle, never handed to the client raw and never framed.
     app, client = _client()
-    probed = []
-    app.stream_providers.HEALTH.reset()
-    app.stream_providers.clear_probe_cache()
-    app.stream_providers.probe_embed = lambda url, **k: probed.append(url) or True
+    _stub_extract(None)
     app._direct_source_for = lambda *a, **k: {
-        "stream_url": "https://archive.org/download/x/master.mp4",
         "streams": [
-            {"url": "https://archive.org/download/x/720.mp4", "quality": "720p"}
+            {"url": "https://archive.org/download/x/master.mp4", "label": "1080p"},
+            {"url": "https://archive.org/download/x/720.mp4", "label": "720p"},
         ],
     }
     original = _stub_details(app, {"id": 603, "title": "The Matrix"})
@@ -370,16 +393,18 @@ def test_init_prefers_a_direct_source_over_every_embed():
     body = res.get_json()
     movie = body["movie"]
     assert movie["is_embed"] is False
-    assert movie["provider"] == "archive_direct"
+    assert movie["provider"] == "archive"
     assert movie["format"] == "mp4"
     assert movie["stream_url"].startswith("/api/v1/playback/media?token="), (
         f"primary is not a media handle: {movie['stream_url']!r}"
     )
-    assert movie["sources"], "no failover chain on a successful resolve"
+    assert movie["sources"], "no sources on a successful resolve"
     assert all(url.startswith("/api/v1/playback/") for url in movie["sources"]), (
         f"a source URL crossed the wire raw: {movie['sources']!r}"
     )
-    assert probed == [], f"embeds were probed despite a direct hit: {probed!r}"
+    assert [t["quality"] for t in movie["streams"]] == ["1080p", "720p"], (
+        f"quality labels were lost: {movie['streams']!r}"
+    )
 
 
 def test_init_relays_hls_behind_the_manifest_proxy():
@@ -387,12 +412,9 @@ def test_init_relays_hls_behind_the_manifest_proxy():
     # playlist is served); pointing the player straight at the playlist would
     # hand it a cross-origin URL that dies on CORS and the Referer check.
     app, client = _client()
-    app.stream_providers.HEALTH.reset()
-    app.stream_providers.clear_probe_cache()
-    app.stream_providers.probe_embed = lambda *a, **k: False
+    _stub_extract(None)
     app._direct_source_for = lambda *a, **k: {
-        "stream_url": "https://cdn.example.org/hls/master.m3u8",
-        "streams": [],
+        "streams": [{"url": "https://cdn.example.org/hls/master.m3u8", "label": "Auto"}],
     }
     original = _stub_details(app, {"id": 603, "title": "The Matrix"})
     try:
@@ -423,10 +445,13 @@ def test_resolve_alias_serves_the_pre_v1_contract():
     # `isResolvePayload` reads (`movie`, `exact`, `language`) and only ever
     # tokenised legs -- the reason the old route was safe to re-expose.
     app, client = _client()
-    app.stream_providers.HEALTH.reset()
-    app.stream_providers.clear_probe_cache()
-    app.stream_providers.probe_embed = lambda *a, **k: True
-    app._direct_source_for = lambda *a, **k: None
+    app._direct_source_for = lambda *a, **k: {
+        "streams": [{"url": "https://archive.org/download/x/f.mp4", "label": "720p"}]
+    }
+    # The extract tier is stubbed to miss so the archive serves the payload.
+    # Without it this test would render a live provider page, which is a
+    # network call in a suite that must not depend on someone else's uptime.
+    _stub_extract(None)
     original = _stub_details(app, {"id": 603, "title": "The Matrix"})
     try:
         res = client.post("/api/movies/resolve", json={"id": "603"})
@@ -440,14 +465,12 @@ def test_resolve_alias_serves_the_pre_v1_contract():
     assert isinstance(body.get("language"), str) and body["language"]
     movie = body["movie"]
     assert movie["id"] == "603"
-    assert movie["stream_url"].startswith("/api/v1/playback/frame?token="), (
+    # The alias inherits the tokenised-legs contract: never a raw upstream URL,
+    # and never an iframe -- there is no frame leg left to leak.
+    assert movie["stream_url"].startswith("/api/v1/playback/media?token="), (
         f"alias leaked a raw stream URL: {movie['stream_url']!r}"
     )
-    assert movie["providers"], "alias dropped the failover chain"
-    assert all(
-        entry["url"].startswith("/api/v1/playback/frame?token=")
-        for entry in movie["providers"]
-    ), f"alias leaked a raw provider URL: {movie['providers']!r}"
+    assert movie["providers"] == [], f"alias resurrected the embed chain: {movie['providers']!r}"
 
 
 def test_resolve_alias_keeps_the_exhaustion_contract():
@@ -823,21 +846,18 @@ def test_parse_duration_seconds_handles_both_archive_shapes():
 
 def test_init_never_returns_a_trailer_url_as_the_primary_stream():
     # Regression: a trailer must never reach the main player -- it lives only
-    # in the "Trailers" tab. A direct candidate whose `stream_url` looks like a
-    # trailer endpoint must be discarded and the request must fall through to
-    # the embed chain, minting a frame handle for an embed rather than for the
-    # rejected URL.
+    # in the "Trailers" tab. A direct candidate whose only URL looks like a
+    # trailer endpoint is discarded, and with no embed chain to fall through
+    # to, the whole request answers the same exhaustion the client already
+    # knows how to show.
     app, client = _client()
-    app.stream_providers.HEALTH.reset()
-    app.stream_providers.clear_probe_cache()
-    app.stream_providers.probe_embed = lambda *a, **k: True
+    _stub_extract(None)
     app._direct_source_for = lambda *a, **k: {
         "id": "603",
         "title": "The Matrix",
-        "stream_url": "https://www.youtube.com/watch?v=vKQi3bBA1y8",
         "streams": [
             {
-                "quality": "720p",
+                "label": "720p",
                 "height": 720,
                 "width": 1280,
                 "size": 700_000_000,
@@ -853,16 +873,12 @@ def test_init_never_returns_a_trailer_url_as_the_primary_stream():
         app.tmdb.fetch_media_details = original
         _restore_chain(app)
 
-    assert res.status_code == 200, f"resolve failed: {res.status_code} {res.data[:200]!r}"
-    movie = res.get_json()["movie"]
-    assert "youtube" not in movie["stream_url"].lower(), (
-        f"trailer reached the primary stream: {movie['stream_url']!r}"
+    assert res.status_code == 404, f"trailer answered {res.status_code}: {res.data[:200]!r}"
+    body = res.get_json()
+    assert body.get("code") == "PROVIDERS_EXHAUSTED", f"trailer did not exhaust: {body!r}"
+    assert "youtube" not in json.dumps(body).lower(), (
+        f"trailer reached the payload: {body!r}"
     )
-    assert movie["stream_url"].startswith("/api/v1/playback/frame?token="), (
-        f"expected an embed frame handle, got: {movie['stream_url']!r}"
-    )
-    for tier in movie.get("streams", []):
-        assert "youtube" not in tier["url"].lower(), f"trailer leaked into a tier: {tier!r}"
 
 
 def _run():
