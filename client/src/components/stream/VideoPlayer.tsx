@@ -329,6 +329,33 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     applySubtitleMode();
   }, [applySubtitleMode, subtitleTracks, streamUrl]);
 
+  // External WebVTT cues are evaluated by the browser against the media clock,
+  // and after a backward seek Chromium can keep displaying the cue that was
+  // active *before* the jump until something forces a re-evaluation. Flipping
+  // the showing track off and back on once the seek lands is the cheapest
+  // reliable nudge. In-manifest (hls.js) renditions re-cue themselves and are
+  // left alone.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const handleSeeked = () => {
+      if (currentSubtitles === "Off") return;
+      const list = video.textTracks;
+      for (let i = 0; i < list.length; i += 1) {
+        const track = list[i];
+        if (track.language === currentSubtitles) track.mode = "hidden";
+      }
+      requestAnimationFrame(() => {
+        for (let i = 0; i < list.length; i += 1) {
+          const track = list[i];
+          if (track.language === currentSubtitles) track.mode = "showing";
+        }
+      });
+    };
+    video.addEventListener("seeked", handleSeeked);
+    return () => video.removeEventListener("seeked", handleSeeked);
+  }, [currentSubtitles]);
+
   // A new source is a new position: the previous title's sample must not be
   // compared against this one's clock, or a fresh load looks like progress.
   useEffect(() => {
@@ -345,6 +372,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const dashPlayerRef = useRef<any>(null);
 
   const effectiveIsLoading = externalIsLoading || isLoading;
+
+  // A `loadeddata` listener parked by `attemptAutoplay` while it waits for the
+  // first decodable frame. Held so a source swap can tear the stale one down
+  // instead of letting it fire against media it was not scheduled for.
+  const pendingAutoplayRef = useRef<(() => void) | null>(null);
 
   const attemptAutoplay = useCallback(() => {
     const video = videoRef.current;
@@ -375,6 +407,27 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           });
       }
     };
+
+    // `loadedmetadata` (and hls.js's MANIFEST_PARSED) arrives before a frame is
+    // decodable: play() there starts the audio clock against a black picture —
+    // the "sound before video" glitch. Waiting for current data keeps the two
+    // in step, and costs nothing the viewer can see because the poster is
+    // covering the frame either way.
+    if (video.readyState < 2) {
+      if (pendingAutoplayRef.current) {
+        video.removeEventListener("loadeddata", pendingAutoplayRef.current);
+      }
+      const onReady = () => {
+        video.removeEventListener("loadeddata", onReady);
+        if (pendingAutoplayRef.current === onReady) {
+          pendingAutoplayRef.current = null;
+        }
+        tryPlay(false);
+      };
+      pendingAutoplayRef.current = onReady;
+      video.addEventListener("loadeddata", onReady);
+      return;
+    }
 
     tryPlay(false);
   }, []);
@@ -578,6 +631,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       dashCancelled = true;
       dashPlayerRef.current?.destroy?.();
       dashPlayerRef.current = null;
+      if (pendingAutoplayRef.current) {
+        video.removeEventListener("loadeddata", pendingAutoplayRef.current);
+        pendingAutoplayRef.current = null;
+      }
       video.pause();
       video.removeAttribute("src");
       video.load();
@@ -585,10 +642,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     const handleLoadedMetadata = () => {
       setDuration(video.duration);
-      setIsLoading(false);
       clearStallWatch();
       initAmbientCanvas();
-      attemptAutoplay();
+      // Autoplay is deliberately not attempted here: metadata lands before the
+      // first decodable frame, and playing from this event is what starts the
+      // audio against a black picture. `loadeddata` below is the one that goes.
     };
 
     const handleError = () => {
@@ -618,10 +676,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setIsLoading(false);
     };
     const handleEnded = () => setIsPlaying(false);
-    // First frame is actually decodable -> the poster has done its job. This
-    // covers progressive MP4 and native (Safari) HLS, which never emit
-    // MANIFEST_PARSED.
-    const handleLoadedData = () => setPosterSettled(true);
+    // First frame is actually decodable -> the poster has done its job, and
+    // this is also the earliest point where play() cannot run ahead of the
+    // picture. Covers progressive MP4 and native (Safari) HLS, which never
+    // emit MANIFEST_PARSED.
+    const handleLoadedData = () => {
+      setPosterSettled(true);
+      attemptAutoplay();
+    };
 
     video.addEventListener("loadedmetadata", handleLoadedMetadata);
     video.addEventListener("error", handleError);
@@ -644,8 +706,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
           setHlsLevels(deriveHlsLevels(hls));
-          setIsLoading(false);
-          setPosterSettled(true);
+          // No `setPosterSettled` here: a parsed manifest is not a decodable
+          // frame. Fading the poster this early uncovered black video while
+          // the opening segments were still in flight.
           attemptAutoplay();
           initAmbientCanvas();
         });
@@ -705,8 +768,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           });
           player.on(MediaPlayer.events.STREAM_INITIALIZED, () => {
             if (dashCancelled) return;
-            setIsLoading(false);
-            setPosterSettled(true);
+            // Same rule as hls.js's MANIFEST_PARSED: stream init is not a
+            // decodable frame, so the poster stays until `loadeddata`.
             attemptAutoplay();
             initAmbientCanvas();
           });
@@ -820,20 +883,28 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const togglePlay = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
+    setHasUserInteracted(true);
     if (isPlaying) {
       video.pause();
       setIsPlaying(false);
-    } else {
-      video
-        .play()
-        .then(() => {
-          setIsPlaying(true);
-        })
-        .catch(() => {
-          setIsPlaying(false);
-        });
+      return;
     }
-  }, [isPlaying]);
+    // Click-to-play before the first frame would start audio against a black
+    // picture, the same glitch autoplay is guarded against. Hand it to the
+    // gated path instead, which starts on `loadeddata`.
+    if (video.readyState < 2) {
+      attemptAutoplay();
+      return;
+    }
+    video
+      .play()
+      .then(() => {
+        setIsPlaying(true);
+      })
+      .catch(() => {
+        setIsPlaying(false);
+      });
+  }, [isPlaying, attemptAutoplay]);
 
   const handleSeek = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1448,21 +1519,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           </div>
         </div>
       </div>
-
-      {!hasUserInteracted && !effectiveIsLoading && (
-        <div className="absolute inset-0 flex items-center justify-center z-20 pointer-events-none">
-          <button
-            onClick={() => {
-              setHasUserInteracted(true);
-              togglePlay();
-            }}
-            className="w-20 h-20 rounded-full bg-white/20 backdrop-blur-md border border-white/30 flex items-center justify-center transition-all hover:bg-white/30 hover:scale-110"
-            aria-label="Play"
-          >
-            <Play className="w-8 h-8 text-white ml-1" />
-          </button>
-        </div>
-      )}
     </div>
   );
 };

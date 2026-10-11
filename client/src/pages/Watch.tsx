@@ -730,8 +730,10 @@ export function WatchPage() {
   const [streamUnavailable, setStreamUnavailable] = useState(false);
   const fallbackAttemptsRef = useRef(0);
   const playerKeyRef = useRef(0);
-
-  const currentStreamUrl = playableCandidates[sourceIndex] ?? "";
+  // Quality rung picked from the player's menu when the source is one URL per
+  // rendition rather than a single adaptive ladder. `null` means "whatever the
+  // resolver ranked first".
+  const [selectedQuality, setSelectedQuality] = useState<string | null>(null);
 
   useEffect(() => {
     setStage("resolving_backend");
@@ -740,9 +742,14 @@ export function WatchPage() {
   const [stage, setStage] = useState<StreamLoadStage>("idle");
 
   useEffect(() => {
-    if (resolving || !resolved) return;
-    setStage("playing");
-  }, [resolving, resolved]);
+    if (!resolved) return;
+    // The player mounts the moment `resolved` carries a playable URL, which
+    // happens while a follow-up playback-init request is still in flight.
+    // Holding the loader up until `resolving` also flipped covered a player
+    // that was already parsing its manifest — and playing audio — underneath
+    // it, which is exactly the "spinner over live sound" glitch.
+    if (!resolving || playableCandidates.length > 0) setStage("playing");
+  }, [resolving, resolved, playableCandidates.length]);
 
   const autoCycling = sourceIndex > 0 && !reconnecting;
 
@@ -842,6 +849,7 @@ export function WatchPage() {
     setSourceIndex(0);
     setReconnecting(false);
     setStreamUnavailable(false);
+    setSelectedQuality(null);
     fallbackAttemptsRef.current = 0;
   }, [resolved]);
 
@@ -934,6 +942,16 @@ export function WatchPage() {
     [resolved?.stream?.subtitles]
   );
 
+  // The URL the player is actually opened on: the chosen quality rung when
+  // the viewer picked one, otherwise the resolver's top-ranked candidate.
+  const currentStreamUrl = useMemo(() => {
+    if (selectedQuality) {
+      const match = qualityVariants.find(v => v.quality === selectedQuality);
+      if (match?.url) return match.url;
+    }
+    return playableCandidates[sourceIndex] ?? "";
+  }, [selectedQuality, qualityVariants, playableCandidates, sourceIndex]);
+
   const { settings } = useAppSettings();
   const preferredTrackLanguage = useMemo(() => {
     if (!settings.autoSelectAudioSubtitles) return null;
@@ -948,6 +966,10 @@ export function WatchPage() {
 
   const [asideTab, setAsideTab] = useState<"episodes" | "trailers" | "more">("trailers");
   const [playingTrailer, setPlayingTrailer] = useState(false);
+  // The embed takes a beat to produce its first frame. The thumbnail and a
+  // spinner hold the slot until the iframe reports ready, so a trailer click
+  // never drops to a black rectangle.
+  const [trailerFrameLoaded, setTrailerFrameLoaded] = useState(false);
 
   useEffect(() => {
     setAsideTab(movie?.mediaType === "tv" ? "episodes" : "trailers");
@@ -956,6 +978,10 @@ export function WatchPage() {
 
   const resolvedTrailer = useMemo(() => resolveTrailer(trailer, { controls: true }), [trailer]);
   const trailerThumb = useMemo(() => trailerThumbnail(trailer), [trailer]);
+
+  useEffect(() => {
+    setTrailerFrameLoaded(false);
+  }, [playingTrailer, resolvedTrailer?.src]);
 
   const [similar, setSimilar] = useState<CatalogItem[]>([]);
   const genreKey = movie?.genre?.join(",") ?? "";
@@ -1113,16 +1139,35 @@ export function WatchPage() {
                        `allow-same-origin` in a sandbox makes the origin opaque
                        and the player cannot read its own storage or fetch
                        segments, which is exactly the black "won't play". */
-                    <iframe
-                      key={resolvedTrailer.src}
-                      src={resolvedTrailer.src}
-                      title={`${movie.title} — ${resolvedTrailer.label}`}
-                      allow={FRAME_ALLOW}
-                      sandbox={FRAME_SANDBOX}
-                      allowFullScreen
-                      referrerPolicy="strict-origin-when-cross-origin"
-                      className="absolute inset-0 h-full w-full border-0"
-                    />
+                    <>
+                      {trailerThumb ? (
+                        <img
+                          key="trailer-thumb"
+                          src={trailerThumb}
+                          alt=""
+                          aria-hidden
+                          className="absolute inset-0 h-full w-full object-cover"
+                        />
+                      ) : null}
+                      {!trailerFrameLoaded ? (
+                        <div className="absolute inset-0 z-10 flex items-center justify-center">
+                          <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-white" />
+                        </div>
+                      ) : null}
+                      <iframe
+                        key={resolvedTrailer.src}
+                        src={resolvedTrailer.src}
+                        title={`${movie.title} — ${resolvedTrailer.label}`}
+                        allow={FRAME_ALLOW}
+                        sandbox={FRAME_SANDBOX}
+                        allowFullScreen
+                        referrerPolicy="strict-origin-when-cross-origin"
+                        onLoad={() => setTrailerFrameLoaded(true)}
+                        className={`absolute inset-0 h-full w-full border-0 transition-opacity duration-300 ${
+                          trailerFrameLoaded ? "opacity-100" : "opacity-0"
+                        }`}
+                      />
+                    </>
                   ) : resolved ? (
                     <>
                       {currentStreamUrl && !streamUnavailable ? (
@@ -1134,9 +1179,14 @@ export function WatchPage() {
                           onClose={handleClose}
                           variants={qualityVariants}
                           subtitles={streamSubtitles}
-                          currentQuality={qualityVariants.find(v => v.quality)?.quality || "Auto"}
-                          onQualityChange={() => {}}
-                          isLoading={resolving}
+                          currentQuality={selectedQuality ?? "Auto"}
+                          onQualityChange={quality => {
+                            // A per-rendition source swap, not an in-player
+                            // level switch: bump the key so the player remounts
+                            // cleanly on the chosen URL.
+                            playerKeyRef.current += 1;
+                            setSelectedQuality(quality);
+                          }}
                           autoCycling={autoCycling}
                           onSourceError={handleSourceError}
                           onProgress={handleProgress}

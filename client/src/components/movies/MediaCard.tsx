@@ -204,15 +204,13 @@ export function MediaCard({
     };
   }, []);
 
-  // INSTANT hover - no 300ms delay for modern feel
+  // INSTANT hover - no delay for a modern feel. The trailer iframe is mounted
+  // as soon as its metadata exists (hidden under the poster/preview until it
+  // reports ready), so the provider's own load time is spent in parallel
+  // rather than after the hover has already switched something on screen.
   const handleEnter = useCallback(() => {
-    if (timer.current !== null) return;
-    // Near-instant response (50ms for perceived instant feel)
-    timer.current = window.setTimeout(() => {
-      timer.current = null;
-      setPeeked(true);
-      setTrailerReady(trailerPreloaded); // Instant if preloaded
-    }, 50);
+    setPeeked(true);
+    if (trailerPreloaded) setTrailerReady(true);
   }, [trailerPreloaded]);
 
   const handleLeave = useCallback(() => {
@@ -230,8 +228,12 @@ export function MediaCard({
   }, []);
 
   const showSkeleton = !posterUrl || posterFailed;
-  const showTrailer = peeked && trailer && trailerReady;
-  const showVideo = peeked && !showTrailer && previewUrl && !videoFailed;
+  // The iframe mounts as soon as its metadata exists; `trailerReady` (its
+  // onLoad) is what swaps it onto the screen. Until then the poster or the
+  // native preview holds the frame — never a black provider frame.
+  const trailerMounted = peeked && Boolean(trailer);
+  const showTrailer = trailerMounted && trailerReady;
+  const showVideo = peeked && !trailerReady && previewUrl && !videoFailed;
   const showBackdrop = peeked && !showTrailer && !showVideo && backdropUrl;
   const genreLine = genresText(genres);
 
@@ -272,15 +274,26 @@ export function MediaCard({
             />
           )}
 
-          {/* Preview layer: official trailer → muted native clip → backdrop */}
-          {showTrailer && trailer ? (
-            <div className="absolute inset-0 flex items-center justify-center z-10">
+          {/* Preview layer: official trailer → muted native clip → backdrop.
+              The embed is mounted early but held transparent until onLoad, so
+              the provider's load time runs in parallel with the poster. */}
+          {trailerMounted && trailer ? (
+            <div
+              className={`absolute inset-0 z-10 flex items-center justify-center transition-opacity duration-200 ${
+                showTrailer ? "opacity-100" : "pointer-events-none opacity-0"
+              }`}
+            >
               <TrailerEmbed
                 provider={trailer.provider}
                 id={trailer.id}
                 onLoad={handleTrailerLoad}
                 ref={iframeRef}
               />
+            </div>
+          ) : null}
+          {trailerMounted && !showTrailer && !showVideo ? (
+            <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
+              <div className="h-6 w-6 animate-spin rounded-full border-2 border-white/25 border-t-white" />
             </div>
           ) : null}
           {showVideo && (

@@ -29,8 +29,8 @@ const STAGE_COPY: Record<
   Exclude<StreamLoadStage, "idle" | "playing">,
   string
 > = {
-  resolving_backend: "Securing stream...",
-  testing_candidate: "Preparing high quality video...",
+  resolving_backend: "Loading stream…",
+  testing_candidate: "Loading stream…",
 };
 
 /**

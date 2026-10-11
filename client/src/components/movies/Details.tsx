@@ -158,6 +158,14 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
   // poster for the pointer.
   const trailerSrc = resolveTrailer(trailer, { loop: false, controls: true });
 
+  // The embed takes a beat to produce its first frame. The backdrop holds the
+  // slot and a spinner marks the wait, so the sheet never shows a black
+  // rectangle where the trailer will be.
+  const [trailerFrameLoaded, setTrailerFrameLoaded] = useState(false);
+  useEffect(() => {
+    setTrailerFrameLoaded(false);
+  }, [trailerSrc?.src]);
+
   /**
    * Build the playable stream for the selected title/episode and open the player.
    */
@@ -360,10 +368,10 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
     opened.current = true;
     let disposed = false;
 
-    // Mark details as loaded after a brief moment for smooth UX
-    const loadTimer = setTimeout(() => {
-      if (!disposed) setDetailsLoaded(true);
-    }, 100);
+    // The sheet's content is local; there is nothing to wait on before showing
+    // it. (This used to sit behind a 100ms timer "for smooth UX" — which only
+    // delayed the metadata the render already had.)
+    setDetailsLoaded(true);
 
     void (async () => {
       try {
@@ -388,7 +396,6 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
     })();
     return () => {
       disposed = true;
-      clearTimeout(loadTimer);
     };
   }, [movie.id, movie.title, movie.year, movie.providerId, movie.mediaType]);
 
@@ -470,17 +477,27 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
             <div className="absolute inset-0 bg-gradient-to-br from-[#1B1B20] to-[#0a0a0c]" />
           )}
           {trailerSrc && !trailerFailed ? (
-            <iframe
-              key="trailer-embed"
-              ref={trailerFrameRef}
-              src={trailerSrc.src}
-              className="pointer-events-none absolute inset-0 h-full w-full object-cover"
-              allow="autoplay; encrypted-media"
-              sandbox="allow-scripts allow-same-origin allow-forms"
-              // See Spotlight: "no-referrer" is what makes the host answer 153.
-              referrerPolicy="strict-origin-when-cross-origin"
-              title={`${movie.title} — ${trailerSrc.label}`}
-            />
+            <>
+              {!trailerFrameLoaded ? (
+                <div className="pointer-events-none absolute inset-0 z-[1] flex items-center justify-center">
+                  <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-white" />
+                </div>
+              ) : null}
+              <iframe
+                key="trailer-embed"
+                ref={trailerFrameRef}
+                src={trailerSrc.src}
+                onLoad={() => setTrailerFrameLoaded(true)}
+                className={`pointer-events-none absolute inset-0 h-full w-full object-cover transition-opacity duration-300 ${
+                  trailerFrameLoaded ? "opacity-100" : "opacity-0"
+                }`}
+                allow="autoplay; encrypted-media"
+                sandbox="allow-scripts allow-same-origin allow-forms"
+                // See Spotlight: "no-referrer" is what makes the host answer 153.
+                referrerPolicy="strict-origin-when-cross-origin"
+                title={`${movie.title} — ${trailerSrc.label}`}
+              />
+            </>
           ) : null}
           <button
             onClick={onClose}
@@ -536,8 +553,12 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
               disabled={resolving}
               className="flex w-full sm:w-auto items-center justify-center gap-2 rounded-xl bg-white px-8 py-3 text-sm font-bold text-black hover:bg-neutral-200 disabled:opacity-60 transition-all active:scale-[0.98] shadow-lg shadow-black/20"
             >
-              <Play className="h-5 w-5 fill-current" />
-              {resolving ? "Loading Stream…" : "Play"}
+              {resolving ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : (
+                <Play className="h-5 w-5 fill-current" />
+              )}
+              {resolving ? "Loading stream…" : "Play"}
             </button>
             <button
               onClick={() => {
