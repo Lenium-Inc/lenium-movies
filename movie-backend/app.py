@@ -815,6 +815,144 @@ def _download_url(url: str, filename: str, region: str | None = None) -> str | N
     return f"/api/v1/playback/download?token={token}"
 
 
+# Common caption display names, lowercased, mapped to ISO-639-2 codes. Provider
+# captions arrive with a label and no language; defaulting every one of them to
+# "eng" made the client's language-keyed dedupe keep only the first track, so a
+# title with English/Spanish/French captions offered one row.
+_SUBTITLE_LANG_BY_LABEL = {
+    "english": "eng",
+    "en": "eng",
+    "eng": "eng",
+    "spanish": "spa",
+    "español": "spa",
+    "espanol": "spa",
+    "es": "spa",
+    "spa": "spa",
+    "french": "fre",
+    "français": "fre",
+    "francais": "fre",
+    "fr": "fre",
+    "fre": "fre",
+    "german": "ger",
+    "deutsch": "ger",
+    "de": "ger",
+    "ger": "ger",
+    "italian": "ita",
+    "italiano": "ita",
+    "it": "ita",
+    "ita": "ita",
+    "portuguese": "por",
+    "português": "por",
+    "portugues": "por",
+    "pt": "por",
+    "por": "por",
+    "russian": "rus",
+    "русский": "rus",
+    "ru": "rus",
+    "rus": "rus",
+    "japanese": "jpn",
+    "日本語": "jpn",
+    "ja": "jpn",
+    "jpn": "jpn",
+    "korean": "kor",
+    "한국어": "kor",
+    "ko": "kor",
+    "kor": "kor",
+    "chinese": "chi",
+    "中文": "chi",
+    "zh": "chi",
+    "chi": "chi",
+    "hindi": "hin",
+    "हिन्दी": "hin",
+    "hi": "hin",
+    "hin": "hin",
+    "arabic": "ara",
+    "العربية": "ara",
+    "ar": "ara",
+    "ara": "ara",
+    "dutch": "dut",
+    "nederlands": "dut",
+    "nl": "dut",
+    "dut": "dut",
+    "polish": "pol",
+    "polski": "pol",
+    "pl": "pol",
+    "pol": "pol",
+    "turkish": "tur",
+    "türkçe": "tur",
+    "turkce": "tur",
+    "tr": "tur",
+    "tur": "tur",
+    "swedish": "swe",
+    "svenska": "swe",
+    "sv": "swe",
+    "swe": "swe",
+    "norwegian": "nor",
+    "norsk": "nor",
+    "no": "nor",
+    "nor": "nor",
+    "danish": "dan",
+    "dansk": "dan",
+    "da": "dan",
+    "dan": "dan",
+    "finnish": "fin",
+    "suomi": "fin",
+    "fi": "fin",
+    "fin": "fin",
+    "greek": "gre",
+    "ελληνικά": "gre",
+    "el": "gre",
+    "gre": "gre",
+    "czech": "cze",
+    "čeština": "cze",
+    "cestina": "cze",
+    "cs": "cze",
+    "cze": "cze",
+    "hungarian": "hun",
+    "magyar": "hun",
+    "hu": "hun",
+    "hun": "hun",
+    "romanian": "rum",
+    "română": "rum",
+    "romana": "rum",
+    "ro": "rum",
+    "rum": "rum",
+    "ukrainian": "ukr",
+    "українська": "ukr",
+    "uk": "ukr",
+    "ukr": "ukr",
+    "hebrew": "heb",
+    "עברית": "heb",
+    "he": "heb",
+    "heb": "heb",
+    "thai": "tha",
+    "ไทย": "tha",
+    "th": "tha",
+    "tha": "tha",
+    "vietnamese": "vie",
+    "tiếng việt": "vie",
+    "vi": "vie",
+    "vie": "vie",
+    "indonesian": "ind",
+    "bahasa indonesia": "ind",
+    "id": "ind",
+    "ind": "ind",
+}
+
+
+def _subtitle_lang(raw_lang: object, label: str) -> str:
+    """A language code for a caption row, never a fabricated duplicate.
+
+    A real code from the resolver wins. Failing that, the display label is
+    looked up; failing that, "eng" -- which is what the previous code did
+    unconditionally, collapsing every provider caption set to one track.
+    """
+    lang = str(raw_lang or "").strip()[:24]
+    if lang:
+        return lang
+    return _SUBTITLE_LANG_BY_LABEL.get(label.strip().lower(), "eng")
+
+
 def _init_inputs() -> tuple[dict | None, tuple | None]:
     """Read and strictly validate `/api/v1/playback/init` parameters.
 
@@ -1093,15 +1231,18 @@ def playback_init():
             # these are mirrors of one file, not different sources.
             mirrors.append({"name": f"Server {index}", "url": play})
 
-    subtitles = [
-        {
-            "label": str(entry.get("label") or "").strip()[:80],
-            "lang": str(entry.get("lang") or "").strip()[:24] or "eng",
-            "url": str(entry.get("url") or ""),
-        }
-        for entry in resolution.subtitles
-        if entry.get("url")
-    ]
+    subtitles = []
+    for entry in resolution.subtitles:
+        if not entry.get("url"):
+            continue
+        label = str(entry.get("label") or "").strip()[:80]
+        subtitles.append(
+            {
+                "label": label,
+                "lang": _subtitle_lang(entry.get("lang"), label),
+                "url": str(entry.get("url") or ""),
+            }
+        )
 
     if not sources:
         # Every stream the chain produced was rejected by the trailer guard, so

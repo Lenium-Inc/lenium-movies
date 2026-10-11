@@ -56,6 +56,28 @@ export const deriveHlsLevels = (
   return rungs.sort((a, b) => b.height - a.height);
 };
 
+/**
+ * The same ladder for a DASH manifest, off dash.js's representation list.
+ *
+ * `index` is the position in the list dash.js's own
+ * `setRepresentationForTypeByIndex` expects — a relative index, not the
+ * representation's absolute id — so it is captured here rather than looked up
+ * again at switch time.
+ */
+export const deriveDashLevels = (
+  representations: { height?: number }[] | null | undefined
+): { quality: string; height: number; index: number }[] => {
+  const seen = new Set<number>();
+  const rungs: { quality: string; height: number; index: number }[] = [];
+  (representations ?? []).forEach((representation, index) => {
+    const height = Number(representation?.height) || 0;
+    if (!height || seen.has(height)) return;
+    seen.add(height);
+    rungs.push({ quality: `${height}p`, height, index });
+  });
+  return rungs.sort((a, b) => b.height - a.height);
+};
+
 /** What one selectable rendition looks like to the menus. */
 export interface PlayerTrack {
   /** hls.js's index into its own list, not a position in ours. */
@@ -239,6 +261,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     { quality: string; height: number }[]
   >([]);
   const [hlsQuality, setHlsQuality] = useState<string>("Auto");
+  // DASH's own ladder. Most provider titles are DASH, so without this the
+  // quality menu simply never appeared for them — the hls.js ladder is empty
+  // and the resolver ships one "Auto" rung.
+  const [dashLevels, setDashLevels] = useState<
+    { quality: string; height: number; index: number }[]
+  >([]);
+  const [dashQuality, setDashQuality] = useState<string>("Auto");
   const [posterSettled, setPosterSettled] = useState<boolean>(false);
   // "Off" or a `srcLang` from `subtitleTracks`. Held as a language code rather
   // than a label so two tracks sharing a display name stay distinguishable.
@@ -463,12 +492,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (hlsLevels.length > 1) {
       return hlsLevels.map(l => l.quality);
     }
+    if (dashLevels.length > 1) {
+      return dashLevels.map(l => l.quality);
+    }
     return variants.map(v => v.quality).filter((q): q is string => Boolean(q));
-  }, [hlsLevels, variants]);
+  }, [hlsLevels, dashLevels, variants]);
 
-  // While the manifest ladder is in play the active rung is tracked separately,
+  // While a manifest ladder is in play the active rung is tracked separately,
   // because changing it is an in-player level switch rather than a source swap.
-  const activeQuality = hlsLevels.length > 1 ? hlsQuality : currentQuality;
+  const activeQuality =
+    hlsLevels.length > 1
+      ? hlsQuality
+      : dashLevels.length > 1
+        ? dashQuality
+        : currentQuality;
 
   const canChangeQuality = qualityOptions.length > 1;
 
@@ -602,6 +639,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     // the previous mirror never leaks into the next one.
     setHlsLevels([]);
     setHlsQuality("Auto");
+    setDashLevels([]);
+    setDashQuality("Auto");
     setPosterSettled(false);
 
     // If the source stalls (no progress for a while) it is treated as a dead
@@ -772,6 +811,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             // decodable frame, so the poster stays until `loadeddata`.
             attemptAutoplay();
             initAmbientCanvas();
+            // The representation list only exists once the stream is up, and
+            // a single-representation (VOD progressive-in-DASH) manifest is
+            // common — hence "length > 1" gating the menu rather than mere
+            // presence.
+            try {
+              const representations = (player.getRepresentationsByType?.(
+                "video"
+              ) ?? []) as { height?: number }[];
+              setDashLevels(deriveDashLevels(representations));
+            } catch {
+              setDashLevels([]);
+            }
           });
           player.on(MediaPlayer.events.ERROR, (e: { error?: { code?: string } }) => {
             // A fatal manifest/segment error is the same end state as a fatal
@@ -1139,6 +1190,29 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         return;
       }
 
+      // Same contract for a DASH ladder. A manual rung turns ABR off for
+      // video — otherwise dash.js's own heuristics overwrite the choice on the
+      // next bandwidth estimate — and "Auto" hands it back.
+      if (dashLevels.length > 1) {
+        const player = dashPlayerRef.current;
+        if (!player) return;
+        if (quality === "Auto") {
+          player.updateSettings({
+            streaming: { abr: { autoSwitchBitrate: { video: true } } },
+          });
+        } else {
+          const level = dashLevels.find(l => l.quality === quality);
+          if (!level) return;
+          player.updateSettings({
+            streaming: { abr: { autoSwitchBitrate: { video: false } } },
+          });
+          player.setRepresentationForTypeByIndex("video", level.index);
+        }
+        setDashQuality(quality);
+        setQualityMenuOpen(false);
+        return;
+      }
+
       if (quality === currentQuality) return;
       const variant = variants.find(v => v.quality === quality);
       if (!variant) return;
@@ -1148,7 +1222,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setQualityMenuOpen(false);
       onQualityChange?.(quality);
     },
-    [hlsLevels, currentQuality, variants, onQualityChange]
+    [hlsLevels, dashLevels, currentQuality, variants, onQualityChange]
   );
 
   const handleKeyDown = useCallback(

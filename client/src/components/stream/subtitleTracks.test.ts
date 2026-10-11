@@ -55,19 +55,18 @@ describe("sanitizeSubtitles", () => {
 });
 
 describe("subtitleTrackUrl", () => {
-  it("routes the track through the backend proxy", () => {
-    // A raw archive.org src is fetched with CORS by the <track> element and
-    // the archive sends no Access-Control-Allow-Origin, so it never loads.
-    const proxied = subtitleTrackUrl(RAW);
-    expect(proxied).toContain("/api/subtitles?url=");
-    expect(proxied).toContain(encodeURIComponent(RAW));
+  it("passes a backend relay handle through untouched", () => {
+    // The backend already mints every caption as `/api/proxy/subtitle?track=…`
+    // — same-origin, CORS-safe, SRT converted. Re-wrapping that handle in the
+    // retired `/api/subtitles?url=…` door turned every <track> into a 404.
+    const handle = "/api/proxy/subtitle?track=abc123";
+    expect(subtitleTrackUrl(handle)).toBe(handle);
   });
 
-  it("percent-encodes the url rather than splicing it in raw", () => {
-    const url = "https://archive.org/download/i/a b&c.vtt";
-    const proxied = subtitleTrackUrl(url);
-    expect(proxied).toContain(encodeURIComponent(url));
-    expect(proxied).not.toContain("a b&c");
+  it("passes a raw URL through unchanged as well", () => {
+    // There is no raw-URL proxy any more, so mangling the URL into a dead
+    // route cannot help; the browser applies the usual CORS rules either way.
+    expect(subtitleTrackUrl(RAW)).toBe(RAW);
   });
 });
 
@@ -81,7 +80,8 @@ describe("buildSubtitleTracks", () => {
     expect(tracks[0]).toMatchObject({
       label: "English",
       srcLang: "eng",
-      src: expect.stringContaining("/api/subtitles?url="),
+      // The src is the backend's own relay handle, passed through as-is.
+      src: RAW,
     });
     expect(tracks[1].srcLang).toBe("spa");
   });

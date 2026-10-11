@@ -61,4 +61,37 @@ describe("buildDownloadTiers", () => {
     expect(tiers).toHaveLength(1);
     expect(tiers[0]?.label).toBe("360p (Data Saver)");
   });
+
+  it("builds tiers from backend-minted download handles", () => {
+    // The resolver ships play URLs as opaque tokenised handles that can never
+    // pass a client-side container sniff; the per-stream `downloadUrl` is the
+    // only URL downloads actually work through.
+    const tiers = buildDownloadTiers([
+      {
+        ...variant("320p", 360, "x.mp4"),
+        url: "/api/v1/playback/media?token=aaa",
+        downloadUrl: "/api/v1/playback/download?token=dl-360",
+      },
+      {
+        ...variant("720p", 720, "x.mp4"),
+        url: "/api/v1/playback/media?token=bbb",
+        downloadUrl: "/api/v1/playback/download?token=dl-720",
+      },
+      {
+        // A playlist rendition with no download handle stays out.
+        ...variant("1080p", 1080, "x.mp4"),
+        url: "/api/proxy/manifest?token=ccc",
+        downloadUrl: null,
+      },
+    ]);
+
+    expect(tiers.map(tier => tier.label)).toEqual([
+      "360p (Data Saver)",
+      "720p (HD)",
+    ]);
+    expect(tiers.map(tier => tier.candidate.url)).toEqual([
+      "/api/v1/playback/download?token=dl-360",
+      "/api/v1/playback/download?token=dl-720",
+    ]);
+  });
 });

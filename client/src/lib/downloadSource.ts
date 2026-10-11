@@ -80,21 +80,30 @@ export interface DownloadSourceLike {
   title?: string;
   year?: number | string | null;
   stream_url?: string;
-  streams?: { url?: string | null }[] | null;
+  streams?:
+    | ({ url?: string | null; downloadUrl?: string | null } | null)[]
+    | null;
 }
 
 /**
  * Choose the best candidate from a resolved title.
  *
- * `streams` is preferred over `stream_url` because the resolver lists the
- * progressive renditions first and the primary URL is frequently the HLS
- * playlist -- taking the primary unconditionally would make downloads
- * unavailable for titles that do have a saveable file.
+ * A rendition's `downloadUrl` wins outright: the backend only mints that
+ * handle for a file it has already validated as saveable, and the play `url`
+ * beside it is an opaque tokenised playlist relay that classifies as
+ * "unsupported" by construction. Raw absolute URLs are the fallback path.
  */
 export function pickDownloadCandidate(movie: DownloadSourceLike | null | undefined): DownloadCandidate {
   if (!movie) return { kind: "unsupported", url: "" };
+  const streams = Array.isArray(movie.streams) ? movie.streams : [];
+  const minted = streams.find(
+    s => typeof s?.downloadUrl === "string" && s.downloadUrl.startsWith("/")
+  );
+  if (minted?.downloadUrl) {
+    return { kind: "progressive", url: minted.downloadUrl };
+  }
   const pool = [
-    ...(Array.isArray(movie.streams) ? movie.streams : []).map(s => s?.url),
+    ...streams.map(s => s?.url),
     movie.stream_url,
   ].filter((url): url is string => typeof url === "string" && url.length > 0);
   for (const kind of ["progressive", "hls", "embed"] as const) {

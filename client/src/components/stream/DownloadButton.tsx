@@ -47,18 +47,44 @@ function isArchiveFile(url: string): boolean {
   }
 }
 
+/**
+ * The saveable rungs for a resolved title.
+ *
+ * The live path is `variant.downloadUrl`: the resolver ships every rendition
+ * as an opaque same-origin play handle (`/api/v1/playback/media?token=…`),
+ * which is a playlist relay and useless as a download — but it also mints a
+ * separate `/api/v1/playback/download?token=…` handle whenever the rendition
+ * really is a single file, validated server-side. Trusting that handle skips
+ * the client-side container sniffing that could never classify a tokenised
+ * URL.
+ *
+ * The absolute-archive-URL path remains as a fallback for payloads that still
+ * carry raw Archive.org links.
+ */
 export function buildDownloadTiers(variants: StreamVariant[]): DownloadTier[] {
-  const directFiles = variants
-    .filter(variant => variant.url && isArchiveFile(variant.url))
-    .map(variant => ({
-      variant,
-      candidate: classifyDownloadUrl(variant.url),
-      height: heightOf(variant),
-    }))
-    .filter(
-      file => file.candidate.kind === "progressive" && file.height > 0
-    )
-    .sort((a, b) => a.height - b.height);
+  const directFiles: { height: number; candidate: DownloadCandidate }[] = [];
+  for (const variant of variants) {
+    const downloadUrl =
+      typeof variant.downloadUrl === "string" ? variant.downloadUrl.trim() : "";
+    if (downloadUrl) {
+      const height = heightOf(variant);
+      if (height <= 0) continue;
+      // The handle *is* the download URL, so it is carried as the candidate
+      // url; the render layer navigates to it directly.
+      directFiles.push({
+        height,
+        candidate: { kind: "progressive", url: downloadUrl },
+      });
+      continue;
+    }
+    if (!variant.url || !isArchiveFile(variant.url)) continue;
+    const candidate = classifyDownloadUrl(variant.url);
+    if (candidate.kind !== "progressive") continue;
+    const height = heightOf(variant);
+    if (height <= 0) continue;
+    directFiles.push({ height, candidate });
+  }
+  directFiles.sort((a, b) => a.height - b.height);
 
   const seenUrls = new Set<string>();
   const tiers: DownloadTier[] = [];
@@ -115,7 +141,11 @@ export function DownloadButton({
               { title, year },
               tier.candidate
             );
-            const href = proxiedDownloadUrl(tier.candidate.url, filename);
+            // A same-origin handle is the download route itself; a raw
+            // archive.org URL still needs the relay alias built around it.
+            const href = tier.candidate.url.startsWith("/")
+              ? tier.candidate.url
+              : proxiedDownloadUrl(tier.candidate.url, filename);
             return (
               <a
                 key={tier.label}

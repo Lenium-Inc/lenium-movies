@@ -15,6 +15,13 @@ export interface StreamVariant {
   width: number;
   height: number;
   size: number;
+  /**
+   * Tokenised same-origin handle the backend mints for this rendition when it
+   * is a real saveable file (`/api/v1/playback/download?token=…`). Absent for
+   * playlists and embeds. This is the only URL downloads work through: the
+   * play handle is a playlist relay and the raw archive URL is never shipped.
+   */
+  downloadUrl?: string | null;
 }
 
 export interface StreamSubtitle {
@@ -208,16 +215,19 @@ export function proxiedDownloadUrl(url: string, filename: string): string {
 }
 
 /**
- * Relay a subtitle file through the backend's `/api/subtitles` route.
+ * The URL a `<track>` element should load.
  *
- * A `<track src>` is fetched with CORS, and archive.org's download nodes send
- * neither `Access-Control-Allow-Origin` nor a WebVTT content type, so a raw
- * archive.org link is rejected before any cue loads. The proxy also converts
- * `.srt` upstreams, which a browser cannot render at all. Playing the returned
- * URL directly is therefore the only way subtitles appear on screen.
+ * The backend mints every caption as a same-origin relay handle
+ * (`/api/proxy/subtitle?track=…`) that already converts `.srt` upstreams to
+ * WebVTT and serves with CORS headers. That handle is playable as-is. It used
+ * to be re-wrapped in `/api/subtitles?url=…` — a pre-v1 raw-URL door the
+ * backend deliberately removed — so every `<track>` fetched a 404 and no cue
+ * ever rendered. Handles are passed through untouched now; a rare absolute URL
+ * is also handed over unchanged, because no raw-URL proxy exists any more and
+ * mangling it into a dead route cannot help.
  */
 export function subtitleTrackUrl(url: string): string {
-  return `${MOVIE_API_BASE_URL}/api/subtitles?url=${encodeURIComponent(url)}`;
+  return url;
 }
 
 /**
@@ -481,6 +491,11 @@ function normalizeResolvedMovie(value: unknown): StreamMovie | null {
                 width: typeof record.width === "number" ? record.width : 0,
                 height,
                 size: typeof record.size === "number" ? record.size : 0,
+                downloadUrl:
+                  typeof record.download_url === "string" &&
+                  record.download_url.trim()
+                    ? record.download_url.trim()
+                    : null,
               };
             })
             .filter((entry): entry is StreamVariant => entry !== null),

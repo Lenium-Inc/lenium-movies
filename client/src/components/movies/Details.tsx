@@ -340,9 +340,13 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
 
       const filename = buildDownloadFilename(source, candidate);
       // An anchor with a same-origin href lets the browser act on the
-      // `Content-Disposition: attachment` the backend returns.
+      // `Content-Disposition: attachment` the backend returns. A minted
+      // download handle *is* the route; a raw archive.org URL still needs
+      // the relay alias built around it.
       const anchor = document.createElement("a");
-      anchor.href = proxiedDownloadUrl(candidate.url, filename);
+      anchor.href = candidate.url.startsWith("/")
+        ? candidate.url
+        : proxiedDownloadUrl(candidate.url, filename);
       anchor.rel = "noopener";
       anchor.download = filename;
       document.body.appendChild(anchor);

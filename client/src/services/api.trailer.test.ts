@@ -130,6 +130,8 @@ describe("resolveStream stream preservation", () => {
       width: 1920,
       height: 1080,
       size: 123456,
+      // Carried through so the download button can find the minted handle.
+      downloadUrl: null,
     });
   });
 
