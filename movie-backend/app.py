@@ -1364,16 +1364,187 @@ def playback_init():
 def resolve_movie():
     """Compatibility alias for /api/v1/playback/init.
 
-    The web client still calls this path from three places -- the stream
-    resolver (`api.ts resolveStream`), the Watch page's metadata fetch, and
-    the details sheet's warm resolve -- with the pre-v1 field names
-    (`id`/`title`/`year`/`season`/`episode`), which `_init_inputs` already
-    accepts as aliases. The v1 response is a strict superset of the old
-    contract (`movie` + `exact` + `language` are all present), so the same
-    handler answers both paths and nothing on the client needs to change to
-    stop the 404 this route's removal caused on every cold open.
+    The web client still calls this path from two places -- the stream
+    resolver (`api.ts resolveStream`) and the details sheet's warm resolve --
+    with the pre-v1 field names (`id`/`title`/`year`/`season`/`episode`),
+    which `_init_inputs` already accepts as aliases. The v1 response is a
+    strict superset of the old contract (`movie` + `exact` + `language` are
+    all present), so the same handler answers both paths and nothing on the
+    client needs to change to stop the 404 this route's removal caused on
+    every cold open. Metadata-only callers (the watch page, the sheet's
+    enrichment) belong on `/api/movies/meta` below, which never walks a
+    provider chain.
     """
     return playback_init()
+
+
+# A sheet open asks for two things a browser render has no business answering:
+# the rest of the record, and a shelf of neighbours. One TMDB details call
+# already appends `recommendations`, so both ride back together. Cached for the
+# life of the worker like the season shelf: an hour of staleness on a synopsis
+# is invisible, while a cold details call on every sheet open is not.
+_meta_cache: TTLCache = TTLCache(maxsize=CACHE_MAX_SIZE, ttl=CACHE_TTL_SECONDS)
+#: `TTLCache` is not internally synchronised; see `_season_cache_lock`.
+_meta_cache_lock = threading.Lock()
+
+
+def _similar_wall(details: dict, media_type: str) -> list[dict]:
+    """Compact records for the sheet's More Like This shelf.
+
+    `fetch_media_details` appends `recommendations`, so the common case costs
+    no extra request. An empty list falls back to `/similar`, which answers
+    for the long tail of titles TMDB has recommendations for only on one side
+    -- either neighbour list is a better wall than none. Capped well below
+    what TMDB returns: the shelf scrolls, it does not paginate.
+    """
+    results = (details.get("recommendations") or {}).get("results") or []
+    if not results:
+        fallback = _tmdb_get(
+            f"/{media_type}/{details.get('id')}/similar", {}
+        ) or {}
+        results = fallback.get("results") or []
+    wall: list[dict] = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        raw_id = item.get("id")
+        title = item.get("title") or item.get("name")
+        if raw_id is None or not title:
+            continue
+        # Poster or nothing: a neighbour the viewer cannot recognise in the
+        # wall does not earn a slot, and TMDB's results carry a null path for
+        # exactly the titles least likely to mean anything to them.
+        if not item.get("poster_path"):
+            continue
+        date = item.get("release_date") or item.get("first_air_date") or ""
+        wall.append(
+            {
+                "id": str(raw_id),
+                "title": title,
+                "year": int(date[:4]) if date[:4].isdigit() else None,
+                "poster_path": item.get("poster_path"),
+                "backdrop_path": item.get("backdrop_path"),
+                "vote_average": item.get("vote_average"),
+                "media_type": media_type,
+                "overview": item.get("overview") or "",
+            }
+        )
+        if len(wall) >= 18:
+            break
+    return wall
+
+
+@app.route("/api/movies/meta", methods=["GET", "POST", "OPTIONS"])
+def movie_meta():
+    """Full metadata plus a similar-titles wall, without resolving anything.
+
+    This is the cheap sibling of `/api/movies/resolve`: the same movie record
+    that resolution would build, minus every stream field, joined by the
+    shelf of neighbours the details window shows underneath it. Answered from
+    `tmdb.fetch_media_details` (one TMDB call, recommendations appended) so
+    the sheet can open and enrich itself in milliseconds instead of queueing
+    behind a headless-browser render that exists only to decide what to play.
+
+    404 `TITLE_NOT_FOUND` mirrors the resolve route's identity rule: TMDB may
+    redirect a merged id to a different record, and that record is not the
+    title the request named.
+    """
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    if request.method == "POST":
+        body = request.get_json(silent=True) or {}
+        raw_id = body.get("id")
+        media_type = body.get("media_type") or "movie"
+    else:
+        raw_id = request.args.get("id")
+        media_type = request.args.get("media_type") or "movie"
+
+    if raw_id is None or str(raw_id) == "":
+        return _json_error("Missing id", 400)
+    try:
+        tmdb_id = int(raw_id)
+    except (ValueError, TypeError):
+        return _json_error("Invalid id", 400)
+    if media_type not in ("movie", "tv"):
+        media_type = "movie"
+
+    cache_key = f"{media_type}:{tmdb_id}"
+    with _meta_cache_lock:
+        cached = _meta_cache.get(cache_key)
+    if cached is not None:
+        return jsonify(cached)
+
+    details = tmdb.fetch_media_details(tmdb_id, media_type)
+    if not details or str(details.get("id")) != str(tmdb_id):
+        return _json_error("Could not find metadata for that title", 404,
+                           code="TITLE_NOT_FOUND")
+
+    runtime = details.get("runtime")
+    if runtime is not None:
+        try:
+            runtime = int(runtime)
+        except (ValueError, TypeError):
+            runtime = None
+
+    year = details.get("release_year") or (
+        (details.get("release_date") or "")[:4]
+    )
+    is_tv = media_type == "tv"
+
+    # The cast row on the title page: people, not names -- the id is what a
+    # person's link is built from, and the photo is what makes a row of them
+    # read as a cast rather than a list. Capped where the flattened `cast`
+    # list is capped, so the two never disagree about the billing.
+    cast_members: list[dict] = []
+    for person in (details.get("credits") or {}).get("cast") or []:
+        if not isinstance(person, dict) or not person.get("name"):
+            continue
+        if person.get("id") is None:
+            continue
+        cast_members.append(
+            {
+                "id": str(person["id"]),
+                "name": str(person["name"]),
+                "character": str(person.get("character") or ""),
+                "profile_path": person.get("profile_path"),
+            }
+        )
+        if len(cast_members) >= 10:
+            break
+
+    movie = {
+        "id": str(tmdb_id),
+        "title": details.get("title") or "",
+        "year": str(year) if year else "",
+        "media_type": media_type,
+        "seasons": details.get("number_of_seasons", 1) if is_tv else 1,
+        "episodes_per_season": (
+            details.get("number_of_episodes") or None if is_tv else None
+        ),
+        "poster_url": details.get("poster_url", ""),
+        "backdrop_url": details.get("backdrop_url", ""),
+        "overview": details.get("overview", ""),
+        "vote_average": details.get("vote_average"),
+        "popularity": details.get("popularity"),
+        "genres": details.get("genres", []),
+        "runtime": runtime,
+        "director": details.get("director"),
+        "cast": details.get("cast", []),
+        "cast_members": cast_members,
+        "country": details.get("country"),
+        "language": details.get("language"),
+        "release_date": details.get("release_date")
+        or details.get("first_air_date"),
+    }
+    payload = {
+        "success": True,
+        "movie": movie,
+        "similar": _similar_wall(details, media_type),
+    }
+    with _meta_cache_lock:
+        _meta_cache[cache_key] = payload
+    return jsonify(payload)
 
 
 def _token_of(play_url: str) -> str | None:

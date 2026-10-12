@@ -143,6 +143,19 @@ def fetch_media_details(media_id: int, media_type: str = "movie") -> Optional[Di
         "language": language,
     }
 
+    # Kept verbatim: the details window renders a "More Like This" shelf from
+    # this nested payload, and unlike every other key here it is already the
+    # shape a shelf consumes. Dropping it -- which this function used to do --
+    # costs the caller a second TMDB round trip to recover what the one call
+    # that produced this dict had already fetched.
+    result["recommendations"] = data.get("recommendations") or {}
+
+    # Kept for the same reason: the title page draws its cast row from the
+    # people objects (id, character, profile photo), which the flattened
+    # `cast` name list above cannot carry. Appended to the same details call,
+    # so the row costs no extra round trip.
+    result["credits"] = data.get("credits") or {}
+
     # For TV shows, fetch season/episode counts
     if media_type == "tv":
         result["number_of_seasons"] = data.get("number_of_seasons", 1)
