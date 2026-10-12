@@ -31,7 +31,6 @@ import { StreamLoader, type StreamLoadStage } from "@/components/stream/StreamLo
 import { formatRuntime } from "@/lib/format";
 import { titleUnavailable } from "@/lib/playbackCopy";
 import { WatchTVControls, type SeasonInfo } from "@/components/stream/WatchTVControls";
-import { cancelInFlightPrefetch, prefetchForOpen } from "@/services/prefetch";
 import { useLocalSession } from "@/context/LocalSessionContext";
 import { getProgress, progressForTitle, recordWatch, subscribeStats } from "@/services/stats";
 import type {
@@ -40,6 +39,7 @@ import type {
   StreamVariant as StreamVariantType,
 } from "@/components/movies/types";
 import type { StreamEpisode } from "@/services/api";
+import { fetchSeasonDetails } from "@/services/api";
 import { buildWatchPath, resolveMediaType } from "@/lib/watchRoute";
 import { progressKey } from "@/lib/progressKey";
 import { absoluteUrl } from "@/lib/siteUrl";
@@ -48,6 +48,7 @@ import { useTasteRecorder } from "@/hooks/useTaste";
 import { DEFAULT_PREFERRED_LANGUAGE, useAppSettings } from "@/contexts/AppSettingsContext";
 import { ReleaseCountdown } from "@/components/watch/ReleaseCountdown";
 import { resolveTrailer, trailerThumbnail } from "@/lib/tmdbTrailers";
+import { TrailerBrandingMask } from "@/components/stream/TrailerBrandingMask";
 import { formatReleaseDate, isUpcoming } from "@/services/notifications";
 import { isEmbedSourceUrl, orderDirectStreams } from "@/lib/streamUtils";
 import { tmdbImage, type TmdbImageSize } from "@/lib/tmdbImages";
@@ -496,7 +497,6 @@ export function WatchPage() {
         }
 
         setResolved({ stream: playable, exact: true });
-        prefetchForOpen(playable);
 
         navigate(
           buildWatchPath(movie.providerId, {
@@ -578,7 +578,6 @@ export function WatchPage() {
   }, [navigate]);
 
   const handleClose = () => {
-    cancelInFlightPrefetch();
     navigate("/");
   };
 
@@ -901,6 +900,72 @@ export function WatchPage() {
     }));
   }, [resolved, season, tvSeasons]);
 
+  // Real episode metadata (title, still, runtime, rating) for the active
+  // season, fetched one season at a time as it changes. The stream manifest
+  // carries only the episode numbers it can serve — everything else the
+  // episode list shows comes from this merge. Cached by fetchSeasonDetails,
+  // so revisiting a season costs nothing.
+  const [seasonEpisodeDetails, setSeasonEpisodeDetails] = useState<
+    Map<string, StreamEpisode>
+  >(new Map());
+
+  useEffect(() => {
+    if (movie?.mediaType !== "tv") return;
+    if (!/^\d+$/.test(String(tmdbId))) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const payload = await fetchSeasonDetails(String(tmdbId), season);
+        if (cancelled || !payload?.episodes?.length) return;
+        setSeasonEpisodeDetails(previous => {
+          const next = new Map(previous);
+          for (const ep of payload.episodes) {
+            if (ep.number == null) continue;
+            next.set(`${ep.season}-${ep.number}`, {
+              season: ep.season,
+              number: ep.number,
+              title: ep.title,
+              overview: ep.overview || undefined,
+              still_path: ep.still_path || undefined,
+              still_url: ep.still_url || undefined,
+              air_date: ep.air_date || undefined,
+              runtime: ep.runtime ?? undefined,
+              vote_average: ep.vote_average ?? undefined,
+            });
+          }
+          return next;
+        });
+      } catch {
+        // Season metadata is decoration: the list still renders and plays
+        // from the synthesized fallback without it.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [movie?.mediaType, tmdbId, season]);
+
+  // TMDB data wins over the manifest where both exist; the manifest wins
+  // where TMDB has nothing (a null still, a missing runtime), so the merge
+  // can only add detail, never blank out what the manifest knew.
+  const displaySeasonEpisodes = useMemo<StreamEpisode[]>(
+    () =>
+      currentSeasonEpisodes.map(ep => {
+        const detail = seasonEpisodeDetails.get(`${ep.season}-${ep.number}`);
+        if (!detail) return ep;
+        return {
+          ...ep,
+          title: detail.title || ep.title,
+          overview: detail.overview ?? ep.overview,
+          still_path: detail.still_path ?? ep.still_path,
+          still_url: detail.still_url ?? ep.still_url,
+          runtime: detail.runtime ?? ep.runtime,
+          vote_average: detail.vote_average ?? ep.vote_average,
+        };
+      }),
+    [currentSeasonEpisodes, seasonEpisodeDetails]
+  );
+
   const handleSelectEpisode = useCallback(
     (nextSeason: number, nextEpisode: number) => {
       setSeason(nextSeason);
@@ -1167,6 +1232,7 @@ export function WatchPage() {
                           trailerFrameLoaded ? "opacity-100" : "opacity-0"
                         }`}
                       />
+                      <TrailerBrandingMask />
                     </>
                   ) : resolved ? (
                     <>
@@ -1346,7 +1412,7 @@ export function WatchPage() {
                     currentSeason={season}
                     currentEpisode={episode}
                     seasons={tvSeasons}
-                    episodes={currentSeasonEpisodes}
+                    episodes={displaySeasonEpisodes}
                     onSelectEpisode={handleSelectEpisode}
                   />
                 ) : activeTab === "trailers" ? (

@@ -20,8 +20,10 @@ import {
   SkipBack,
   SkipForward,
 } from "lucide-react";
-import Hls from "hls.js";
 import { formatPlayerTime } from "@/lib/format";
+// Type-only: the runtime value is loaded via dynamic import() in the stream
+// effect so hls.js stays out of the entry chunk; this import is erased.
+import type Hls from "hls.js";
 import { baseLanguage, sameLanguage } from "@/lib/language";
 import { subtitleTrackUrl, type StreamSubtitle } from "@/services/api";
 
@@ -555,6 +557,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     const drawFrame = () => {
       const video = videoRef.current;
+
+      // Paused with a painted frame: the last drawn image stays on the
+      // bitmap. Skip getBoundingClientRect (layout) and the canvas resize
+      // (which reallocates the backing store) — both are pure waste at 60fps
+      // when nothing is moving. The loop stays scheduled so play() resumes
+      // without a re-init hitch.
+      if (video?.paused && video.videoWidth > 0) {
+        animationFrameRef.current = requestAnimationFrame(drawFrame);
+        return;
+      }
+
       const playerRect = playerRef.current?.getBoundingClientRect();
       if (!playerRect) {
         animationFrameRef.current = requestAnimationFrame(drawFrame);
@@ -634,6 +647,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     // component unmounted) while the library is still in flight. The flag stops
     // that late arrival from attaching to a video element that has moved on.
     let dashCancelled = false;
+    // Same reason as DASH: hls.js is ~600 KB, imported dynamically so it never
+    // sits in the entry chunk — a viewer who opens /terms should not download it.
+    let hlsCancelled = false;
     setIsLoading(true);
     // Ladder and poster are per-source; drop stale values so a manifest from
     // the previous mirror never leaks into the next one.
@@ -664,7 +680,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
 
     const cleanup = () => {
+      hlsCancelled = true;
       hls?.destroy();
+      hlsRef.current = null;
       // A DASH player may still be importing. Flipping the flag first stops
       // that arrival from attaching to a video element that has moved on.
       dashCancelled = true;
@@ -734,71 +752,92 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     video.addEventListener("loadeddata", handleLoadedData);
 
     if (streamType === "hls") {
-      if (Hls.isSupported()) {
-        hls = new Hls({
-          enableWorker: true,
-          lowLatencyMode: false,
-        });
+      // Imported lazily, not at module scope: hls.js is the largest library in
+      // the bundle and a viewer on /login should never download it. The
+      // cancellation flag mirrors the DASH path above — a source swap or
+      // unmount while the import is in flight must not attach to a video
+      // element that has moved on.
+      import("hls.js")
+        .then(({ default: Hls }) => {
+          if (hlsCancelled) return;
 
-        hls.loadSource(streamUrl);
-        hls.attachMedia(video);
+          if (Hls.isSupported()) {
+            hls = new Hls({
+              enableWorker: true,
+              lowLatencyMode: false,
+            });
+            // The instance exists only after this async import resolves, so
+            // the ref is assigned here — not at the synchronous line below,
+            // where `hls` is still null.
+            hlsRef.current = hls;
 
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          setHlsLevels(deriveHlsLevels(hls));
-          // No `setPosterSettled` here: a parsed manifest is not a decodable
-          // frame. Fading the poster this early uncovered black video while
-          // the opening segments were still in flight.
-          attemptAutoplay();
-          initAmbientCanvas();
-        });
+            hls.loadSource(streamUrl);
+            hls.attachMedia(video);
 
-        // Renditions are parsed *after* the manifest event, and an alternate
-        // audio or text track can be discovered when a level playlist loads
-        // rather than up front. Reading them on their own update event rather
-        // than once after the manifest is what stops a track that arrives late
-        // from being missing from the menu for the rest of the session.
-        //
-        // Each update also mirrors hls.js's own current selection back into
-        // component state, so the highlighted row is what the instance is
-        // actually doing -- including the default the library picks on its own,
-        // which the viewer never chose and must not be shown as chosen.
-        hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => {
-          setHlsAudioTracks(deriveHlsAudioTracks(hls));
-          setCurrentAudio(hls.audioTrack);
-        });
-        hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, () => {
-          setHlsSubtitleTracks(deriveHlsSubtitleTracks(hls));
-          setCurrentHlsSubtitle(hls.subtitleTrack);
-        });
+            hls.on(Hls.Events.MANIFEST_PARSED, () => {
+              if (hlsCancelled) return;
+              setHlsLevels(deriveHlsLevels(hls));
+              // No `setPosterSettled` here: a parsed manifest is not a decodable
+              // frame. Fading the poster this early uncovered black video while
+              // the opening segments were still in flight.
+              attemptAutoplay();
+              initAmbientCanvas();
+            });
 
-        // ABR moves the rung on its own when it is in charge, so the label is
-        // mirrored from the level the instance actually switched to -- not from
-        // the last row the viewer clicked. Otherwise a weak-network downswitch
-        // would keep showing the taller rung the player just abandoned, which
-        // is exactly the moment the viewer most needs an honest number.
-        hls.on(
-          Hls.Events.LEVEL_SWITCHED,
-          (_event: unknown, data: { level?: number }) => {
-            const level = hls.levels?.[data?.level ?? -1];
-            const height = Number(level?.height) || 0;
-            setHlsQuality(height > 0 ? `${height}p` : "Auto");
+            // Renditions are parsed *after* the manifest event, and an alternate
+            // audio or text track can be discovered when a level playlist loads
+            // rather than up front. Reading them on their own update event rather
+            // than once after the manifest is what stops a track that arrives late
+            // from being missing from the menu for the rest of the session.
+            //
+            // Each update also mirrors hls.js's own current selection back into
+            // component state, so the highlighted row is what the instance is
+            // actually doing -- including the default the library picks on its own,
+            // which the viewer never chose and must not be shown as chosen.
+            hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => {
+              if (hlsCancelled) return;
+              setHlsAudioTracks(deriveHlsAudioTracks(hls));
+              setCurrentAudio(hls.audioTrack);
+            });
+            hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, () => {
+              if (hlsCancelled) return;
+              setHlsSubtitleTracks(deriveHlsSubtitleTracks(hls));
+              setCurrentHlsSubtitle(hls.subtitleTrack);
+            });
+
+            // ABR moves the rung on its own when it is in charge, so the label is
+            // mirrored from the level the instance actually switched to -- not from
+            // the last row the viewer clicked. Otherwise a weak-network downswitch
+            // would keep showing the taller rung the player just abandoned, which
+            // is exactly the moment the viewer most needs an honest number.
+            hls.on(
+              Hls.Events.LEVEL_SWITCHED,
+              (_event: unknown, data: { level?: number }) => {
+                if (hlsCancelled) return;
+                const level = hls.levels?.[data?.level ?? -1];
+                const height = Number(level?.height) || 0;
+                setHlsQuality(height > 0 ? `${height}p` : "Auto");
+              }
+            );
+
+            hls.on(
+              Hls.Events.ERROR,
+              (_event: unknown, data: { fatal?: boolean }) => {
+                if (data.fatal) {
+                  hls?.destroy();
+                  onSourceError?.();
+                }
+              }
+            );
+          } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+            video.src = streamUrl;
+          } else {
+            onSourceError?.();
           }
-        );
-
-        hls.on(
-          Hls.Events.ERROR,
-          (_event: unknown, data: { fatal?: boolean }) => {
-            if (data.fatal) {
-              hls?.destroy();
-              onSourceError?.();
-            }
-          }
-        );
-      } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-        video.src = streamUrl;
-      } else {
-        onSourceError?.();
-      }
+        })
+        .catch(() => {
+          if (!hlsCancelled) onSourceError?.();
+        });
     } else if (streamType === "dash") {
       // No browser plays an `.mpd` natively, so a DASH source has to go
       // through dash.js -- the same role hls.js plays for `.m3u8`. Without it
@@ -875,7 +914,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       video.src = streamUrl;
     }
 
-    hlsRef.current = hls;
+    // `hlsRef.current` is assigned inside the dynamic import's `.then()`
+    // above — it cannot be set synchronously here because the instance does
+    // not exist until hls.js has finished loading.
 
     return () => {
       cleanup();
@@ -905,9 +946,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const video = videoRef.current;
     if (!video) return;
 
+    // `timeupdate` fires ~4x/s. Each `setProgress` re-renders the entire
+    // player tree, so only push when the bar has actually moved a visible
+    // amount (~0.5%) — on a 2h film that's one render per half-percent of
+    // progress, not four per second.
+    let lastPct = -1;
+
     const handleTimeUpdate = () => {
-      if (!isNaN(video.duration)) {
-        setProgress((video.currentTime / video.duration) * 100);
+      if (!isNaN(video.duration) && video.duration > 0) {
+        const pct = Math.round(((video.currentTime / video.duration) * 100) * 2) / 2;
+        if (pct !== lastPct) {
+          lastPct = pct;
+          setProgress(pct);
+        }
       }
       if (!onProgress || isNaN(video.duration) || video.duration <= 0) return;
       const seconds = Math.floor(video.currentTime);
@@ -1231,7 +1282,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           player.updateSettings({
             streaming: { abr: { autoSwitchBitrate: { video: false } } },
           });
-          player.setRepresentationForTypeByIndex("video", level.index);
+          // `forceReplace: true` matters: without it dash.js queues the manual
+          // switch and only applies it on a natural segment boundary, which
+          // never visibly happens mid-buffer — the rung the user clicked just
+          // appears not to stick. Forcing a replace swaps the buffer now.
+          player.setRepresentationForTypeByIndex("video", level.index, true);
         }
         setDashQuality(quality);
         setQualityMenuOpen(false);
@@ -1332,15 +1387,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         once per candidate on the way to the source that works -- and its retry
         would restart a chain that had just been proven to need a different
         candidate, not a second attempt at the same one.
+
+        Spinner only — no text, no backdrop-blur panel. A labelled box over
+        live video reads as "stuck"; a ring over the poster reads as "moment".
       */}
       {effectiveIsLoading && !autoCycling && (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
-          <div className="pointer-events-none flex flex-col items-center gap-4 rounded-2xl bg-black/45 px-8 py-6 text-center backdrop-blur-md">
-            <div className="h-10 w-10 animate-spin rounded-full border-[3px] border-white/20 border-t-white" />
-            <p className="text-sm font-medium tracking-wider text-white/90">
-              Buffering video...
-            </p>
-          </div>
+          <div className="h-10 w-10 animate-spin rounded-full border-[3px] border-white/20 border-t-white" />
         </div>
       )}
 
@@ -1532,30 +1585,32 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       ))}
                     </div>
                   </div>
-                  {subtitleOptions.length > 1 && (
-                    <div className="px-4 py-2">
-                      <p className="text-xs font-semibold text-white/60 uppercase tracking-wider mb-2">
-                        Subtitles
-                      </p>
-                      <div className="space-y-1 max-h-48 overflow-y-auto">
-                        {subtitleOptions.map(option => (
-                          <button
-                            key={option.key}
-                            onClick={e => {
-                              e.stopPropagation();
-                              option.onPick();
-                              setSubtitleMenuOpen(false);
-                            }}
-                            className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors ${
-                              option.active ? "text-violet-500 font-bold" : "text-white"
-                            }`}
-                          >
-                            {option.label}
-                          </button>
-                        ))}
-                      </div>
+                  {/* Always shown, even when the only option is "Off": a
+                      hidden menu reads as "this player has no subtitles",
+                      which is wrong the moment a title carries one language —
+                      and the viewer has no way to discover it. */}
+                  <div className="px-4 py-2">
+                    <p className="text-xs font-semibold text-white/60 uppercase tracking-wider mb-2">
+                      Subtitles
+                    </p>
+                    <div className="space-y-1 max-h-48 overflow-y-auto">
+                      {subtitleOptions.map(option => (
+                        <button
+                          key={option.key}
+                          onClick={e => {
+                            e.stopPropagation();
+                            option.onPick();
+                            setSubtitleMenuOpen(false);
+                          }}
+                          className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors ${
+                            option.active ? "text-violet-500 font-bold" : "text-white"
+                          }`}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
                     </div>
-                  )}
+                  </div>
                 </div>
               )}
             </div>

@@ -1,4 +1,5 @@
 import "dotenv/config";
+import compression from "compression";
 import express from "express";
 import { createServer } from "http";
 import net from "net";
@@ -375,6 +376,21 @@ async function startServer() {
 
   // Must be set before any middleware reads req.ip. See TRUST_PROXY_HOPS.
   app.set("trust proxy", Number.isFinite(TRUST_PROXY_HOPS) ? TRUST_PROXY_HOPS : 1);
+
+  // Brotli/gzip the response body when the client accepts it. The entry
+  // chunk is ~650 KB raw; compression brings it to ~195 KB, and the lazy
+  // hls.js/dash.js chunks further, which is the single biggest transfer win
+  // available. `compression` handles the edge cases a hand-rolled version
+  // gets wrong: responses already encoded upstream (the Flask proxy), bodyless
+  // status codes, HEAD requests, and Content-Length removal at the right time.
+  app.use(compression());
+
+  // Hashed assets under /assets are content-addressed: they can be cached
+  // forever. The HTML shell must not be, or a deploy never reaches viewers.
+  app.use("/assets", (_req, res, next) => {
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    next();
+  });
 
   app.use((_req, res, next) => {
     res.removeHeader("X-Powered-By");

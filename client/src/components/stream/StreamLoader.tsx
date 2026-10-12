@@ -15,31 +15,13 @@ export type StreamLoadStage =
   | "playing";
 
 /**
- * One line, in the viewer's terms, for each stage the overlay can be seen in.
- *
- * Both lines describe waiting rather than naming what is happening underneath.
- * The client really is walking a provider chain and really is choosing between
- * candidates, but neither fact is something a viewer can act on, and the
- * previous stage labels ("Optimizing high-definition stream...", "Finding the
- * best stream...") named an activity the pipeline did not reliably perform --
- * which is worse than saying nothing, because it sets an expectation the wait
- * does not honour.
- */
-const STAGE_COPY: Record<
-  Exclude<StreamLoadStage, "idle" | "playing">,
-  string
-> = {
-  resolving_backend: "Loading stream…",
-  testing_candidate: "Loading stream…",
-};
-
-/**
  * Full-bleed loader for the watch page, and the single overlay every wait goes
  * through.
  *
  * The poster stays visible behind it, blurred: the surface is alive and the
  * title is recognisable, so a long resolve reads as "loading" rather than
- * "broken".
+ * "broken". There is no caption — the spinner alone says everything a viewer
+ * can act on, and stage labels made the wait feel longer than it was.
  *
  * There is exactly one of these per title. Resolution, candidate failover and
  * mid-playback buffering all render it, so moving between them does not swap the
@@ -49,7 +31,7 @@ const STAGE_COPY: Record<
 export interface StreamLoaderProps {
   poster?: string;
   title?: string;
-  /** Which wait this is. Drives the caption; see `STAGE_COPY`. */
+  /** Which wait this is. Kept for callers; no longer drives visible copy. */
   stage?: StreamLoadStage;
   className?: string;
 }
@@ -88,12 +70,8 @@ function Spinner() {
 export function StreamLoader({
   poster,
   title,
-  stage = "resolving_backend",
   className,
 }: StreamLoaderProps) {
-  const caption =
-    stage === "idle" || stage === "playing" ? null : STAGE_COPY[stage];
-
   return (
     <div
       className={cn(
@@ -117,14 +95,8 @@ export function StreamLoader({
       >
         <Spinner />
 
-        {caption ? (
-          <p className="animate-in fade-in slide-in-from-bottom-2 text-sm font-medium tracking-wide text-white/80 duration-500">
-            {caption}
-          </p>
-        ) : null}
-
         {/* Announced to screen readers, invisible on screen. */}
-        <span className="sr-only">{caption ?? "Loading stream…"}</span>
+        <span className="sr-only">Loading stream…</span>
       </div>
     </div>
   );

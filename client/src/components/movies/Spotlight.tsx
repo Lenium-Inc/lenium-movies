@@ -16,6 +16,7 @@ import { formatRuntime } from "@/lib/format";
 import { tmdbImage } from "@/lib/tmdbImages";
 import { absoluteUrl } from "@/lib/siteUrl";
 import { resolveTrailer } from "@/lib/tmdbTrailers";
+import { TrailerBrandingMask } from "@/components/stream/TrailerBrandingMask";
 import { useTrailerPlayback } from "@/hooks/useTrailerPlayback";
 import { fetchTrailerByTmdbId, type TrailerInfo } from "@/services/api";
 import { isUpcoming, releaseCountdownLabel } from "@/services/notifications";
@@ -376,6 +377,7 @@ export function Spotlight({
               referrerPolicy="strict-origin-when-cross-origin"
               className="pointer-events-none absolute left-1/2 top-1/2 h-full w-full max-w-none -translate-x-1/2 -translate-y-1/2 scale-125 border-0"
             />
+            <TrailerBrandingMask />
           </div>
         ) : null}
 

@@ -402,9 +402,14 @@ describe("static SEO files agree with the module", () => {
      * an og:image all pointing at production -- telling a search engine that the
      * preview *is* the live site. If someone reintroduces a literal host, this
      * fails.
+     *
+     * The allowlist is third-party infrastructure the page is *supposed* to
+     * name: TMDB's image CDN, GitHub (structured data), schema.org, and the
+     * Google Fonts hosts (the stylesheet link moved here from a CSS @import so
+     * it would stop blocking the first paint).
      */
     expect(indexHtml).not.toMatch(
-      /https?:\/\/(?!www\.themoviedb|github|schema\.org|www\.googleapis)[a-z0-9.-]+\//i
+      /https?:\/\/(?!www\.themoviedb|image\.tmdb\.org|github|schema\.org|www\.googleapis|fonts\.googleapis|fonts\.gstatic)[a-z0-9.-]+\//i
     );
   });
 

@@ -34,9 +34,9 @@ import {
 } from "@/lib/downloadSource";
 import { EpisodeMatrix } from "@/components/movies/EpisodeMatrix";
 import { useEmbedFailure } from "@/hooks/useEmbedFailure";
-import { cancelInFlightPrefetch, prefetchForOpen } from "@/services/prefetch";
 import { tmdbImage, type TmdbImageSize } from "@/lib/tmdbImages";
 import { resolveTrailer } from "@/lib/tmdbTrailers";
+import { TrailerBrandingMask } from "@/components/stream/TrailerBrandingMask";
 import {
   getProgress,
   progressForTitle,
@@ -232,7 +232,6 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
       }
 
       setResolved({ stream: playable, exact: true });
-      prefetchForOpen(playable);
       navigate(
         buildWatchPath(movie.providerId, {
           mediaType: movie.mediaType,
@@ -390,7 +389,6 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
         });
         if (disposed) return;
         setResolved(stream);
-        prefetchForOpen(stream.stream);
       } catch (error) {
         console.warn(
           `[Details] warm resolve skipped for "${movie.title}"`,
@@ -501,6 +499,7 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
                 referrerPolicy="strict-origin-when-cross-origin"
                 title={`${movie.title} — ${trailerSrc.label}`}
               />
+              <TrailerBrandingMask />
             </>
           ) : null}
           <button
@@ -562,7 +561,7 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
               ) : (
                 <Play className="h-5 w-5 fill-current" />
               )}
-              {resolving ? "Loading stream…" : "Play"}
+              Play
             </button>
             <button
               onClick={() => {

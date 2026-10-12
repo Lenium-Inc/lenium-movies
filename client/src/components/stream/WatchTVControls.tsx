@@ -24,6 +24,12 @@ interface WatchTVControlsProps {
  * page owns URL state and stream resolution. Season 0 is TMDB's convention for
  * specials and is kept out of the selector because it is rarely what someone
  * opens a show to watch.
+ *
+ * The panel lives in a 340px sidebar, so the list is a single column: the old
+ * `sm:grid-cols-2 lg:grid-cols-3` query keyed off the *viewport*, not the
+ * container, and squeezed a 3-up grid into 340px until every title truncated
+ * to two letters. The season selector reuses the sibling tab styling so it
+ * reads as one navigation surface with the tabs above it.
  */
 export function WatchTVControls({
   currentSeason,
@@ -57,76 +63,75 @@ export function WatchTVControls({
   return (
     <section
       aria-label="Season and episode selection"
-      className="rounded-2xl border border-white/10 bg-zinc-900/60 p-4 backdrop-blur-xl sm:p-5"
+      className="pb-2"
     >
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-sm font-bold uppercase tracking-[0.18em] text-zinc-400">
-          Episodes
-        </h2>
+      {/* Season selector — restyled to match the sibling tab buttons in the
+          aside header (same size, same violet underline when open). */}
+      <div className="relative flex justify-end pb-2">
+        <button
+          type="button"
+          onClick={() => setSeasonOpen((open) => !open)}
+          aria-haspopup="listbox"
+          aria-expanded={seasonOpen}
+          className={`inline-flex items-center gap-1.5 border-b-2 pb-2 text-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-500 ${
+            seasonOpen
+              ? "border-[var(--sv-violet)] text-[#f1f3f8]"
+              : "border-transparent text-[#7f8aa3] hover:text-[#cfd5e4]"
+          }`}
+        >
+          <span>
+            Season {activeSeasonNumber}
+            {activeSeason ? ` · ${activeSeason.episode_count} ep` : ""}
+          </span>
+          <ChevronDown
+            className={`h-4 w-4 transition-transform ${
+              seasonOpen ? "rotate-180" : ""
+            }`}
+          />
+        </button>
 
-        {/* Season selector */}
-        <div className="relative">
-          <button
-            type="button"
-            onClick={() => setSeasonOpen((open) => !open)}
-            aria-haspopup="listbox"
-            aria-expanded={seasonOpen}
-            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3.5 py-2 text-sm font-semibold text-white transition hover:border-white/25 hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-500"
-          >
-            <span>
-              Season {activeSeasonNumber}
-              {activeSeason ? ` · ${activeSeason.episode_count} ep` : ""}
-            </span>
-            <ChevronDown
-              className={`h-4 w-4 text-zinc-400 transition-transform ${
-                seasonOpen ? "rotate-180" : ""
-              }`}
+        {seasonOpen ? (
+          <>
+            <div
+              className="fixed inset-0 z-10"
+              aria-hidden
+              onClick={() => setSeasonOpen(false)}
             />
-          </button>
-
-          {seasonOpen ? (
-            <>
-              <div
-                className="fixed inset-0 z-10"
-                aria-hidden
-                onClick={() => setSeasonOpen(false)}
-              />
-              <ul
-                role="listbox"
-                className="absolute right-0 z-20 mt-2 max-h-72 w-48 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900/95 p-1.5 shadow-2xl backdrop-blur-xl"
-              >
-                {playableSeasons.map((s) => (
-                  <li key={s.season_number}>
-                    <button
-                      type="button"
-                      role="option"
-                      aria-selected={s.season_number === activeSeasonNumber}
-                      onClick={() => {
-                        setSeasonOpen(false);
-                        // Land on episode 1 of the newly chosen season.
-                        onSelectEpisode(s.season_number, 1);
-                      }}
-                      className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm transition ${
-                        s.season_number === activeSeasonNumber
-                          ? "bg-violet-500/15 font-semibold text-violet-300"
-                          : "text-zinc-300 hover:bg-white/10"
-                      }`}
-                    >
-                      <span>Season {s.season_number}</span>
-                      {s.season_number === activeSeasonNumber ? (
-                        <Check className="h-3.5 w-3.5" />
-                      ) : (
-                        <span className="text-xs text-zinc-500">
-                          {s.episode_count}
-                        </span>
-                      )}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </>
-          ) : null}
-        </div>
+            <ul
+              role="listbox"
+              className="absolute right-0 z-20 mt-1 max-h-72 w-48 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900/95 p-1.5 shadow-2xl backdrop-blur-xl"
+            >
+              {playableSeasons.map((s) => (
+                <li key={s.season_number}>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={s.season_number === activeSeasonNumber}
+                    onClick={() => {
+                      setSeasonOpen(false);
+                      // Land on episode 1 of the newly chosen season.
+                      onSelectEpisode(s.season_number, 1);
+                    }}
+                    className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm transition ${
+                      s.season_number === activeSeasonNumber
+                        ? "bg-violet-500/15 font-semibold text-violet-300"
+                        : "text-zinc-300 hover:bg-white/10"
+                    }`}
+                  >
+                    <span>Season {s.season_number}</span>
+                    {s.season_number === activeSeasonNumber ? (
+                      <Check className="h-3.5 w-3.5" />
+                    ) : (
+                      <span className="text-xs text-zinc-500">
+                        {s.episode_count}
+                      </span>
+                    )}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : null}
       </div>
 
       {episodes.length === 0 ? (
@@ -134,7 +139,7 @@ export function WatchTVControls({
           No episode list available for this season.
         </p>
       ) : (
-        <ul className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+        <ul className="flex flex-col gap-1.5">
           {episodes.map((ep) => {
             const isActive =
               ep.season === activeSeasonNumber && ep.number === currentEpisode;
@@ -146,13 +151,13 @@ export function WatchTVControls({
                   type="button"
                   onClick={() => onSelectEpisode(ep.season, ep.number)}
                   aria-current={isActive ? "true" : undefined}
-                  className={`group flex w-full items-center gap-3 rounded-xl border p-2 text-left transition ${
+                  className={`group flex w-full items-center gap-3 border-l-2 rounded-r-xl p-2 text-left transition ${
                     isActive
-                      ? "border-violet-500/70 bg-violet-500/10"
-                      : "border-white/10 bg-white/[0.03] hover:border-white/25 hover:bg-white/[0.07]"
+                      ? "border-[var(--sv-violet)] bg-white/[0.05]"
+                      : "border-transparent hover:border-white/30 hover:bg-white/[0.04]"
                   }`}
                 >
-                  <div className="relative h-16 w-28 shrink-0 overflow-hidden rounded-lg bg-zinc-800">
+                  <div className="relative h-14 w-24 shrink-0 overflow-hidden rounded-lg bg-zinc-800">
                     {still ? (
                       <img
                         src={still}
@@ -170,10 +175,8 @@ export function WatchTVControls({
                       E{ep.number}
                     </span>
                     {isActive ? (
-                      <span className="absolute inset-0 grid place-items-center bg-black/45">
-                        <span className="rounded-full bg-violet-500 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white">
-                          Now Playing
-                        </span>
+                      <span className="absolute right-1 top-1 rounded bg-[var(--sv-violet)] px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide text-white">
+                        Now Playing
                       </span>
                     ) : null}
                   </div>
@@ -186,11 +189,13 @@ export function WatchTVControls({
                     >
                       {ep.title || `Episode ${ep.number}`}
                     </p>
-                    {ep.runtime ? (
-                      <p className="mt-0.5 text-xs text-zinc-500">
-                        {formatRuntime(ep.runtime)}
-                      </p>
-                    ) : null}
+                    <p className="mt-0.5 flex items-center gap-2 text-xs text-zinc-500">
+                      <span>Ep {ep.number}</span>
+                      {ep.runtime ? (
+                        <span aria-hidden>·</span>
+                      ) : null}
+                      {ep.runtime ? <span>{formatRuntime(ep.runtime)}</span> : null}
+                    </p>
                   </div>
                 </button>
               </li>
