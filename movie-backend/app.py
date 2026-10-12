@@ -2191,6 +2191,79 @@ def proxy_hls_segment():
     return response
 
 
+# ---------------------------------------------------------------------------
+# Artwork relay
+#
+# The hero reads its accent colour from the featured backdrop's own pixels, but
+# the browser cannot do that against TMDB directly: `image.tmdb.org` sends no
+# `Access-Control-Allow-Origin`, so drawing the artwork into a canvas taints it
+# and the colour read throws. The accent was therefore stuck on its hardcoded
+# fallback on every slide. Relaying the one host the sampler needs, same-origin,
+# is what lets the canvas be read at all.
+#
+# This is deliberately NOT a general proxy. The path is pinned to TMDB's
+# `/t/p/<size>/<file>` shape and the host to `image.tmdb.org`, so no other URL
+# can be aimed through it -- the same rule the playback relays follow. Without
+# that pin it would be an open relay that any site could put in front of a
+# victim's browser.
+# ---------------------------------------------------------------------------
+
+TMDB_IMAGE_HOST = "image.tmdb.org"
+TMDB_IMAGE_PATH = re.compile(r"^/t/p/[A-Za-z0-9_]+/[^/].*$")
+TMDB_IMAGE_TIMEOUT_SECONDS = 10
+# A backdrop at `original` is a few megabytes; this ceiling stops the route
+# being used to pull an arbitrary large file through the process.
+TMDB_IMAGE_MAX_BYTES = 8 * 1024 * 1024
+
+
+@app.route("/api/image", methods=["GET", "OPTIONS"])
+def proxy_tmdb_image():
+    if request.method == "OPTIONS":
+        return ("", 204)
+
+    raw = (request.args.get("url") or "").strip()
+    if not raw:
+        return _json_error("Missing url parameter", 400)
+    try:
+        parsed = urllib.parse.urlparse(raw)
+    except ValueError:
+        return _json_error("Invalid url parameter", 400)
+    if (
+        parsed.scheme != "https"
+        or (parsed.hostname or "").lower() != TMDB_IMAGE_HOST
+        or not TMDB_IMAGE_PATH.match(parsed.path)
+    ):
+        return _json_error(
+            "Only TMDB artwork may be relayed", 400, code="URL_NOT_ALLOWED"
+        )
+
+    try:
+        upstream = requests.get(
+            raw, timeout=TMDB_IMAGE_TIMEOUT_SECONDS, stream=True
+        )
+    except requests.Timeout:
+        return _json_error("Artwork upstream timed out", 504)
+    except requests.RequestException:
+        return _json_error("Artwork upstream unavailable", 502)
+
+    with upstream:
+        if upstream.status_code != 200:
+            return _json_error(
+                f"Artwork upstream returned {upstream.status_code}", 502
+            )
+        body = upstream.content
+        content_type = upstream.headers.get("Content-Type", "image/jpeg")
+    if len(body) > TMDB_IMAGE_MAX_BYTES:
+        return _json_error("Artwork is too large", 502)
+
+    # Allowlist-exact CORS via the shared hook: the sampler's `crossOrigin`
+    # image read succeeds because the frontend origin is reflected here.
+    response = Response(body, status=200)
+    response.headers["Content-Type"] = content_type
+    response.headers["Cache-Control"] = "public, max-age=86400"
+    return response
+
+
 # `Content-Disposition` is the only reliable way to make a browser save a
 # cross-origin file. An <a download> attribute is ignored for a cross-origin
 # href, so the save has to originate from a response header the backend sets.
