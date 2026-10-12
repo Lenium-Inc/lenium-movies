@@ -604,6 +604,16 @@ export function WatchPage() {
   const progressCursorRef = useRef<{ key: string; seconds: number }>({ key: "", seconds: 0 });
   const remoteProgressAtRef = useRef(0);
 
+  // The identity `handleProgress` files its samples under. Read back at render
+  // time so a resume point for *this* title can be handed to the player while
+  // a stale one (the previous title in the same mounted page) reads as zero --
+  // navigating from one film to the next must never inherit a clock.
+  const progressIdentityKey = useMemo(() => {
+    if (!movie) return "";
+    const mediaType: "movie" | "tv" = isSeries ? "tv" : "movie";
+    return `${movie.providerId}:${mediaType}:${season}:${episode}`;
+  }, [movie, isSeries, season, episode]);
+
   const handleProgress = useCallback(
     ({ seconds, durationSeconds }: { seconds: number; durationSeconds: number }) => {
       if (!movie) return;
@@ -1095,9 +1105,9 @@ export function WatchPage() {
   if (movieLoading) {
     return (
       <div className="min-h-screen text-white">
-        <main className="pt-16 pb-12 px-4 sm:px-6 lg:px-8">
-          <div className="mx-auto max-w-[1560px]">
-            <div className="flex flex-wrap items-start gap-10">
+        <main className="pt-16 pb-12 px-4 sm:px-6 lg:px-6">
+          <div className="mx-auto max-w-[1760px]">
+            <div className="flex flex-wrap items-start gap-6">
               <div className="min-w-0 flex-1 basis-[640px]">
                 <div className="relative">
                   <div aria-hidden className={PLAYER_GLOW_CLASS} />
@@ -1167,9 +1177,9 @@ export function WatchPage() {
 
   return (
     <div className="min-h-screen text-white">
-      <main className="pt-16 pb-12 px-4 sm:px-6 lg:px-8">
-        <div className="mx-auto max-w-[1560px]">
-          <div className="flex flex-wrap items-start gap-10">
+      <main className="pt-16 pb-12 px-4 sm:px-6 lg:px-6">
+        <div className="mx-auto max-w-[1760px]">
+          <div className="flex flex-wrap items-start gap-6">
             <div className="min-w-0 flex-1 basis-[640px]">
               <div className="relative">
                 <div aria-hidden className={PLAYER_GLOW_CLASS} />
@@ -1225,7 +1235,6 @@ export function WatchPage() {
                         title={`${movie.title} — ${resolvedTrailer.label}`}
                         allow={FRAME_ALLOW}
                         sandbox={FRAME_SANDBOX}
-                        allowFullScreen
                         referrerPolicy="strict-origin-when-cross-origin"
                         onLoad={() => setTrailerFrameLoaded(true)}
                         className={`absolute inset-0 h-full w-full border-0 transition-opacity duration-300 ${
@@ -1233,6 +1242,19 @@ export function WatchPage() {
                         }`}
                       />
                       <TrailerBrandingMask />
+                      {/* The trailer owns the whole player slot, so the way
+                          back has to live on the trailer itself — the aside's
+                          toggle sits below the fold and reads as status, not
+                          as an exit. Top-center keeps it clear of the page's
+                          own Back (top-left) and of YouTube's chrome. */}
+                      <button
+                        type="button"
+                        onClick={() => setPlayingTrailer(false)}
+                        className="absolute left-1/2 top-4 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full bg-black/70 px-4 py-2 text-xs font-semibold tracking-wide text-white backdrop-blur transition-colors hover:bg-black/90"
+                      >
+                        <ArrowLeft className="h-3.5 w-3.5" aria-hidden />
+                        Back to movie
+                      </button>
                     </>
                   ) : resolved ? (
                     <>
@@ -1257,6 +1279,11 @@ export function WatchPage() {
                           onSourceError={handleSourceError}
                           onProgress={handleProgress}
                           preferredLanguage={preferredTrackLanguage}
+                          startAtSeconds={
+                            progressCursorRef.current.key === progressIdentityKey
+                              ? progressCursorRef.current.seconds
+                              : 0
+                          }
                           hideCloseButton
                         />
                       ) : null}
@@ -1382,7 +1409,7 @@ export function WatchPage() {
               </div>
             </div>
 
-            <aside className="min-w-[280px] flex-1 basis-[340px] lg:w-[340px] lg:flex-none">
+            <aside className="min-w-[280px] flex-1 basis-[320px] lg:w-[320px] lg:flex-none">
               <div className="flex items-end gap-6 border-b border-white/10">
                 {asideTabs.map(tab => {
                   const active = activeTab === tab.id;

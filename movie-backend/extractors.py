@@ -215,7 +215,7 @@ def _label(height) -> str:
         n = int(height)
     except (TypeError, ValueError):
         return str(height)
-    for floor, name in ((2000, "4K"), (1080, "1080p"), (720, "720p"),
+    for floor, name in ((4000, "8K"), (2000, "4K"), (1080, "1080p"), (720, "720p"),
                         (480, "480p"), (360, "360p")):
         if n >= floor:
             return name
@@ -223,7 +223,7 @@ def _label(height) -> str:
 
 
 def _order(label: str) -> int:
-    return {"4K": 0, "1080p": 1, "720p": 2, "480p": 3, "360p": 4}.get(label, 9)
+    return {"8K": 0, "4K": 1, "1080p": 2, "720p": 3, "480p": 4, "360p": 5}.get(label, 9)
 
 
 def _sort_streams(streams: list[dict]) -> list[dict]:
@@ -284,7 +284,17 @@ def _streams_from(url: str, referer: str) -> list[dict]:
     if r and "#EXT-X-STREAM-INF" in r.text:
         v = _variants(r.text, url)
         if v:
-            return [dict(x, referer=referer) for x in v]
+            # The master playlist itself goes first, carrying the best rung's
+            # label so it wins the sort and becomes the default stream. Handing
+            # the client the master (rather than only its children) is what
+            # gives hls.js the whole ladder -- every rung, including 4K/8K --
+            # plus the EXT-X-MEDIA audio groups a dubbed film needs. The split
+            # children stay behind it as failover candidates for source
+            # cycling: they cost nothing and still work if the master route
+            # ever fails for a host.
+            best = min(v, key=lambda s: _order(s.get("label", "Auto")))
+            master = {"url": url, "label": best.get("label") or "Auto", "referer": referer}
+            return [master] + [dict(x, referer=referer) for x in v]
     return [{"url": url, "label": "Auto", "referer": referer}]
 
 

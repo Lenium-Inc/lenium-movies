@@ -203,6 +203,17 @@ def resolve(
     after a miss is cheap. Passing `extract=False` skips the browser, which is
     what a box without Chrome -- or a measurement of the archive tier alone --
     needs.
+
+    One supplement breaks the short-circuit. A provider answer can be
+    playable-but-not-savable: HLS and DASH are manifests, and saving one as a
+    single file would need a server-side remux this host does not do, so the
+    download route refuses them by design. When the extract tier wins with
+    manifest-only streams, the archive is asked a second time -- as a
+    supplement, not a fallback -- and its progressive file, if it has one,
+    rides along after the manifests. The play path is unchanged (the manifest
+    stays first), but the client's download button gains a real file instead
+    of an honest dead end. The lookup is the cached, per-title-serialised one,
+    so the extra ask costs seconds only on a cold title.
     """
     attempts: list[dict] = []
     tiers = ["extract", "archive"] if extract else ["archive"]
@@ -212,7 +223,16 @@ def resolve(
             res = _extract_tier(tmdb_id, media_type, season, episode, title, attempts)
         else:
             res = _archive_tier(direct_fetcher, title, year, refresh, runtime, attempts)
-        if res:
-            return res
+        if not res:
+            continue
+        if tier == "extract" and all(
+            str(s.get("format") or "") in ("hls", "dash") for s in res.streams
+        ):
+            extra = _archive_tier(
+                direct_fetcher, title, year, refresh, runtime, attempts
+            )
+            if extra:
+                res.streams.extend(extra.streams)
+        return res
 
     return Resolution(False, attempts=attempts)

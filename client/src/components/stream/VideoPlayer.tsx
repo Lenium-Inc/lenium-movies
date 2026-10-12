@@ -14,7 +14,9 @@ import {
   VolumeX,
   Maximize,
   ChevronDown,
-  Languages,
+  Captions,
+  Globe,
+  Upload,
   Volume2 as Volume2Icon,
   X,
   SkipBack,
@@ -25,6 +27,7 @@ import { formatPlayerTime } from "@/lib/format";
 // effect so hls.js stays out of the entry chunk; this import is erased.
 import type Hls from "hls.js";
 import { baseLanguage, sameLanguage } from "@/lib/language";
+import { parseSubtitleFile } from "@/lib/subtitleFile";
 import { subtitleTrackUrl, type StreamSubtitle } from "@/services/api";
 
 export interface StreamVariant {
@@ -34,28 +37,47 @@ export interface StreamVariant {
 }
 
 /**
+ * The viewer-facing name for a pixel height.
+ *
+ * One ladder shared by both engines, the resolver's own labels, and the
+ * mirrors that read the rendered rung back: a menu that says "4K" while the
+ * highlight logic looks for "2160p" can never agree with itself, and the tall
+ * rungs are exactly where the raw number reads worst ("4320p" is how a spec
+ * sheet writes it, "8K" is how a viewer picks it).
+ */
+export const labelForHeight = (height: number): string => {
+  if (!Number.isFinite(height) || height <= 0) return "Auto";
+  if (height >= 4000) return "8K";
+  if (height >= 2000) return "4K";
+  return `${Math.round(height)}p`;
+};
+
+/**
  * Extract the variant ladder from a parsed HLS master playlist.
  *
  * The resolver usually returns a *single* `.m3u8` rather than one URL per
  * rendition, so the quality list cannot come from the source array -- the rungs
- * only exist once hls.js has walked the manifest. Returns unique `<height>p`
- * labels, tallest first.
+ * only exist once hls.js has walked the Manifest. Returns unique labels,
+ * tallest first, each keeping the tallest height that produced it.
  */
 export const deriveHlsLevels = (
   instance: Hls | null | undefined
 ): { quality: string; height: number }[] => {
   const levels = (instance?.levels ?? []) as { height?: number }[];
-  const seen = new Set<string>();
-  const rungs: { quality: string; height: number }[] = [];
+  // One entry per label, holding the tallest height seen for it: two rungs
+  // can share a label (2000 and 2160 are both "4K") but a menu row must not
+  // appear twice, and when it does appear the switch should target the taller.
+  const byLabel = new Map<string, number>();
   for (const level of levels) {
     const height = Number(level.height) || 0;
     if (!height) continue;
-    const quality = `${height}p`;
-    if (seen.has(quality)) continue;
-    seen.add(quality);
-    rungs.push({ quality, height });
+    const quality = labelForHeight(height);
+    if (quality === "Auto") continue;
+    byLabel.set(quality, Math.max(byLabel.get(quality) ?? 0, height));
   }
-  return rungs.sort((a, b) => b.height - a.height);
+  return [...byLabel.entries()]
+    .map(([quality, height]) => ({ quality, height }))
+    .sort((a, b) => b.height - a.height);
 };
 
 /**
@@ -69,15 +91,20 @@ export const deriveHlsLevels = (
 export const deriveDashLevels = (
   representations: { height?: number }[] | null | undefined
 ): { quality: string; height: number; index: number }[] => {
-  const seen = new Set<number>();
-  const rungs: { quality: string; height: number; index: number }[] = [];
+  // Same one-row-per-label rule as the HLS ladder; the surviving row keeps
+  // the index of the tallest representation carrying that label.
+  const byLabel = new Map<string, { height: number; index: number }>();
   (representations ?? []).forEach((representation, index) => {
     const height = Number(representation?.height) || 0;
-    if (!height || seen.has(height)) return;
-    seen.add(height);
-    rungs.push({ quality: `${height}p`, height, index });
+    if (!height) return;
+    const quality = labelForHeight(height);
+    if (quality === "Auto") return;
+    const current = byLabel.get(quality);
+    if (!current || height > current.height) byLabel.set(quality, { height, index });
   });
-  return rungs.sort((a, b) => b.height - a.height);
+  return [...byLabel.entries()]
+    .map(([quality, { height, index }]) => ({ quality, height, index }))
+    .sort((a, b) => b.height - a.height);
 };
 
 /** What one selectable rendition looks like to the menus. */
@@ -220,9 +247,20 @@ export interface VideoPlayerProps {
    * replaces it for the rest of the session.
    */
   preferredLanguage?: string | null;
+  /**
+   * Where a fresh media load should place the playback clock, in seconds.
+   *
+   * Set by the page so that a quality source-swap -- which remounts this
+   * component -- and a mid-playback failover reload both resume where the
+   * viewer was instead of snapping back to 0:00. Zero (the default) means
+   * "start at the beginning", which is also what the first open of a title
+   * gets: the page only reports a position for the title it has actually
+   * seen playing.
+   */
+  startAtSeconds?: number;
 }
 
-const QUALITY_ORDER = ["4K", "1080p", "720p", "480p", "360p", "Auto"] as const;
+const QUALITY_ORDER = ["8K", "4K", "1080p", "720p", "480p", "360p", "Auto"] as const;
 
 /**
  * Seconds of playback between progress reports. Fine enough that the resume
@@ -248,6 +286,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   autoCycling = false,
   onProgress,
   preferredLanguage = null,
+  startAtSeconds = 0,
 }) => {
   const [isPlaying, setIsPlaying] = useState<boolean>(autoPlay);
   const [isMuted, setIsMuted] = useState<boolean>(false);
@@ -258,6 +297,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [showControls, setShowControls] = useState<boolean>(true);
   const [qualityMenuOpen, setQualityMenuOpen] = useState<boolean>(false);
   const [subtitleMenuOpen, setSubtitleMenuOpen] = useState<boolean>(false);
+  const [audioMenuOpen, setAudioMenuOpen] = useState<boolean>(false);
   const [currentQuality, setCurrentQuality] = useState<string>(initialQuality);
   const [hlsLevels, setHlsLevels] = useState<
     { quality: string; height: number }[]
@@ -274,9 +314,29 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // "Off" or a `srcLang` from `subtitleTracks`. Held as a language code rather
   // than a label so two tracks sharing a display name stay distinguishable.
   const [currentSubtitles, setCurrentSubtitles] = useState<string>("Off");
+  // Viewer-supplied subtitle files, as blob URLs in the same shape the
+  // resolver's tracks use. Appended to `subtitleTracks` below so the menu,
+  // the `<track>` elements, and the label lookup all pick them up without
+  // each knowing uploads exist. The blob URLs are kept in a ref solely so the
+  // unmount cleanup can revoke them; nothing reads the list for rendering.
+  const [uploadedSubtitles, setUploadedSubtitles] = useState<SubtitleTrack[]>(
+    []
+  );
+  const [subtitleFileError, setSubtitleFileError] = useState<string | null>(
+    null
+  );
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const uploadedUrlsRef = useRef<string[]>([]);
+  const uploadSeqRef = useRef(0);
+  useEffect(
+    () => () => {
+      uploadedUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
+    },
+    []
+  );
   const subtitleTracks = useMemo(
-    () => buildSubtitleTracks(subtitles),
-    [subtitles]
+    () => [...buildSubtitleTracks(subtitles), ...uploadedSubtitles],
+    [subtitles, uploadedSubtitles]
   );
 
   // Renditions the manifest declares, populated once hls.js has walked it.
@@ -286,6 +346,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // leaves the other showing.
   const [hlsAudioTracks, setHlsAudioTracks] = useState<PlayerTrack[]>([]);
   const [currentAudio, setCurrentAudio] = useState<number>(0);
+  // DASH's audio renditions. hls.js reports audio groups only for HLS
+  // sources; most provider titles are DASH, where the Globe menu would
+  // otherwise never show a second track. The raw objects dash.js hands out
+  // are kept in a ref because setCurrentTrack wants those exact objects, not
+  // an index back into a rebuilt list.
+  const [dashAudioTracks, setDashAudioTracks] = useState<PlayerTrack[]>([]);
+  const dashAudioRawRef = useRef<unknown[]>([]);
   const [hlsSubtitleTracks, setHlsSubtitleTracks] = useState<PlayerTrack[]>([]);
   // `-1` is hls.js's own "no subtitle track" sentinel, held verbatim so the
   // state never has to be translated on its way to the instance.
@@ -295,28 +362,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // arrives late would otherwise re-apply the seed on top of a choice they
   // already made.
   const [tracksTouched, setTracksTouched] = useState<boolean>(false);
-  // The chip shows the human label of whichever source is actually on: a
-  // resolver WebVTT track (a language code), an in-manifest one (an index), or
-  // neither. Deriving it here rather than at the call sites is what keeps the
-  // chip and the menu's highlighted row from disagreeing.
-  const currentSubtitleLabel = useMemo(() => {
-    if (currentSubtitles !== "Off") {
-      return subtitleTracks.find(t => t.srcLang === currentSubtitles)?.label ??
-        currentSubtitles;
-    }
-    if (currentHlsSubtitle !== -1) {
-      return (
-        hlsSubtitleTracks.find(t => t.id === currentHlsSubtitle)?.label ??
-        "Subtitles"
-      );
-    }
-    return "Off";
-  }, [currentHlsSubtitle, currentSubtitles, hlsSubtitleTracks, subtitleTracks]);
   const [hasUserInteracted, setHasUserInteracted] = useState<boolean>(false);
   const lastProgressRef = useRef<{ seconds: number; duration: number }>({
     seconds: 0,
     duration: 0,
   });
+  // Mirrored into a ref so the stream-setup effect never has to re-run when
+  // the page's resume sample advances: that effect tears down hls.js/dash.js
+  // and the listener closure captures whatever value it closes over, so
+  // reading a prop directly inside `loadedmetadata` would either go stale or
+  // (if listed as a dependency) restart the player on every sample.
+  const startAtRef = useRef(startAtSeconds);
+  useEffect(() => {
+    startAtRef.current = startAtSeconds;
+  }, [startAtSeconds]);
 
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -497,7 +556,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (dashLevels.length > 1) {
       return dashLevels.map(l => l.quality);
     }
-    return variants.map(v => v.quality).filter((q): q is string => Boolean(q));
+    // Set: the resolver's master entry and its own best child can share a
+    // label, and a menu row must appear once.
+    return [
+      ...new Set(
+        variants.map(v => v.quality).filter((q): q is string => Boolean(q))
+      ),
+    ];
   }, [hlsLevels, dashLevels, variants]);
 
   // While a manifest ladder is in play the active rung is tracked separately,
@@ -642,6 +707,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const video = videoRef.current;
     if (!video || !streamUrl) return;
 
+    // Playback URLs are relative tokenised paths (`/api/v1/playback/...`).
+    // dash.js runs its CMCD reporter on every response regardless of whether
+    // CMCD is enabled, and the reporter calls `new URL(request.url)` with no
+    // base -- a relative path throws "Failed to construct 'URL'" once per
+    // segment on the console. Resolving against the page origin here keeps
+    // every derived request URL absolute; the requests are same-origin, so
+    // nothing else about the fetch changes.
+    const sourceUrl = (() => {
+      try {
+        return new URL(streamUrl, window.location.href).toString();
+      } catch {
+        return streamUrl;
+      }
+    })();
+
     let hls: any = null;
     // DASH loads its player asynchronously, so a source can be swapped (or the
     // component unmounted) while the library is still in flight. The flag stops
@@ -701,6 +781,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setDuration(video.duration);
       clearStallWatch();
       initAmbientCanvas();
+      // Resume before any frame is requested: a fresh load opens at 0:00, so
+      // a quality swap or a failover reload only has to seek when the page
+      // handed one over. The guard on currentTime keeps a second
+      // `loadedmetadata` (an in-place source update) from yanking a viewer
+      // who has since moved -- or rewound -- back to the resume point.
+      const startAt = startAtRef.current;
+      if (
+        startAt > 0 &&
+        video.currentTime < 0.5 &&
+        Number.isFinite(video.duration) &&
+        video.duration > 0
+      ) {
+        video.currentTime = Math.min(startAt, video.duration - 1);
+      }
       // Autoplay is deliberately not attempted here: metadata lands before the
       // first decodable frame, and playing from this event is what starts the
       // audio against a black picture. `loadeddata` below is the one that goes.
@@ -771,7 +865,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             // where `hls` is still null.
             hlsRef.current = hls;
 
-            hls.loadSource(streamUrl);
+            hls.loadSource(sourceUrl);
             hls.attachMedia(video);
 
             hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -816,7 +910,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 if (hlsCancelled) return;
                 const level = hls.levels?.[data?.level ?? -1];
                 const height = Number(level?.height) || 0;
-                setHlsQuality(height > 0 ? `${height}p` : "Auto");
+                setHlsQuality(height > 0 ? labelForHeight(height) : "Auto");
               }
             );
 
@@ -830,7 +924,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               }
             );
           } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-            video.src = streamUrl;
+            video.src = sourceUrl;
           } else {
             onSourceError?.();
           }
@@ -856,6 +950,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             streaming: {
               buffer: { fastSwitchEnabled: true },
               retryAttempts: { MPD: 1, MediaSegment: 3 },
+              // dash.js force-enables CMCD when the MPD declares
+              // CMCDParameters (`applyParametersFromMpd` defaults to true and
+              // overrides even `enabled: false`), and its reporter then does
+              // `new URL(report.url)` on our proxied segment URLs, which are
+              // not always absolute — every response logged
+              // "Failed to construct 'URL'" on the console. This player has
+              // no CMCD beacon endpoint to report to anyway, so the MPD's
+              // invitation is declined at both doors.
+              cmcd: { enabled: false, applyParametersFromMpd: false },
             },
           });
           player.on(MediaPlayer.events.STREAM_INITIALIZED, () => {
@@ -876,7 +979,60 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             } catch {
               setDashLevels([]);
             }
+            // Audio groups exist only once the stream is up, same as the
+            // representation list. The label is built from dash.js's own
+            // display labels so the menu reads the manifest's names, not
+            // invented ones; "Track n" is the last resort when a manifest
+            // declares a group with neither a label nor a language.
+            try {
+              const audio = (player.getTracksFor?.("audio") ?? []) as {
+                lang?: string | null;
+                labels?: { text?: string }[] | null;
+              }[];
+              dashAudioRawRef.current = audio;
+              setDashAudioTracks(
+                audio.map((track, index) => ({
+                  id: index,
+                  label:
+                    track.labels
+                      ?.map(l => l.text?.trim())
+                      .find(Boolean) ||
+                    (track.lang ? track.lang.toUpperCase() : `Track ${index + 1}`),
+                  language: track.lang ?? null,
+                }))
+              );
+            } catch {
+              dashAudioRawRef.current = [];
+              setDashAudioTracks([]);
+            }
           });
+          // Same contract as hls.js's AUDIO_TRACK_SWITCHED: what is
+          // highlighted is the track dash.js actually has on, read back
+          // after every change (viewer or automatic), so the menu highlight
+          // can never drift from what is playing.
+          //
+          // The literal string, not `MediaPlayer.events.*`: this is a core
+          // event, typed on `CoreEvents` only, so it never appears on
+          // `MediaPlayer.events` — but the event bus routes it under the same
+          // name string, which is all `on()` matches on.
+          player.on(
+            "currentTrackChanged",
+            (e?: { newMediaInfo?: unknown }) => {
+              const incoming = e?.newMediaInfo as
+                | { type?: string | null; id?: string | null }
+                | undefined;
+              if (!incoming) return;
+              // In-manifest text tracks fire this same event; only audio
+              // rows are listed here.
+              if (incoming.type && incoming.type !== "audio") return;
+              const index = dashAudioRawRef.current.findIndex(track => {
+                if (track === e?.newMediaInfo) return true;
+                const stored = track as { id?: string | null };
+                return stored.id != null && stored.id === incoming.id;
+              });
+              if (index >= 0) setCurrentAudio(index);
+            }
+          );
           // Same contract as hls.js's LEVEL_SWITCHED: ABR may move the rung on
           // its own, so the label is read back from the representation the
           // player actually rendered rather than from the last clicked row.
@@ -885,7 +1041,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             (e: { mediaType?: string; newRepresentation?: { height?: number } }) => {
               if (e?.mediaType !== "video") return;
               const height = Number(e?.newRepresentation?.height) || 0;
-              setDashQuality(height > 0 ? `${height}p` : "Auto");
+              setDashQuality(height > 0 ? labelForHeight(height) : "Auto");
             }
           );
           player.on(MediaPlayer.events.ERROR, (e: { error?: { code?: string } }) => {
@@ -902,7 +1058,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               onSourceError?.();
             }
           });
-          player.initialize(video, streamUrl, false);
+          player.initialize(video, sourceUrl, false);
           dashPlayerRef.current = player;
         })
         .catch(() => {
@@ -911,7 +1067,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           if (!dashCancelled) onSourceError?.();
         });
     } else {
-      video.src = streamUrl;
+      video.src = sourceUrl;
     }
 
     // `hlsRef.current` is assigned inside the dynamic import's `.then()`
@@ -1121,8 +1277,71 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setTracksTouched(true);
     setCurrentAudio(id);
     const instance = hlsRef.current;
-    if (instance) instance.audioTrack = id;
+    if (instance) {
+      instance.audioTrack = id;
+      return;
+    }
+    // No hls.js instance means a DASH source (or a plain file): hand dash.js
+    // the exact MediaInfo object the list was built from, because it
+    // identifies a track by object identity, not by position.
+    const dash = dashPlayerRef.current;
+    const raw = dashAudioRawRef.current[id];
+    if (dash && raw) dash.setCurrentTrack(raw);
   }, []);
+
+  /**
+   * Take a viewer-picked .srt/.vtt file, or say why it was refused.
+   *
+   * The contract is binary: a file that validates is converted to WebVTT,
+   * appended to the track list, and selected immediately — a pick that
+   * changes nothing would read as a dead button. Anything that does not
+   * parse leaves an inline error under the menu row instead, and never
+   * reaches the video element.
+   */
+  const handleSubtitleFile = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      // Cleared first so picking the same file after a rejection fires
+      // change again; browsers only report a change when the value moves.
+      event.target.value = "";
+      if (!file) return;
+
+      setSubtitleFileError(null);
+      let text: string;
+      try {
+        text = await file.text();
+      } catch {
+        setSubtitleFileError(`Couldn't read "${file.name}".`);
+        return;
+      }
+
+      const parsed = parseSubtitleFile(file.name, text);
+      if (!parsed.ok) {
+        setSubtitleFileError(parsed.reason);
+        return;
+      }
+
+      const src = URL.createObjectURL(
+        new Blob([parsed.vtt], { type: "text/vtt" })
+      );
+      uploadedUrlsRef.current.push(src);
+      const id = uploadSeqRef.current++;
+      const srcLang = `uploaded${id}`;
+      // The filename (minus its extension) is what the viewer will recognize
+      // their file by; the extension itself carries no information now that
+      // the content has been validated.
+      const label = file.name.replace(/\.(srt|vtt)$/i, "") || "Uploaded";
+
+      setTracksTouched(true);
+      setUploadedSubtitles(prev => [
+        ...prev,
+        { key: `upload-${id}`, label, srcLang, src, default: false },
+      ]);
+      setCurrentHlsSubtitle(-1);
+      setCurrentSubtitles(srcLang);
+    },
+    []
+  );
 
   /**
    * What the Audio section lists.
@@ -1135,8 +1354,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     () =>
       hlsAudioTracks.length > 0
         ? hlsAudioTracks
-        : [{ id: 0, label: "Original", language: null }],
-    [hlsAudioTracks]
+        : dashAudioTracks.length > 0
+          ? dashAudioTracks
+          : [{ id: 0, label: "Original", language: null }],
+    [dashAudioTracks, hlsAudioTracks]
   );
 
   /**
@@ -1181,18 +1402,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   /**
    * Open on the viewer's language, once, before they have touched a switcher.
    *
-   * Audio wins over subtitles. A rendition in a language someone speaks is a
-   * better default than captions laid over one they do not, so captions are
-   * only reached when the manifest declares its audio languages, none of them
-   * is the viewer's, and a subtitle track in theirs exists -- and never when
-   * the manifest declares no audio languages at all, because the player
-   * cannot then know what language the sound is in and turning captions on
-   * over audio the viewer already follows would be worse than showing none.
-   *
-   * Every branch writes state rather than going through the choosers: this is
-   * the seed, not a choice, and it must not raise `tracksTouched` or a later
-   * track list arriving would look like a decision the viewer never made.
-   */
+    * Audio wins over subtitles: a rendition in a language someone speaks is a
+    * better default than captions laid over one they do not, so an audio match
+    * ends the seed and subtitles are only reached when the sound is not the
+    * viewer's.
+    *
+    * The subtitle choice no longer waits on the manifest declaring audio
+    * languages. That guard belonged to in-manifest tracks — whose relation to
+    * the sound is unknowable without it — but it also gated the resolver's
+    * WebVTT list, which is language-tagged on its own, and since only hls.js
+    * reports audio groups it blocked every DASH title from ever seeding. A
+    * track in the viewer's language wins; with none, an English track is used
+    * so a title that carries English captions shows them by default.
+    *
+    * Every branch writes state rather than going through the choosers: this is
+    * the seed, not a choice, and it must not raise `tracksTouched` or a later
+    * track list arriving would look like a decision the viewer never made.
+    */
   useEffect(() => {
     if (!preferredLanguage || tracksTouched) return;
     const wanted = baseLanguage(preferredLanguage);
@@ -1210,26 +1436,33 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       return;
     }
 
-    // No audio list, or a list that declares no languages: nothing is known
-    // about the sound, so subtitles stay where the player put them.
-    if (!hlsAudioTracks.some(track => track.language)) return;
-
-    const inManifest = hlsSubtitleTracks.find(
-      track => track.id >= 0 && sameLanguage(track.language, wanted)
-    );
-    if (inManifest) {
-      setCurrentSubtitles("Off");
-      setCurrentHlsSubtitle(inManifest.id);
-      const instance = hlsRef.current;
-      if (instance && instance.subtitleTrack !== inManifest.id) {
-        instance.subtitleTrack = inManifest.id;
+    // In-manifest tracks stay behind the audio-language guard: without a
+    // declared sound language the player cannot know what the audio says, and
+    // captions over audio the viewer already follows would be worse than
+    // showing none.
+    if (hlsAudioTracks.some(track => track.language)) {
+      const findInManifest = (lang: string) =>
+        hlsSubtitleTracks.find(
+          track => track.id >= 0 && sameLanguage(track.language, lang)
+        );
+      const inManifest =
+        findInManifest(wanted) ??
+        (wanted !== "en" ? findInManifest("en") : undefined);
+      if (inManifest) {
+        setCurrentSubtitles("Off");
+        setCurrentHlsSubtitle(inManifest.id);
+        const instance = hlsRef.current;
+        if (instance && instance.subtitleTrack !== inManifest.id) {
+          instance.subtitleTrack = inManifest.id;
+        }
+        return;
       }
-      return;
     }
 
-    const external = subtitleTracks.find(track =>
-      sameLanguage(track.srcLang, wanted)
-    );
+    const findExternal = (lang: string) =>
+      subtitleTracks.find(track => sameLanguage(track.srcLang, lang));
+    const external =
+      findExternal(wanted) ?? (wanted !== "en" ? findExternal("en") : undefined);
     if (external) {
       setCurrentHlsSubtitle(-1);
       const instance = hlsRef.current;
@@ -1254,10 +1487,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         if (quality === "Auto") {
           instance.currentLevel = -1;
         } else {
-          const index = (instance.levels ?? []).findIndex(
-            (level: { height?: number }) =>
-              `${Number(level.height) || 0}p` === quality
-          );
+          // Matched by height, never by label: the menu says "4K"/"8K" while
+          // instance.levels carries raw pixel heights, so a string compare
+          // against the label would silently match nothing on the tall rungs
+          // and the click would just close the menu.
+          const rung = hlsLevels.find(l => l.quality === quality);
+          const index = rung
+            ? (instance.levels ?? []).findIndex(
+                (level: { height?: number }) =>
+                  (Number(level.height) || 0) === rung.height
+              )
+            : -1;
           if (index === -1) return;
           instance.currentLevel = index;
         }
@@ -1297,12 +1537,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const variant = variants.find(v => v.quality === quality);
       if (!variant) return;
 
+      // A source swap remounts the player, and the progress sample is
+      // throttled to one per RESUME_SAMPLE_SECONDS -- without this flush the
+      // remount would pick the clock back up as much as ten seconds behind
+      // where the viewer actually was. The report is synchronous, so the
+      // page's resume point is exact before the swap is even triggered.
+      const video = videoRef.current;
+      if (onProgress && video && !isNaN(video.duration) && video.duration > 0) {
+        onProgress({
+          seconds: Math.floor(video.currentTime),
+          durationSeconds: Math.floor(video.duration),
+        });
+      }
+
       setCurrentQuality(quality);
       setIsLoading(true);
       setQualityMenuOpen(false);
       onQualityChange?.(quality);
     },
-    [hlsLevels, dashLevels, currentQuality, variants, onQualityChange]
+    [hlsLevels, dashLevels, currentQuality, variants, onQualityChange, onProgress]
   );
 
   const handleKeyDown = useCallback(
@@ -1546,54 +1799,36 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           </div>
 
           <div className="flex items-center gap-3 relative flex-shrink-0">
+            {/* Subtitles: a square [CC] button. The icon carries the label so
+                the control reads the same in every language, and `title` gives
+                hoverers the plain word. The menu holds the subtitle rows only;
+                audio has its own button now, because a viewer reaching for
+                dubs on a Korean film should not also wade through subtitles. */}
             <div className="relative z-40">
               <button
                 onClick={() => {
                   setSubtitleMenuOpen(!subtitleMenuOpen);
                   setQualityMenuOpen(false);
+                  setAudioMenuOpen(false);
                 }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-white/10 hover:bg-white/20 text-xs font-semibold tracking-wider transition-all"
-                aria-label="Audio & Subtitles"
+                className="h-8 w-8 grid place-items-center rounded-md bg-white/10 hover:bg-white/20 transition-all"
+                aria-label="Subtitles"
+                aria-expanded={subtitleMenuOpen}
+                title="Subtitles"
               >
-                <Languages className="w-4 h-4" />
-                <span>{currentSubtitleLabel}</span>
+                <Captions className="w-4 h-4" />
               </button>
               {subtitleMenuOpen && (
                 <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-56 bg-zinc-900 border border-white/10 rounded-lg shadow-xl overflow-hidden py-1 z-50">
-                  <div className="px-4 py-2 border-b border-white/10">
-                    <p className="text-xs font-semibold text-white/60 uppercase tracking-wider mb-2">
-                      Audio Track
-                    </p>
-                    <div className="space-y-1">
-                      {audioOptions.map(track => (
-                        <button
-                          key={track.id}
-                          onClick={e => {
-                            e.stopPropagation();
-                            chooseAudioTrack(track.id);
-                            setSubtitleMenuOpen(false);
-                          }}
-                          className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors flex items-center gap-2 ${
-                            currentAudio === track.id
-                              ? "text-violet-500 font-bold"
-                              : "text-white"
-                          }`}
-                        >
-                          <Volume2Icon className="w-3 h-3" />
-                          <span>{track.label}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
                   {/* Always shown, even when the only option is "Off": a
                       hidden menu reads as "this player has no subtitles",
                       which is wrong the moment a title carries one language —
                       and the viewer has no way to discover it. */}
-                  <div className="px-4 py-2">
+                  <div className="px-4 py-2 border-b border-white/10">
                     <p className="text-xs font-semibold text-white/60 uppercase tracking-wider mb-2">
                       Subtitles
                     </p>
-                    <div className="space-y-1 max-h-48 overflow-y-auto">
+                    <div className="space-y-1 max-h-56 overflow-y-auto">
                       {subtitleOptions.map(option => (
                         <button
                           key={option.key}
@@ -1611,18 +1846,100 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       ))}
                     </div>
                   </div>
+                  {/* The menu stays open on pick: the file dialog is modal
+                      anyway, and an inline error or a newly highlighted row is
+                      only useful if it is visible where the click happened. */}
+                  <div className="px-4 py-2">
+                    <button
+                      onClick={e => {
+                        e.stopPropagation();
+                        fileInputRef.current?.click();
+                      }}
+                      className="w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors flex items-center gap-2 text-white/70 hover:text-white"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>Upload subtitle file…</span>
+                    </button>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".srt,.vtt"
+                      className="hidden"
+                      onChange={handleSubtitleFile}
+                    />
+                    {subtitleFileError && (
+                      <p className="text-[10px] leading-snug text-red-400 px-4 pt-1.5">
+                        {subtitleFileError}
+                      </p>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
 
+            {/* Audio: a square Globe button, rendered only when the manifest
+                actually offers a choice. A single "Original" track would make
+                the button a menu of one — a claim of choice the source never
+                made. */}
+            {audioOptions.length > 1 && (
+              <div className="relative z-40">
+                <button
+                  onClick={() => {
+                    setAudioMenuOpen(!audioMenuOpen);
+                    setSubtitleMenuOpen(false);
+                    setQualityMenuOpen(false);
+                  }}
+                  className="h-8 w-8 grid place-items-center rounded-md bg-white/10 hover:bg-white/20 transition-all"
+                  aria-label="Audio"
+                  aria-expanded={audioMenuOpen}
+                  title="Audio"
+                >
+                  <Globe className="w-4 h-4" />
+                </button>
+                {audioMenuOpen && (
+                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-52 bg-zinc-900 border border-white/10 rounded-lg shadow-xl overflow-hidden py-1 z-50">
+                    <div className="px-4 py-2">
+                      <p className="text-xs font-semibold text-white/60 uppercase tracking-wider mb-2">
+                        Audio Track
+                      </p>
+                      <div className="space-y-1 max-h-56 overflow-y-auto">
+                        {audioOptions.map(track => (
+                          <button
+                            key={track.id}
+                            onClick={e => {
+                              e.stopPropagation();
+                              chooseAudioTrack(track.id);
+                              setAudioMenuOpen(false);
+                            }}
+                            className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors flex items-center gap-2 ${
+                              currentAudio === track.id
+                                ? "text-violet-500 font-bold"
+                                : "text-white"
+                            }`}
+                          >
+                            <Volume2Icon className="w-3 h-3" />
+                            <span>{track.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {canChangeQuality && (
               <div className="relative z-40">
+                {/* Text only, no box: the rung label already reads as a value
+                    ("4K", "Auto") and a pill around it made the control look
+                    like a status chip rather than something to click. */}
                 <button
                   onClick={() => {
                     setQualityMenuOpen(!qualityMenuOpen);
                     setSubtitleMenuOpen(false);
+                    setAudioMenuOpen(false);
                   }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-white/10 hover:bg-white/20 text-xs font-semibold tracking-wider transition-all"
+                  className="flex items-center gap-1 px-1 text-xs font-semibold tracking-wider text-white/70 hover:text-white transition-colors"
                   aria-label="Quality"
                   aria-expanded={qualityMenuOpen}
                 >

@@ -7,7 +7,7 @@
  * base URL is configurable through `VITE_MOVIE_API_BASE_URL` and defaults to
  * the local development server.
  */
-export type StreamQuality = "4K" | "1080p" | "720p" | "480p" | "320p";
+export type StreamQuality = "8K" | "4K" | "1080p" | "720p" | "480p" | "320p";
 
 export interface StreamVariant {
   quality: StreamQuality;
@@ -155,6 +155,7 @@ export interface StreamMovie {
 
 /** Order of quality tiers, best -> worst. */
 export const STREAM_QUALITY_ORDER: StreamQuality[] = [
+  "8K",
   "4K",
   "1080p",
   "720p",
@@ -172,6 +173,7 @@ export function qualityFromHeight(height: number): StreamQuality {
   // An absent or zero height tells us nothing, so hold the neutral rung
   // rather than claiming a resolution the stream may well exceed.
   if (!Number.isFinite(height) || height <= 0) return "480p";
+  if (height >= 4000) return "8K";
   if (height >= 2000) return "4K";
   if (height >= 900) return "1080p";
   if (height >= 600) return "720p";

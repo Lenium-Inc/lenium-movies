@@ -40,7 +40,7 @@ from proxy_util import playable, playable_sub, stream_format  # noqa: E402
 
 #: Anything the client is allowed to load from our payload. A raw third-party
 #: origin matching this is the failure the whole file exists to catch.
-_PLAY_HANDLE = re.compile(r"^/api/(proxy/(manifest|subtitle)|v1/playback/(media|captions))\?")
+_PLAY_HANDLE = re.compile(r"^/api/(proxy/(manifest|dash|subtitle)|v1/playback/(media|captions))\?")
 
 
 def _stub_extract(streams=None, subtitles=None, provider="stub", referer=""):
@@ -149,7 +149,13 @@ def test_extract_runs_first_and_archive_is_the_fallback():
         direct={"streams": [{"url": "https://archive.org/download/x/f.mp4", "label": "720p"}]},
     )
     assert resolution.ok and resolution.provider == "stub"
-    assert [a["tier"] for a in resolution.attempts] == ["extract"], resolution.attempts
+    # The extract answer wins, and the archive is consulted anyway: the
+    # extract streams are a manifest, which the download route refuses, so
+    # the archive's progressive file is appended as a savable supplement.
+    assert [a["tier"] for a in resolution.attempts] == ["extract", "archive"], (
+        resolution.attempts
+    )
+    assert len(resolution.streams) == 2, resolution.streams
 
 
 def test_archive_serves_the_request_when_the_provider_misses():
@@ -164,12 +170,61 @@ def test_archive_serves_the_request_when_the_provider_misses():
 
 
 def test_extract_tier_serves_when_it_resolves():
-    """A resolving provider wins outright; the archive is never asked."""
+    """A resolving provider wins outright, even when its supplement misses.
+
+    The archive is asked for a downloadable file behind a manifest-only win,
+    but a miss there costs nothing: the extract answer stands on its own and
+    the viewer still gets the movie.
+    """
     resolution = _resolve(
         streams=[{"url": "https://cdn.example.org/hls/master.m3u8", "label": "1080p"}],
         extract=True,
     )
     assert resolution.ok and resolution.provider == "stub"
+    assert [a["tier"] for a in resolution.attempts] == ["extract", "archive"], (
+        resolution.attempts
+    )
+    assert resolution.attempts[1]["ok"] is False, resolution.attempts
+    assert len(resolution.streams) == 1, resolution.streams
+
+
+def test_manifest_win_appends_the_archive_as_a_downloadable_source():
+    """The whole point of the supplement: a savable file next to the manifest.
+
+    The manifest must stay first (it is the better player), but some entry in
+    the resolution must carry a progressive format, or the client's download
+    button has nothing to offer for a provider-only title.
+    """
+    resolution = _resolve(
+        streams=[{"url": "https://cdn.example.org/dash/index_web.mpd", "label": "Auto"}],
+        direct={"streams": [{"url": "https://archive.org/download/x/f.mp4", "label": "1080p"}]},
+    )
+    assert resolution.ok and resolution.provider == "stub"
+    formats = [s.get("format") for s in resolution.streams]
+    assert formats == ["dash", "mp4"], formats
+    assert resolution.streams[1].get("label") == "1080p", resolution.streams
+    _assert_only_handles(resolution)
+
+
+def test_progressive_extract_never_asks_the_archive():
+    """A savable provider file ends the walk: no second lookup, no latency."""
+    called = []
+
+    def _must_not_run(*args, **kwargs):
+        called.append(args)
+        return {"streams": [{"url": "https://archive.org/download/x/f.mp4"}]}
+
+    original = _stub_extract(
+        [{"url": "https://cdn.example.org/vod/feature.mp4", "label": "1080p"}]
+    )
+    try:
+        resolution = stream_providers.resolve(
+            _must_not_run, tmdb_id=603, media_type="movie", title="The Matrix"
+        )
+    finally:
+        _restore(original)
+    assert resolution.ok and resolution.provider == "stub"
+    assert called == [], "archive consulted behind a progressive extract win"
     assert [a["tier"] for a in resolution.attempts] == ["extract"], resolution.attempts
 
 

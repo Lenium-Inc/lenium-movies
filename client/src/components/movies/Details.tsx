@@ -7,7 +7,6 @@ import {
   Play,
   Star,
   X,
-  MessageSquare,
   Clock,
 } from "lucide-react";
 import { useLocation } from "wouter";
@@ -71,6 +70,11 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
   const [, navigate] = useLocation();
   const { user: authUser } = useAuth();
   const [resolved, setResolved] = useState<ResolvedStream | null>(null);
+  // Whether the sheet's silent warm resolve came back empty-handed. Without
+  // this the TV branch below sat on a blank gap forever: `detailsLoaded`
+  // flips synchronously, so the skeleton never showed, and a failed resolve
+  // looked exactly like "this series has no episodes".
+  const [resolveFailed, setResolveFailed] = useState(false);
   const [resolving, setResolving] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [playError, setPlayError] = useState<string | null>(null);
@@ -257,26 +261,17 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
 
   const play = async () => {
     if (resolving) return;
+    // Navigation belongs to `resolveAndPlay`: it pushes the watch route only
+    // once the stream is actually playable, and leaves the dialog open on a
+    // failure so `playError` can say why. A second navigate here duplicated
+    // the history entry (Back appeared broken) and fired even when the
+    // resolve had failed, unmounting the dialog before its error showed.
     if (resolved) {
       const isSeries = movie.mediaType === "tv";
       await resolveAndPlay(isSeries ? season : 1, isSeries ? episode : 1);
-      navigate(
-        buildWatchPath(movie.providerId, {
-          mediaType: isSeries ? "tv" : "movie",
-          season,
-          episode,
-        })
-      );
       return;
     }
     await resolveAndPlay(1, 1);
-    navigate(
-      buildWatchPath(movie.providerId, {
-        mediaType: movie.mediaType,
-        season: 1,
-        episode: 1,
-      })
-    );
   };
 
   /**
@@ -364,42 +359,41 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
     void resolveAndPlay(targetSeason, targetEpisode);
   };
 
-  // Pre-cache engine: the moment the sheet opens, silently resolve the title
+  // Pre-cache engine: the moment the sheet opens, silently resolve the title.
+  // The lookup itself lives in `warmResolve` because the failure state below
+  // offers it as a retry — an effect-only version would strand the viewer on
+  // an empty sheet with no way back in.
+  const warmResolve = useCallback(async () => {
+    setResolveFailed(false);
+    try {
+      const isSeries = movie.mediaType === "tv";
+      const stream = await resolveStream(movie.title, movie.year, {
+        tmdbId: /^\d+$/.test(movie.providerId) ? movie.providerId : undefined,
+        mediaType: movie.mediaType,
+        // A series warms the episode the sheet will open on, so the first
+        // Play click is already resolved rather than a cold lookup.
+        season: isSeries ? 1 : undefined,
+        episode: isSeries ? 1 : undefined,
+      });
+      setResolved(stream);
+    } catch (error) {
+      console.warn(`[Details] warm resolve skipped for "${movie.title}"`, error);
+      setResolveFailed(true);
+    }
+  }, [movie.title, movie.year, movie.providerId, movie.mediaType]);
+
   const opened = useRef(false);
   useEffect(() => {
     if (opened.current) return;
     opened.current = true;
-    let disposed = false;
 
     // The sheet's content is local; there is nothing to wait on before showing
     // it. (This used to sit behind a 100ms timer "for smooth UX" — which only
     // delayed the metadata the render already had.)
     setDetailsLoaded(true);
 
-    void (async () => {
-      try {
-        const isSeries = movie.mediaType === "tv";
-        const stream = await resolveStream(movie.title, movie.year, {
-          tmdbId: /^\d+$/.test(movie.providerId) ? movie.providerId : undefined,
-          mediaType: movie.mediaType,
-          // A series warms the episode the sheet will open on, so the first
-          // Play click is already resolved rather than a cold lookup.
-          season: isSeries ? 1 : undefined,
-          episode: isSeries ? 1 : undefined,
-        });
-        if (disposed) return;
-        setResolved(stream);
-      } catch (error) {
-        console.warn(
-          `[Details] warm resolve skipped for "${movie.title}"`,
-          error
-        );
-      }
-    })();
-    return () => {
-      disposed = true;
-    };
-  }, [movie.id, movie.title, movie.year, movie.providerId, movie.mediaType]);
+    void warmResolve();
+  }, [warmResolve]);
 
   // Skeleton placeholder for metadata
   const SkeletonMetadata = () => (
@@ -598,10 +592,6 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
               )}
               <span>{downloading ? "Preparing…" : "Download"}</span>
             </button>
-            <button className="flex items-center gap-2 rounded-md border border-white/15 bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/10 transition-colors">
-              <MessageSquare className="h-4 w-4" />
-              <span>Comments</span>
-            </button>
           </div>
 
           {canRate && detailsLoaded && (
@@ -655,20 +645,44 @@ export function Details({ movie, onClose, onSave, saved }: DetailsProps) {
             </p>
           )}
 
-          {resolved && movie.mediaType === "tv" ? (
-            <EpisodeMatrix
-              movie={resolved.stream}
-              onPlay={ep => {
-                playEpisode(ep.season, ep.number);
-                navigate(
-                  buildWatchPath(movie.providerId, {
-                    mediaType: "tv",
-                    season: ep.season,
-                    episode: ep.number,
-                  })
-                );
-              }}
-            />
+          {movie.mediaType === "tv" ? (
+            resolved ? (
+              <EpisodeMatrix
+                movie={resolved.stream}
+                onPlay={ep => {
+                  playEpisode(ep.season, ep.number);
+                  navigate(
+                    buildWatchPath(movie.providerId, {
+                      mediaType: "tv",
+                      season: ep.season,
+                      episode: ep.number,
+                    })
+                  );
+                }}
+              />
+            ) : resolveFailed ? (
+              // The warm resolve missed (no source, backend hiccup). Saying
+              // so beats a blank gap that reads as "this show has no
+              // episodes"; Play retries the same lookup, and so does this.
+              <div
+                role="status"
+                className="mt-6 rounded-md border border-white/10 bg-white/[0.03] px-3 py-3 text-xs leading-5 text-[#c5c5c1]"
+              >
+                <p>
+                  The episode list couldn't load — no playable source answered
+                  for this title right now.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void warmResolve()}
+                  className="mt-2 font-semibold text-white underline underline-offset-2 transition hover:text-white/80"
+                >
+                  Try again
+                </button>
+              </div>
+            ) : (
+              <SkeletonEpisodes />
+            )
           ) : detailsLoaded ? null : (
             <SkeletonEpisodes />
           )}

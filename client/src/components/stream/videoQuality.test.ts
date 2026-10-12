@@ -1,5 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { deriveDashLevels, deriveHlsLevels } from "./VideoPlayer";
+import { deriveDashLevels, deriveHlsLevels, labelForHeight } from "./VideoPlayer";
+
+describe("labelForHeight", () => {
+  it("names the tall rungs the way a viewer picks them", () => {
+    // A spec sheet writes 4320p; a menu row that reads "8K" is what the
+    // viewer asked for, and it must match the resolver's own label or the
+    // highlight and the list disagree.
+    expect(labelForHeight(4320)).toBe("8K");
+    expect(labelForHeight(2160)).toBe("4K");
+  });
+
+  it("keeps the raw pixel height for everything between", () => {
+    expect(labelForHeight(1440)).toBe("1440p");
+    expect(labelForHeight(1080)).toBe("1080p");
+    expect(labelForHeight(360)).toBe("360p");
+  });
+
+  it("reports no ladder for absent heights", () => {
+    expect(labelForHeight(0)).toBe("Auto");
+    expect(labelForHeight(-1)).toBe("Auto");
+    expect(labelForHeight(Number.NaN)).toBe("Auto");
+  });
+});
 
 describe("deriveHlsLevels", () => {
   it("returns nothing for a missing or unparsed instance", () => {
@@ -30,6 +52,19 @@ describe("deriveHlsLevels", () => {
     } as never);
 
     expect(levels.map((l) => l.quality)).toEqual(["720p", "480p"]);
+  });
+
+  it("shows 4K/8K as one row each, keeping the tallest height", () => {
+    // 2000 and 2160 share the "4K" label; a viewer picking "4K" should land
+    // on the taller of the two, never see the row twice.
+    const levels = deriveHlsLevels({
+      levels: [{ height: 2000 }, { height: 2160 }, { height: 4320 }],
+    } as never);
+
+    expect(levels).toEqual([
+      { quality: "8K", height: 4320 },
+      { quality: "4K", height: 2160 },
+    ]);
   });
 
   it("skips audio-only and malformed levels with no height", () => {
@@ -88,6 +123,18 @@ describe("deriveDashLevels", () => {
     expect(levels.map((l) => l.quality)).toEqual(["720p", "480p"]);
     // The surviving rung keeps the first index that carried the height.
     expect(levels[0]?.index).toBe(0);
+  });
+
+  it("keeps the taller representation's index when two share a label", () => {
+    // The row says "4K"; the switch must target the 2160 representation
+    // (index 2), not the shorter one that happened to come first.
+    const levels = deriveDashLevels([
+      { height: 1080 },
+      { height: 2000 },
+      { height: 2160 },
+    ]);
+
+    expect(levels[0]).toEqual({ quality: "4K", height: 2160, index: 2 });
   });
 
   it("skips representations with no height", () => {
