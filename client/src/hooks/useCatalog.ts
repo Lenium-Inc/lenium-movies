@@ -106,7 +106,7 @@ function applyMediaType(items: Movie[], mediaType: MediaTypeFilter): Movie[] {
 }
 
 /** How a row presents itself. Presentation only -- never which items it holds. */
-export type RowKind = "default" | "score" | "top10";
+export type RowKind = "default" | "score" | "top10" | "continue";
 
 interface CatalogRows {
   title: string;
@@ -651,7 +651,7 @@ export function useCatalog(): UseCatalog {
          * ones it did, under a page whose status bar promised results.
          */
         if (!searching && continueItems.length) {
-          add("Continue Watching", continueItems, undefined, 1);
+          add("Continue Watching", continueItems, "continue", 1);
         }
         add("Trending Movies", movies.slice(0, cap), "score");
 

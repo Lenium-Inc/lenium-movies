@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { continueWatching } from "@/services/history";
+import { continueWatching, RESUME_MIN_SECONDS } from "@/services/history";
 import { subscribeStats } from "@/services/stats";
 import { apiHistory, type RemoteHistoryItem } from "@/services/auth";
 import { useAuth } from "@/context/AuthContext";
@@ -91,6 +91,7 @@ function fromRemote(item: RemoteHistoryItem) {
     backdrop: item.backdrop ?? null,
     mediaType: (item.media_type === "tv" ? "tv" : "movie") as "movie" | "tv",
     fraction,
+    seconds: progress,
     at: item.watched_at ?? 0,
   };
 }
@@ -146,9 +147,11 @@ export function useContinueWatching(): ContinueWatchingShelf {
     for (const item of remote) {
       const entry = fromRemote(item);
       // A key with no addressable id cannot be turned into a watch route, and a
-      // title with no progress at all has nothing to resume.
+      // title with no progress at all has nothing to resume. The seconds floor
+      // is the same accidental-tap filter the local queue applies.
       if (!parseProgressKey(entry.key)) continue;
       if (entry.fraction <= 0 || entry.fraction > RESUME_CEILING) continue;
+      if (entry.seconds < RESUME_MIN_SECONDS) continue;
       seen.add(entry.key);
       merged.push(entry);
     }

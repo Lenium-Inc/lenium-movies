@@ -103,7 +103,7 @@ export const EpisodeCard: React.FC<EpisodeCardProps> = ({
                 aria-label={`${resumePct}% watched`}
               >
                 <div
-                  className="h-full bg-gradient-to-r from-violet-500 to-cyan-400"
+                  className="h-full bg-gradient-to-r from-[#6d1526] via-[var(--cw-wine)] to-[var(--cw-wine-hot)]"
                   style={{ width: `${resumePct}%` }}
                 />
               </div>

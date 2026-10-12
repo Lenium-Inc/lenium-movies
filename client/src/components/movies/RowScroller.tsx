@@ -16,11 +16,17 @@ interface RowScrollerProps {
   label: string;
   /**
    * Pixels advanced per arrow press. Deliberately a fraction of the viewport
-   * rather than one card: one card at a time is unusable on a shelf of 20, and a
-   * full viewport jump hides whatever was under the cursor.
+   * rather than one card: one card at a time is unusable on a shelf of 20, and
+   * a full viewport jump hides whatever was under the cursor.
    */
   step?: number;
   className?: string;
+  /**
+   * Gradient source for the edge fades. Defaults to the page ground; a shelf
+   * that sits on a panel of its own (the velvet band) fades into *that*
+   * instead, or the hover fade paints the page colour over the panel.
+   */
+  fadeClass?: string;
 }
 
 /**
@@ -49,6 +55,7 @@ export function RowScroller({
   label,
   step,
   className = "",
+  fadeClass = "from-[var(--sv-base)]",
 }: RowScrollerProps) {
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
@@ -130,8 +137,8 @@ export function RowScroller({
 
   return (
     <div className="group/shelf relative">
-      <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-10 bg-gradient-to-r from-[var(--sv-base)] to-transparent opacity-0 transition-opacity duration-200 group-hover/shelf:opacity-100" />
-      <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-10 bg-gradient-to-l from-[var(--sv-base)] to-transparent opacity-0 transition-opacity duration-200 group-hover/shelf:opacity-100" />
+      <div className={`pointer-events-none absolute inset-y-0 left-0 z-10 w-10 bg-gradient-to-r ${fadeClass} to-transparent opacity-0 transition-opacity duration-200 group-hover/shelf:opacity-100`} />
+      <div className={`pointer-events-none absolute inset-y-0 right-0 z-10 w-10 bg-gradient-to-l ${fadeClass} to-transparent opacity-0 transition-opacity duration-200 group-hover/shelf:opacity-100`} />
 
       <button
         type="button"

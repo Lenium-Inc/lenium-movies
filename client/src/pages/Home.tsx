@@ -20,6 +20,7 @@ import { Details } from "@/components/movies/Details";
 import { Spotlight } from "@/components/movies/Spotlight";
 import { Top10Row } from "@/components/movies/Top10Row";
 import { MovieRow } from "@/components/movies/MovieRow";
+import { ContinueRow } from "@/components/movies/ContinueRow";
 import { SkeletonMovieGrid } from "@/components/movies/SkeletonMovieCard";
 import { InfiniteMovieGrid } from "@/components/movies/InfiniteMovieGrid";
 import { DiscoverDropdown } from "@/components/DiscoverDropdown";
@@ -409,7 +410,16 @@ export default function Home() {
                       request at all.
                     */}
                     {rows.map((row, index) =>
-                      row.kind === "top10" ? (
+                      row.kind === "continue" ? (
+                        // The viewer's own queue gets the velvet treatment:
+                        // wide resume cards that play on click, rather than the
+                        // poster grid every curator shelf below it uses.
+                        <ContinueRow
+                          key={row.title}
+                          title={row.title}
+                          items={row.items}
+                        />
+                      ) : row.kind === "top10" ? (
                         <Top10Row
                           key={row.title}
                           title={row.title}

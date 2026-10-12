@@ -182,7 +182,7 @@ export const MovieCard: React.FC<MovieCardProps> = ({
               aria-label={`${Math.round(movie.resume * 100)}% watched`}
             >
               <div
-                className="h-full bg-gradient-to-r from-violet-500 to-cyan-400"
+                className="h-full bg-gradient-to-r from-[#6d1526] via-[var(--cw-wine)] to-[var(--cw-wine-hot)]"
                 style={{
                   width: `${Math.min(100, Math.round(movie.resume * 100))}%`,
                 }}

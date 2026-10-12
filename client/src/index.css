@@ -714,6 +714,116 @@ input[type="search"]::-webkit-search-decoration {
   }
 }
 
+/* ==========================================================================
+   Continue Watching — the velvet panel.
+
+   The rest of the auditorium is lit; this one surface is fabric. A cinema's
+   navy velvet + wine curtain is the only place pigment (not emitted light)
+   lives, which is exactly what a shelf about *your own* paused screening
+   should feel like: the house lights dimmed, the curtain half drawn, your
+   seat number marked. Wine is reserved for resume semantics everywhere it
+   appears (progress rails, cue dot); navy is the ground. Violet and cyan
+   stay where they were — they are emitted light, these are cloth.
+   ========================================================================== */
+:root {
+  --cw-velvet: #0b1330;
+  --cw-velvet-deep: #080e24;
+  --cw-wine: #9e2438;
+  --cw-wine-hot: #c93451;
+}
+
+.cw-band {
+  background:
+    radial-gradient(120% 150% at 6% -30%, rgba(158, 36, 56, 0.17), transparent 45%),
+    linear-gradient(135deg, var(--cw-velvet) 0%, var(--cw-velvet-deep) 62%, var(--fs-base, #0b0c10) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 26px 64px -34px rgba(0, 0, 0, 0.95);
+}
+
+/* Wide cards: the shelf keeps row mechanics but borrows the hero's 16:9
+   frame — a mix of the two card languages the home page already speaks.
+   Deliberately *smaller* than the poster shelves: this row is the viewer's
+   own queue, a footnote that happens to be useful, not the main attraction. */
+.catalog-row-cw {
+  grid-auto-columns: 64vw;
+  gap: 10px;
+}
+@media (min-width: 640px) {
+  .catalog-row-cw {
+    grid-auto-columns: minmax(224px, 36vw);
+    gap: 12px;
+  }
+}
+@media (min-width: 1024px) {
+  .catalog-row-cw {
+    grid-auto-columns: 256px;
+    gap: 14px;
+  }
+}
+
+.cw-card {
+  transition: transform 320ms var(--ease-out), box-shadow 320ms var(--ease-out);
+}
+@media (hover: hover) {
+  .cw-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 18px 40px -22px rgba(0, 0, 0, 0.9);
+  }
+}
+
+/* The signature: the rail you stopped on. Fill scales from zero on mount so
+   the shelf reads as *measuring* your progress, and the cue dot — the little
+   light a stage manager marks a position with — sits on the leading edge. */
+@keyframes cw-rise {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.cw-card-rise {
+  animation: cw-rise 640ms var(--ease-out) both;
+}
+@keyframes cw-fill {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+.cw-fill {
+  transform-origin: left;
+  animation: cw-fill 900ms var(--ease-out) 260ms both;
+}
+@keyframes cw-cue {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(201, 52, 81, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(201, 52, 81, 0);
+  }
+}
+.cw-cue {
+  animation: cw-cue 2.6s ease-in-out 1.4s infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cw-card-rise,
+  .cw-fill,
+  .cw-cue {
+    animation: none;
+  }
+  .cw-fill {
+    transform: none;
+  }
+}
+
 /*
  * Off-screen catalogue cards skip layout, paint and image decoding. The feed
  * holds hundreds of 2:3 posters, and without this every one of them is laid

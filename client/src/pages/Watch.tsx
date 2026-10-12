@@ -32,7 +32,13 @@ import { formatRuntime } from "@/lib/format";
 import { titleUnavailable } from "@/lib/playbackCopy";
 import { WatchTVControls, type SeasonInfo } from "@/components/stream/WatchTVControls";
 import { useLocalSession } from "@/context/LocalSessionContext";
-import { getProgress, progressForTitle, recordWatch, subscribeStats } from "@/services/stats";
+import {
+  getProgress,
+  getProgressFraction,
+  progressForTitle,
+  recordWatch,
+  subscribeStats,
+} from "@/services/stats";
 import type {
   Movie,
   ResolvedStream as ResolvedStreamType,
@@ -612,6 +618,22 @@ export function WatchPage() {
     if (!movie) return "";
     const mediaType: "movie" | "tv" = isSeries ? "tv" : "movie";
     return `${movie.providerId}:${mediaType}:${season}:${episode}`;
+  }, [movie, isSeries, season, episode]);
+
+  /**
+   * Where this title was stopped, read from the store rather than the session:
+   * Continue Watching promises a resume, and a promise that only keeps while
+   * the tab stays open is a card that starts over. Capped by the same 60%
+   * ceiling the shelf uses -- past that the title counts as seen and a fresh
+   * open starts it at the beginning.
+   */
+  const storedResume = useMemo(() => {
+    if (!movie) return 0;
+    const mediaType: "movie" | "tv" = isSeries ? "tv" : "movie";
+    const id = String(movie.providerId ?? movie.id);
+    const key = progressKey(id, mediaType, season, episode);
+    if (getProgressFraction(key) > 0.6) return 0;
+    return Math.max(getProgress(key), getProgress(id));
   }, [movie, isSeries, season, episode]);
 
   const handleProgress = useCallback(
@@ -1282,7 +1304,7 @@ export function WatchPage() {
                           startAtSeconds={
                             progressCursorRef.current.key === progressIdentityKey
                               ? progressCursorRef.current.seconds
-                              : 0
+                              : storedResume
                           }
                           hideCloseButton
                         />
