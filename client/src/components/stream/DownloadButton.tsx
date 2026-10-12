@@ -23,13 +23,26 @@ interface DownloadTier {
 
 const QUALITY_TIERS = [
   { label: "360p (Data Saver)", maxHeight: 360 },
+  { label: "480p (SD)", maxHeight: 480 },
   { label: "720p (HD)", maxHeight: 720 },
   { label: "1080p (Full HD)", maxHeight: 1080 },
+  { label: "1440p (2K)", maxHeight: 1440 },
+  { label: "2160p (4K)", maxHeight: 2160 },
+  { label: "4320p (8K)", maxHeight: 4320 },
 ] as const;
+
+// The resolver's quality labels. "4K"/"8K" are ceiling names, not pixel
+// heights, and 2K is 1440p rather than 2×1080 — hence an explicit map.
+const K_LABEL_HEIGHT: Record<string, number> = {
+  "2K": 1440,
+  "4K": 2160,
+  "8K": 4320,
+};
 
 function heightOf(variant: StreamVariant): number {
   if (variant.height > 0) return variant.height;
-  if (variant.quality === "4K") return 2160;
+  const fromK = K_LABEL_HEIGHT[variant.quality.toUpperCase()];
+  if (fromK) return fromK;
   const match = /^(\d+)p$/.exec(variant.quality);
   return match ? Number(match[1]) : 0;
 }

@@ -78,3 +78,29 @@ export function sameLanguage(
   const b = baseLanguage(right);
   return a !== "" && a === b;
 }
+
+/**
+ * The language's own name for itself — "Español", "한국어", "Português" —
+ * for labelling a track the way its readers write it.
+ *
+ * Callers pass the source's label as the fallback: `Intl.DisplayNames` is
+ * the only API carrying this data and it exists on every browser we target,
+ * but a tag it cannot resolve (`""`, a made-up code) must degrade to the
+ * label we already had rather than render as a raw code or a blank row.
+ * The leading-character capitalisation is for languages whose names Intl
+ * returns sentence-case ("español"); scripts without case are untouched.
+ */
+export function endonym(
+  code: string | null | undefined,
+  fallback: string
+): string {
+  const base = baseLanguage(code);
+  if (!base) return fallback;
+  try {
+    const name = new Intl.DisplayNames([base], { type: "language" }).of(base);
+    if (!name || name === base) return fallback;
+    return name.charAt(0).toUpperCase() + name.slice(1);
+  } catch {
+    return fallback;
+  }
+}

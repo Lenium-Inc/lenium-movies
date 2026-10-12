@@ -21,17 +21,34 @@ describe("buildDownloadTiers", () => {
       variant("720p", 720, "hd.mp4"),
       variant("1080p", 1080, "full-hd.mp4"),
       variant("4K", 2160, "4k.mp4"),
+      variant("8K", 4320, "8k.mp4"),
     ]);
 
     expect(tiers.map(tier => tier.label)).toEqual([
       "360p (Data Saver)",
       "720p (HD)",
       "1080p (Full HD)",
+      "2160p (4K)",
+      "4320p (8K)",
     ]);
     expect(tiers.map(tier => tier.candidate.url)).toEqual([
       "https://archive.org/download/public-film/small.mp4",
       "https://archive.org/download/public-film/hd.mp4",
       "https://archive.org/download/public-film/full-hd.mp4",
+      "https://archive.org/download/public-film/4k.mp4",
+      "https://archive.org/download/public-film/8k.mp4",
+    ]);
+  });
+
+  it("derives height from K quality labels when height is missing", () => {
+    const tiers = buildDownloadTiers([
+      { ...variant("4K", 0, "uhd.mp4"), height: 0 },
+      { ...variant("8K", 0, "uhd8.mp4"), height: 0 },
+    ]);
+
+    expect(tiers.map(tier => tier.label)).toEqual([
+      "2160p (4K)",
+      "4320p (8K)",
     ]);
   });
 

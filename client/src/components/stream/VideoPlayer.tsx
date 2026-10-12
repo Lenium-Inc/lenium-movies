@@ -14,6 +14,7 @@ import {
   VolumeX,
   Maximize,
   ChevronDown,
+  Check,
   Captions,
   Globe,
   Upload,
@@ -26,7 +27,7 @@ import { formatPlayerTime } from "@/lib/format";
 // Type-only: the runtime value is loaded via dynamic import() in the stream
 // effect so hls.js stays out of the entry chunk; this import is erased.
 import type Hls from "hls.js";
-import { baseLanguage, sameLanguage } from "@/lib/language";
+import { baseLanguage, endonym, sameLanguage } from "@/lib/language";
 import { parseSubtitleFile } from "@/lib/subtitleFile";
 import { subtitleTrackUrl, type StreamSubtitle } from "@/services/api";
 
@@ -270,6 +271,30 @@ const QUALITY_ORDER = ["8K", "4K", "1080p", "720p", "480p", "360p", "Auto"] as c
 const RESUME_SAMPLE_SECONDS = 10;
 export type QualityOption = (typeof QUALITY_ORDER)[number];
 
+/**
+ * One visual language for the three control menus: a flat popover, not a
+ * card. No boxed header, rows flush against the panel, and the current
+ * choice marked by a right-aligned checkmark — the pattern video.js,
+ * media-captions, and every major streaming site have converged on.
+ */
+const MENU_PANEL_CLASS =
+  "absolute bottom-full right-0 z-50 mb-3 rounded-xl border border-white/10 bg-black/95 p-1.5 shadow-2xl backdrop-blur-xl";
+const MENU_HEADING_CLASS =
+  "px-3 pb-1 pt-1.5 text-[10px] font-bold uppercase tracking-[0.15em] text-white/40";
+const MENU_ROW_CLASS =
+  "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13px] transition-colors hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400";
+const MENU_CHECK_CLASS = "ml-auto h-4 w-4 shrink-0 text-violet-400";
+/** More subtitle rows than this earn a search field. */
+const SUBTITLE_SEARCH_THRESHOLD = 10;
+
+type SubtitleOption = {
+  key: string;
+  label: string;
+  lang?: string | null;
+  active: boolean;
+  onPick: () => void;
+};
+
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   streamUrl,
   title,
@@ -298,6 +323,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [qualityMenuOpen, setQualityMenuOpen] = useState<boolean>(false);
   const [subtitleMenuOpen, setSubtitleMenuOpen] = useState<boolean>(false);
   const [audioMenuOpen, setAudioMenuOpen] = useState<boolean>(false);
+  // Filter text for the subtitle menu's language list. Cleared on close so a
+  // fresh menu never opens already narrowed by last time's query.
+  const [subtitleSearch, setSubtitleSearch] = useState<string>("");
+  const closeSubtitleMenu = () => {
+    setSubtitleMenuOpen(false);
+    setSubtitleSearch("");
+  };
   const [currentQuality, setCurrentQuality] = useState<string>(initialQuality);
   const [hlsLevels, setHlsLevels] = useState<
     { quality: string; height: number }[]
@@ -1367,7 +1399,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * coherent: two independent "off" rows would let a viewer believe they had
    * turned subtitles off while the other mechanism still had a track on.
    */
-  const subtitleOptions = useMemo(
+  const subtitleOptions = useMemo<SubtitleOption[]>(
     () => [
       {
         key: "off",
@@ -1378,12 +1410,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       ...subtitleTracks.map(track => ({
         key: `file-${track.key}`,
         label: track.label,
+        lang: track.srcLang,
         active: currentSubtitles === track.srcLang,
         onPick: () => chooseExternalSubtitles(track.srcLang),
       })),
       ...hlsSubtitleTracks.map(track => ({
         key: `instream-${track.id}`,
         label: track.label,
+        lang: track.language ?? null,
         active: currentHlsSubtitle === track.id,
         onPick: () => chooseInStreamSubtitles(track.id),
       })),
@@ -1398,6 +1432,27 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       subtitleTracks,
     ]
   );
+
+  /**
+   * How a row reads: the language's own name for itself, with the source's
+   * label only when the tag cannot name itself. Two tracks sharing a display
+   * name stay distinguishable in search because the filter also matches the
+   * raw label and the code.
+   */
+  const subtitleRowLabel = (option: SubtitleOption) =>
+    option.lang ? endonym(option.lang, option.label) : option.label;
+
+  const visibleSubtitleOptions = subtitleSearch.trim()
+    ? subtitleOptions.filter(option => {
+        if (option.key === "off") return true;
+        const query = subtitleSearch.trim().toLowerCase();
+        return (
+          option.label.toLowerCase().includes(query) ||
+          (option.lang ?? "").toLowerCase().includes(query) ||
+          subtitleRowLabel(option).toLowerCase().includes(query)
+        );
+      })
+    : subtitleOptions;
 
   /**
    * Open on the viewer's language, once, before they have touched a switcher.
@@ -1602,19 +1657,55 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           toggleFullscreen();
           break;
         case "Escape":
+          // An open menu swallows the first Escape: dismissing the popup is
+          // the outcome the viewer asked for, and exiting fullscreen under
+          // it would yank the whole view while the menu is still on screen.
+          if (subtitleMenuOpen || audioMenuOpen || qualityMenuOpen) {
+            setSubtitleMenuOpen(false);
+            setSubtitleSearch("");
+            setAudioMenuOpen(false);
+            setQualityMenuOpen(false);
+            break;
+          }
           if (document.fullscreenElement) {
             document.exitFullscreen();
           }
           break;
       }
     },
-    [togglePlay, toggleMute, toggleFullscreen, duration]
+    [
+      togglePlay,
+      toggleMute,
+      toggleFullscreen,
+      duration,
+      subtitleMenuOpen,
+      audioMenuOpen,
+      qualityMenuOpen,
+    ]
   );
 
   useEffect(() => {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleKeyDown]);
+
+  // A menu that only closes on its own rows stays floating over the controls
+  // when the viewer clicks anywhere else, so clicks outside the player root
+  // dismiss all three.
+  useEffect(() => {
+    if (!subtitleMenuOpen && !audioMenuOpen && !qualityMenuOpen) return;
+    const handleOutside = (event: MouseEvent) => {
+      const root = playerRef.current;
+      if (root && event.target instanceof Node && !root.contains(event.target)) {
+        setSubtitleMenuOpen(false);
+        setSubtitleSearch("");
+        setAudioMenuOpen(false);
+        setQualityMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleOutside);
+    return () => document.removeEventListener("mousedown", handleOutside);
+  }, [subtitleMenuOpen, audioMenuOpen, qualityMenuOpen]);
 
   const preventContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -1807,7 +1898,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <div className="relative z-40">
               <button
                 onClick={() => {
-                  setSubtitleMenuOpen(!subtitleMenuOpen);
+                  if (subtitleMenuOpen) closeSubtitleMenu();
+                  else setSubtitleMenuOpen(true);
                   setQualityMenuOpen(false);
                   setAudioMenuOpen(false);
                 }}
@@ -1819,46 +1911,77 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 <Captions className="w-4 h-4" />
               </button>
               {subtitleMenuOpen && (
-                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-56 bg-zinc-900 border border-white/10 rounded-lg shadow-xl overflow-hidden py-1 z-50">
+                <div
+                  role="menu"
+                  aria-label="Subtitles"
+                  className={`${MENU_PANEL_CLASS} w-72`}
+                >
                   {/* Always shown, even when the only option is "Off": a
                       hidden menu reads as "this player has no subtitles",
                       which is wrong the moment a title carries one language —
                       and the viewer has no way to discover it. */}
-                  <div className="px-4 py-2 border-b border-white/10">
-                    <p className="text-xs font-semibold text-white/60 uppercase tracking-wider mb-2">
-                      Subtitles
-                    </p>
-                    <div className="space-y-1 max-h-56 overflow-y-auto">
-                      {subtitleOptions.map(option => (
-                        <button
-                          key={option.key}
-                          onClick={e => {
-                            e.stopPropagation();
-                            option.onPick();
-                            setSubtitleMenuOpen(false);
-                          }}
-                          className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors ${
-                            option.active ? "text-violet-500 font-bold" : "text-white"
-                          }`}
+                  <p className={MENU_HEADING_CLASS}>Subtitles</p>
+                  {subtitleOptions.length > SUBTITLE_SEARCH_THRESHOLD && (
+                    <input
+                      type="text"
+                      value={subtitleSearch}
+                      onChange={event => setSubtitleSearch(event.target.value)}
+                      placeholder="Search languages…"
+                      aria-label="Search subtitle languages"
+                      className="mb-1 w-full rounded-lg border border-white/10 bg-white/[0.06] px-3 py-2 text-xs text-white placeholder:text-white/35 focus:border-violet-500/60 focus:outline-none"
+                    />
+                  )}
+                  <div className="max-h-60 overflow-y-auto">
+                    {visibleSubtitleOptions.map(option => (
+                      <button
+                        key={option.key}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={option.active}
+                        onClick={e => {
+                          e.stopPropagation();
+                          option.onPick();
+                          closeSubtitleMenu();
+                        }}
+                        className={MENU_ROW_CLASS}
+                      >
+                        <span
+                          className={
+                            option.active
+                              ? "truncate font-semibold text-white"
+                              : "truncate text-white/85"
+                          }
                         >
-                          {option.label}
-                        </button>
-                      ))}
-                    </div>
+                          {subtitleRowLabel(option)}
+                        </span>
+                        <Check
+                          aria-hidden
+                          className={`${MENU_CHECK_CLASS} ${
+                            option.active ? "" : "invisible"
+                          }`}
+                        />
+                      </button>
+                    ))}
+                    {visibleSubtitleOptions.length === 0 && (
+                      <p className="px-3 py-2 text-xs text-white/45">
+                        No language matches “{subtitleSearch.trim()}”.
+                      </p>
+                    )}
                   </div>
-                  {/* The menu stays open on pick: the file dialog is modal
-                      anyway, and an inline error or a newly highlighted row is
-                      only useful if it is visible where the click happened. */}
-                  <div className="px-4 py-2">
+                  <div className="mt-1 border-t border-white/10 pt-1">
+                    {/* The menu stays open on pick: the file dialog is modal
+                        anyway, and an inline error or a newly highlighted row is
+                        only useful if it is visible where the click happened. */}
                     <button
+                      type="button"
                       onClick={e => {
                         e.stopPropagation();
                         fileInputRef.current?.click();
                       }}
-                      className="w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors flex items-center gap-2 text-white/70 hover:text-white"
+                      className={`${MENU_ROW_CLASS} text-white/70 hover:text-white`}
                     >
-                      <Upload className="w-3.5 h-3.5" />
-                      <span>Upload subtitle file…</span>
+                      <Upload className="h-4 w-4 shrink-0" />
+                      <span className="truncate">Upload subtitle file…</span>
                     </button>
                     <input
                       ref={fileInputRef}
@@ -1868,7 +1991,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       onChange={handleSubtitleFile}
                     />
                     {subtitleFileError && (
-                      <p className="text-[10px] leading-snug text-red-400 px-4 pt-1.5">
+                      <p className="px-3 pb-1 pt-1.5 text-[10px] leading-snug text-red-400">
                         {subtitleFileError}
                       </p>
                     )}
@@ -1886,7 +2009,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 <button
                   onClick={() => {
                     setAudioMenuOpen(!audioMenuOpen);
-                    setSubtitleMenuOpen(false);
+                    closeSubtitleMenu();
                     setQualityMenuOpen(false);
                   }}
                   className="h-8 w-8 grid place-items-center rounded-md bg-white/10 hover:bg-white/20 transition-all"
@@ -1897,31 +2020,44 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   <Globe className="w-4 h-4" />
                 </button>
                 {audioMenuOpen && (
-                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-52 bg-zinc-900 border border-white/10 rounded-lg shadow-xl overflow-hidden py-1 z-50">
-                    <div className="px-4 py-2">
-                      <p className="text-xs font-semibold text-white/60 uppercase tracking-wider mb-2">
-                        Audio Track
-                      </p>
-                      <div className="space-y-1 max-h-56 overflow-y-auto">
-                        {audioOptions.map(track => (
-                          <button
-                            key={track.id}
-                            onClick={e => {
-                              e.stopPropagation();
-                              chooseAudioTrack(track.id);
-                              setAudioMenuOpen(false);
-                            }}
-                            className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors flex items-center gap-2 ${
+                  <div
+                    role="menu"
+                    aria-label="Audio track"
+                    className={`${MENU_PANEL_CLASS} w-60`}
+                  >
+                    <p className={MENU_HEADING_CLASS}>Audio Track</p>
+                    <div className="max-h-60 overflow-y-auto">
+                      {audioOptions.map(track => (
+                        <button
+                          key={track.id}
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={currentAudio === track.id}
+                          onClick={e => {
+                            e.stopPropagation();
+                            chooseAudioTrack(track.id);
+                            setAudioMenuOpen(false);
+                          }}
+                          className={MENU_ROW_CLASS}
+                        >
+                          <Volume2Icon className="h-4 w-4 shrink-0 text-white/55" />
+                          <span
+                            className={
                               currentAudio === track.id
-                                ? "text-violet-500 font-bold"
-                                : "text-white"
-                            }`}
+                                ? "truncate font-semibold text-white"
+                                : "truncate text-white/85"
+                            }
                           >
-                            <Volume2Icon className="w-3 h-3" />
-                            <span>{track.label}</span>
-                          </button>
-                        ))}
-                      </div>
+                            {endonym(track.language, track.label)}
+                          </span>
+                          <Check
+                            aria-hidden
+                            className={`${MENU_CHECK_CLASS} ${
+                              currentAudio === track.id ? "" : "invisible"
+                            }`}
+                          />
+                        </button>
+                      ))}
                     </div>
                   </div>
                 )}
@@ -1936,7 +2072,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 <button
                   onClick={() => {
                     setQualityMenuOpen(!qualityMenuOpen);
-                    setSubtitleMenuOpen(false);
+                    closeSubtitleMenu();
                     setAudioMenuOpen(false);
                   }}
                   className="flex items-center gap-1 px-1 text-xs font-semibold tracking-wider text-white/70 hover:text-white transition-colors"
@@ -1952,35 +2088,67 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   />
                 </button>
                 {qualityMenuOpen && (
-                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-28 bg-zinc-900 border border-white/10 rounded-lg shadow-xl overflow-hidden py-1 z-50">
+                  <div
+                    role="menu"
+                    aria-label="Quality"
+                    className={`${MENU_PANEL_CLASS} w-40`}
+                  >
                     {qualityOptions.map(quality => (
                       <button
                         key={quality}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={activeQuality === quality}
                         onClick={e => {
                           e.stopPropagation();
                           switchQuality(quality);
+                          setQualityMenuOpen(false);
                         }}
-                        className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors ${
-                          activeQuality === quality
-                            ? "text-violet-500 font-bold"
-                            : "text-white"
-                        }`}
+                        className={MENU_ROW_CLASS}
                       >
-                        {quality}
+                        <span
+                          className={
+                            activeQuality === quality
+                              ? "truncate font-semibold text-white"
+                              : "truncate text-white/85"
+                          }
+                        >
+                          {quality}
+                        </span>
+                        <Check
+                          aria-hidden
+                          className={`${MENU_CHECK_CLASS} ${
+                            activeQuality === quality ? "" : "invisible"
+                          }`}
+                        />
                       </button>
                     ))}
                     <button
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={activeQuality === "Auto"}
                       onClick={e => {
                         e.stopPropagation();
                         switchQuality("Auto");
+                        setQualityMenuOpen(false);
                       }}
-                      className={`w-full text-left px-4 py-2 text-xs hover:bg-white/10 transition-colors ${
-                        activeQuality === "Auto"
-                          ? "text-violet-500 font-bold"
-                          : "text-white"
-                      }`}
+                      className={MENU_ROW_CLASS}
                     >
-                      Auto
+                      <span
+                        className={
+                          activeQuality === "Auto"
+                            ? "truncate font-semibold text-white"
+                            : "truncate text-white/85"
+                        }
+                      >
+                        Auto
+                      </span>
+                      <Check
+                        aria-hidden
+                        className={`${MENU_CHECK_CLASS} ${
+                          activeQuality === "Auto" ? "" : "invisible"
+                        }`}
+                      />
                     </button>
                   </div>
                 )}
