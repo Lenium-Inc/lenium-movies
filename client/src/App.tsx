@@ -1,9 +1,12 @@
 import { lazy, Suspense } from "react";
 import { Toaster } from "@/components/ui/sonner";
+import { toast } from "sonner";
 import NotFound from "@/pages/NotFound";
-import { Route, Switch } from "wouter";
+import { Route, Switch, useLocation } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
+import { useAuth } from "./context/AuthContext";
+import { useIdleLogout } from "./hooks/useIdleLogout";
 import Home from "./pages/Home";
 import { RouteSeo } from "./components/layout/RouteSeo";
 
@@ -31,6 +34,31 @@ function RouteFallback() {
   );
 }
 
+/**
+ * Ends an idle session and returns the viewer to the gate.
+ *
+ * Mounted inside the router so the redirect is a client navigation rather than a
+ * reload, and driven by the same `logout` the profile menu uses so the server
+ * token is revoked too. `useIdleLogout` itself bails when "keep me signed in" is
+ * set or a video is playing.
+ */
+function SessionGuard() {
+  const { user, logout } = useAuth();
+  const [, navigate] = useLocation();
+
+  useIdleLogout({
+    enabled: Boolean(user),
+    onIdle: () => {
+      void logout().finally(() => {
+        toast.message("Signed out after 10 minutes of inactivity");
+        navigate("/login");
+      });
+    },
+  });
+
+  return null;
+}
+
 function Router() {
   return (
     <>
@@ -42,6 +70,7 @@ function Router() {
         a search result.
       */}
       <RouteSeo />
+      <SessionGuard />
       <Suspense fallback={<RouteFallback />}>
         <Switch>
           <Route path="/" component={Home} />
