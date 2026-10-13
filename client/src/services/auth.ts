@@ -36,12 +36,34 @@ export interface RemoteHistoryItem {
 
 const TOKEN_KEY = "lenium_auth_token";
 const USER_KEY = "lenium_auth_user";
+// "Keep me signed in" is a preference, not a credential, so it deliberately
+// outlives `clearSession()`: an explicit sign-out should not silently un-tick a
+// box the viewer ticked last time.
+const KEEP_KEY = "lenium_auth_keep_signed_in";
 
 export function getToken(): string | null {
   try {
     return localStorage.getItem(TOKEN_KEY);
   } catch {
     return null;
+  }
+}
+
+/** Whether the viewer asked to stay signed in through idle periods. */
+export function getKeepSignedIn(): boolean {
+  try {
+    return localStorage.getItem(KEEP_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function setKeepSignedIn(value: boolean): void {
+  try {
+    if (value) localStorage.setItem(KEEP_KEY, "1");
+    else localStorage.removeItem(KEEP_KEY);
+  } catch {
+    /* storage unavailable */
   }
 }
 

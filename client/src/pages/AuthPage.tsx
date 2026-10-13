@@ -4,6 +4,7 @@ import { Link, useLocation } from "wouter";
 import { BrandLockup } from "@/components/brand/Brand";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/AuthContext";
+import { getKeepSignedIn } from "@/services/auth";
 import { fetchTrending, type StreamMovie } from "@/services/api";
 import { DEFAULT_POST_AUTH_PATH, nextPathFromSearch } from "@/lib/safeRedirect";
 import { tmdbImage } from "@/lib/tmdbImages";
@@ -118,6 +119,9 @@ export default function AuthPage({ mode }: AuthPageProps) {
   const [done, setDone] = useState(false);
   const [backdrop, setBackdrop] = useState<string | null>(null);
   const [code, setCode] = useState("00:00:00:00");
+  // Remembered across visits: a viewer who opted in last time should not have to
+  // re-tick it, and the preference outlives an explicit sign-out by design.
+  const [keepSignedIn, setKeepSignedIn] = useState(() => getKeepSignedIn());
 
   const isSignup = mode === "signup";
   // One value feeds both the rendered hint and the password's `aria-describedby`,
@@ -220,7 +224,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
     setCode("00:00:00:00");
     try {
       if (isSignup) {
-        await signup({ name: name.trim(), email, password });
+        await signup({ name: name.trim(), email, password }, { keepSignedIn });
         // A `?ref=` code in the invite link is redeemed after the account
         // exists, because a referral can only be recorded against a real
         // user id. Failing here must not block the sign-up itself, so the code
@@ -230,7 +234,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
           await apiReferralApply(referralCode).catch(() => {});
         }
       } else {
-        await login({ email, password });
+        await login({ email, password }, { keepSignedIn });
       }
       setDone(true);
       // Let the gate read as exposed before we cut away to the app.
@@ -583,6 +587,18 @@ export default function AuthPage({ mode }: AuthPageProps) {
                   </button>
                 </Field>
               </div>
+
+              {/* Opt-out of the ten-minute idle sign-out. Unchecked by default:
+                  a shared machine should not be kept signed in unless asked. */}
+              <label className="mt-4 flex cursor-pointer items-center gap-2.5 text-[13px] leading-none text-[var(--booth-dust)] transition-colors hover:text-white/85 sm:mt-5">
+                <input
+                  type="checkbox"
+                  checked={keepSignedIn}
+                  onChange={e => setKeepSignedIn(e.target.checked)}
+                  className="ln-focus-lamp h-4 w-4 shrink-0 cursor-pointer rounded border-white/25 bg-black/40 accent-[var(--lamp)]"
+                />
+                Keep me signed in
+              </label>
 
               {error && (
                 <p

@@ -12,6 +12,7 @@ import {
   apiSignup,
   clearSession,
   getStoredUser,
+  setKeepSignedIn,
   type ApiUser,
 } from "@/services/auth";
 
@@ -35,8 +36,14 @@ export interface User {
 export interface AuthContextType {
   user: User | null;
   isLoading: boolean;
-  login: (credentials: { email: string; password: string }) => Promise<void>;
-  signup: (input: { name: string; email: string; password: string }) => Promise<void>;
+  login: (
+    credentials: { email: string; password: string },
+    options?: { keepSignedIn?: boolean }
+  ) => Promise<void>;
+  signup: (
+    input: { name: string; email: string; password: string },
+    options?: { keepSignedIn?: boolean }
+  ) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -92,37 +99,51 @@ export function AuthProvider({ children }: AuthProviderProps) {
     };
   }, []);
 
-  const login = async (credentials: {
-    email: string;
-    password: string;
-  }): Promise<void> => {
+  const login = async (
+    credentials: {
+      email: string;
+      password: string;
+    },
+    options?: { keepSignedIn?: boolean }
+  ): Promise<void> => {
     setIsLoading(true);
     try {
       const payload = await apiLogin(credentials);
       setUser(toUser(payload.user));
+      setKeepSignedIn(options?.keepSignedIn ?? false);
     } finally {
       setIsLoading(false);
     }
   };
 
-  const signup = async (input: {
-    name: string;
-    email: string;
-    password: string;
-  }): Promise<void> => {
+  const signup = async (
+    input: {
+      name: string;
+      email: string;
+      password: string;
+    },
+    options?: { keepSignedIn?: boolean }
+  ): Promise<void> => {
     setIsLoading(true);
     try {
       const payload = await apiSignup(input);
       setUser(toUser(payload.user));
+      setKeepSignedIn(options?.keepSignedIn ?? false);
     } finally {
       setIsLoading(false);
     }
   };
 
   const logout = async (): Promise<void> => {
-    await apiLogout();
-    setUser(null);
-    clearSession();
+    // The local sign-out must not depend on the server answering: an idle
+    // auto-logout off a flaky connection still has to drop the viewer, so the
+    // token and user are cleared in `finally` whether or not the revoke lands.
+    try {
+      await apiLogout();
+    } finally {
+      setUser(null);
+      clearSession();
+    }
   };
 
   return (
