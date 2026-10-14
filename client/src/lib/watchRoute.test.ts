@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildWatchPath, resolveMediaType } from "./watchRoute";
+import {
+  buildTitlePath,
+  buildWatchPath,
+  resolveMediaType,
+} from "./watchRoute";
 
 describe("resolveMediaType", () => {
   it("prefers local metadata over a disagreeing resolver", () => {
@@ -66,5 +70,17 @@ describe("buildWatchPath", () => {
 
   it("defaults to a film when no options are given", () => {
     expect(buildWatchPath(22980)).toBe("/watch/22980");
+  });
+});
+
+describe("buildTitlePath", () => {
+  it("gives a film a bare path", () => {
+    expect(buildTitlePath(22980, "movie")).toBe("/title/22980");
+    expect(buildTitlePath("22980")).toBe("/title/22980");
+  });
+
+  it("carries the kind for a series, and only for a series", () => {
+    expect(buildTitlePath(1396, "tv")).toBe("/title/1396?type=tv");
+    expect(buildTitlePath(1396, "movie")).toBe("/title/1396");
   });
 });

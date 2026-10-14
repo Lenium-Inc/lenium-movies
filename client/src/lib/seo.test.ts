@@ -138,9 +138,21 @@ describe("title pages", () => {
   it("extracts the id from a watch path and nothing else", () => {
     expect(watchIdFromPath("/watch/603")).toBe("603");
     expect(watchIdFromPath("/watch/1396")).toBe("1396");
+    expect(watchIdFromPath("/title/603")).toBe("603");
     expect(watchIdFromPath("/")).toBeNull();
     expect(watchIdFromPath("/watch")).toBeNull();
+    expect(watchIdFromPath("/title")).toBeNull();
     expect(watchIdFromPath("/my-list")).toBeNull();
+  });
+
+  it("gives a title page the same head treatment as a watch path", () => {
+    const loading = pageSeo("/title/603");
+    expect(loading.indexable).toBe(false);
+
+    const seo = pageSeo("/title/603", { movie: matrix });
+    expect(seo.indexable).toBe(true);
+    expect(seo.title).toBe("The Matrix (1999) - Watch Free on Stream Vy");
+    expect(seo.path).toBe("/title/603");
   });
 
   it("stays noindex until the details have loaded", () => {

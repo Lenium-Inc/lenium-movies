@@ -197,9 +197,9 @@ export interface WatchSeoContext {
   year?: string | number | null;
 }
 
-/** The tmdb id in `/watch/:id`, or null if this is not a watch path. */
+/** The tmdb id in `/watch/:id` or `/title/:id`, or null if this is neither. */
 export function watchIdFromPath(path: string): string | null {
-  const match = /^\/watch\/([^/]+)$/.exec(path);
+  const match = /^\/(?:watch|title)\/([^/]+)$/.exec(path);
   return match ? decodeURIComponent(match[1]) : null;
 }
 
@@ -233,10 +233,11 @@ export function pageSeo(
   const watchId = watchIdFromPath(path);
 
   /*
-   * A watch page before its details have loaded has no title and no description,
-   * and inventing either would put a wrong string in a search result. So it stays
-   * noindex until the lookup lands, then becomes indexable. A crawler that runs
-   * JavaScript -- which Googlebot does -- sees the indexed version.
+   * A title or watch page before its details have loaded has no title and no
+   * description, and inventing either would put a wrong string in a search
+   * result. So it stays noindex until the lookup lands, then becomes
+   * indexable. A crawler that runs JavaScript -- which Googlebot does -- sees
+   * the indexed version.
    */
   if (watchId) {
     const movie = context.movie;

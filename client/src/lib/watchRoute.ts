@@ -44,3 +44,19 @@ export function buildWatchPath(
   const episode = opts.episode ?? 1;
   return `${base}?season=${season}&episode=${episode}&type=tv`;
 }
+
+/**
+ * Build the canonical title-page path -- the movie window as a URL.
+ *
+ * Same invariant as the watch route: a film never carries a query, and the
+ * kind rides as `type=tv` because a TMDB id means nothing without its media
+ * type. One builder so the page, the cards and the wall can never disagree
+ * about what a title's address is.
+ */
+export function buildTitlePath(
+  tmdbId: string | number,
+  mediaType: MediaType = "movie",
+): string {
+  const base = `/title/${tmdbId}`;
+  return mediaType === "tv" ? `${base}?type=tv` : base;
+}
