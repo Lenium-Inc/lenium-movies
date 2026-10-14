@@ -14,6 +14,7 @@ import type { Movie } from "./types";
 import { RemindMeButton } from "./RemindMeButton";
 import { formatRuntime } from "@/lib/format";
 import { tmdbImage } from "@/lib/tmdbImages";
+import { genreColor, withAlpha } from "@/lib/genreColors";
 import { absoluteUrl } from "@/lib/siteUrl";
 import { resolveTrailer } from "@/lib/tmdbTrailers";
 import { TrailerBrandingMask } from "@/components/stream/TrailerBrandingMask";
@@ -79,7 +80,7 @@ function watchLink(movie: Movie): string {
  * the genre tags cannot drift apart as they are added and removed.
  */
 const BADGE =
-  "px-2.5 py-1 rounded-md text-xs font-semibold bg-white/10 backdrop-blur-md " +
+  "px-2.5 py-1 rounded-md text-xs font-semibold bg-white/[0.08] backdrop-blur-md " +
   "border border-white/10 text-white/90";
 
 /**
@@ -206,7 +207,9 @@ export function Spotlight({
     return (list ?? []).slice(0, 3);
   }, [current]);
 
-  const rating = formatRating(current?.vote_average ?? current?.score);
+  const ratingValue = current?.vote_average ?? current?.score ?? 0;
+  const showRating = typeof ratingValue === "number" && ratingValue > 0;
+  const rating = showRating ? formatRating(ratingValue) : "";
   const upcoming = isUpcoming(current?.releaseDate);
   const countdownLabel = current?.releaseDate
     ? releaseCountdownLabel(current.releaseDate)
@@ -336,10 +339,11 @@ export function Spotlight({
           aria-hidden
           className="absolute inset-x-0 top-0 h-28 bg-[linear-gradient(180deg,rgba(0,0,0,0.55)_0%,transparent_100%)]"
         />
-        {/* A single cool counter-light, so the frame is not lit by one colour. */}
+        {/* A single counter-light, emitted by the artwork's own colour so the
+            frame is not lit by one fixed hue as the carousel turns. */}
         <div
           aria-hidden
-          className="absolute inset-0 bg-[radial-gradient(ellipse_55%_45%_at_88%_18%,rgba(139,92,246,0.16),transparent_68%)]"
+          className="absolute inset-0 bg-[radial-gradient(ellipse_55%_45%_at_88%_18%,var(--accent-soft),transparent_68%)]"
         />
         {/* Grain, per the artboard: kills gradient banding on wide displays
             without touching the artwork's own contrast. */}
@@ -461,7 +465,7 @@ export function Spotlight({
                       <span className={BADGE}>
                         <span className="inline-flex items-center gap-1 align-middle">
                           <Star
-                            className="h-3 w-3 fill-amber-400 text-amber-400"
+                            className="h-3 w-3 fill-[var(--star)] text-[var(--star)]"
                             aria-hidden
                           />
                           {rating}
@@ -473,11 +477,29 @@ export function Spotlight({
                         {formatRuntime(current.runtime)}
                       </span>
                     ) : null}
-                    {genres.map(genre => (
-                      <span key={genre} className={BADGE}>
-                        {genre}
-                      </span>
-                    ))}
+                    {genres.map(genre => {
+                      // The genre's own colour, as a tinted chip rather than a
+                      // neutral one: the row says what kind of film this is, and
+                      // a colour is the fastest way to say it.
+                      const colour = genreColor(genre);
+                      return (
+                        <span
+                          key={genre}
+                          className={BADGE}
+                          style={
+                            colour
+                              ? {
+                                  backgroundColor: withAlpha(colour, 0.18),
+                                  borderColor: withAlpha(colour, 0.6),
+                                  color: colour,
+                                }
+                              : undefined
+                          }
+                        >
+                          {genre}
+                        </span>
+                      );
+                    })}
                   </div>
 
                   {/* Hidden rather than truncated on the shortest screens: three
@@ -516,8 +538,8 @@ export function Spotlight({
                           className={
                             "inline-flex min-h-11 items-center gap-2 rounded-xl bg-white px-8 " +
                             "text-sm font-bold text-black transition " +
-                            "hover:bg-neutral-200 focus-visible:outline focus-visible:outline-2 " +
-                            "focus-visible:outline-offset-2 focus-visible:outline-white"
+                            "hover:bg-[var(--accent)] hover:text-white focus-visible:outline focus-visible:outline-2 " +
+                            "focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
                           }
                         >
                           <Play className="h-4 w-4 fill-current" aria-hidden />
@@ -584,7 +606,7 @@ export function Spotlight({
               className={
                 "group absolute left-2 top-1/2 z-20 grid h-12 w-12 -translate-y-1/2 " +
                 "place-items-center rounded-full border border-white/15 text-white " +
-                "transition bg-[rgba(7,9,15,0.35)] backdrop-blur-md hover:bg-[rgba(7,9,15,0.6)] " +
+                "transition bg-[rgba(7,9,15,0.35)] backdrop-blur-md hover:border-[var(--accent)] " +
                 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 " +
                 "focus-visible:outline-white/80 " +
                 "opacity-0 focus-visible:opacity-100 group-hover:opacity-100 " +
@@ -601,7 +623,7 @@ export function Spotlight({
               className={
                 "group absolute right-2 top-1/2 z-20 grid h-12 w-12 -translate-y-1/2 " +
                 "place-items-center rounded-full border border-white/15 text-white " +
-                "transition bg-[rgba(7,9,15,0.35)] backdrop-blur-md hover:bg-[rgba(7,9,15,0.6)] " +
+                "transition bg-[rgba(7,9,15,0.35)] backdrop-blur-md hover:border-[var(--accent)] " +
                 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 " +
                 "focus-visible:outline-white/80 " +
                 "opacity-0 focus-visible:opacity-100 group-hover:opacity-100 " +
@@ -621,7 +643,7 @@ export function Spotlight({
           >
             <div
               key={index}
-              className="fs-progress h-full bg-gradient-to-r from-violet-500 to-cyan-400"
+              className="fs-progress h-full bg-[var(--accent)]"
               style={{
                 animationDuration: `${rotateSeconds}s`,
                 animationPlayState: paused ? "paused" : "running",

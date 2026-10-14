@@ -43,7 +43,7 @@ function MyListLink({ className }: { className: string }) {
     <Link
       href="/my-list"
       className={`inline-flex items-center gap-1.5 transition ${className} ${
-        active ? "text-white" : "text-white/60 hover:text-white"
+        active ? "sv-nav-active text-white" : "text-white/60 hover:text-white"
       }`}
       aria-current={active ? "page" : undefined}
     >
@@ -110,7 +110,7 @@ export function Navbar({ view, onNavigate }: NavbarProps) {
                 type="button"
                 onClick={() => handleNavigate(link.id)}
                 className={`text-sm font-medium transition ${
-                  active ? "text-white" : "text-white/60 hover:text-white"
+                  active ? "sv-nav-active text-white" : "text-white/60 hover:text-white"
                 }`}
               >
                 {link.label}
@@ -163,7 +163,7 @@ export function Navbar({ view, onNavigate }: NavbarProps) {
                 onClick={() => handleNavigate(link.id)}
                 className={`text-sm font-medium transition ${
                   view === link.id
-                    ? "text-white"
+                    ? "sv-nav-active text-white"
                     : "text-white/60 hover:text-white"
                 }`}
               >

@@ -61,6 +61,10 @@ export const MovieCard: React.FC<MovieCardProps> = ({
 
   const releaseYear = movie.year ? movie.year.toString() : "";
   const voteAverage = formatRating(movie.vote_average ?? movie.score);
+  // A missing or zero rating is not shown at all: a chip reading "0.0" is not
+  // information, it is a bug rendered in amber.
+  const voteValue = movie.vote_average ?? movie.score;
+  const hasVote = typeof voteValue === "number" && voteValue > 0;
   const mediaType = movie.mediaType || "movie";
   const tmdbId = movie.providerId ? parseInt(movie.providerId, 10) : null;
   const hasPoster = Boolean(movie.poster) && !posterFailed;
@@ -94,14 +98,14 @@ export const MovieCard: React.FC<MovieCardProps> = ({
   return (
     <article
       className={
-        "movie-card group relative overflow-hidden rounded-xl border border-white/5 bg-zinc-900/50 transition-[border-color,box-shadow] duration-300 hover:border-white/20 hover:shadow-[0_16px_48px_rgba(0,0,0,0.55)]" +
+        "movie-card group relative overflow-hidden rounded-xl border border-white/5 bg-zinc-900/50 transition-[border-color,box-shadow] duration-300 hover:border-[var(--accent)] hover:shadow-[0_16px_48px_rgba(0,0,0,0.55)]" +
         // The score variant sits beside the artwork rather than under it, so the
         // tile becomes a row. `items-stretch` keeps the score column the full
         // height of the poster instead of collapsing to the text.
         (variant === "score" ? " flex items-stretch" : "")
       }
     >
-      {variant === "score" && voteAverage ? (
+      {variant === "score" && hasVote ? (
         /* Permanent, and beside the artwork rather than on top of it: a badge
            laid over the poster competes with the poster's own composition, and
            this number is meant to be read while scanning the shelf, not on hover. */
@@ -155,11 +159,11 @@ export const MovieCard: React.FC<MovieCardProps> = ({
             <h3 className="line-clamp-2 text-sm font-semibold leading-tight text-white drop-shadow-[0_1px_6px_rgba(0,0,0,0.9)]">
               {movie.title}
             </h3>
-            {releaseYear || voteAverage ? (
+            {releaseYear || hasVote ? (
               <div className="mt-1.5 flex items-center gap-2 text-[11px] font-medium text-zinc-300">
                 {releaseYear ? <span>{releaseYear}</span> : null}
-                {voteAverage ? (
-                  <span className="flex items-center gap-1 text-amber-400">
+                {hasVote ? (
+                  <span className="flex items-center gap-1 text-[var(--star)]">
                     <Star className="h-3 w-3 fill-current" />
                     {voteAverage}
                   </span>
@@ -213,8 +217,8 @@ export const MovieCard: React.FC<MovieCardProps> = ({
 
       {/* Rating badge - top right. Only in the poster variant; the score variant
           shows the same number permanently beside the poster. */}
-      {voteAverage && variant === "poster" ? (
-        <span className="movie-card-reveal absolute right-2 top-2 flex items-center gap-1 rounded-full bg-amber-400/90 px-2 py-1 text-[11px] font-black text-black shadow-lg">
+      {hasVote && variant === "poster" ? (
+        <span className="movie-card-reveal absolute right-2 top-2 flex items-center gap-1 rounded-full bg-[var(--star)] px-2 py-1 text-[11px] font-black text-black shadow-lg">
           <Star className="h-3 w-3 fill-current" />
           {voteAverage}
         </span>

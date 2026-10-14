@@ -36,6 +36,64 @@
   --sv-sub: #9aa0ae;
 }
 
+/* --------------------------------------------------------------------------
+   Stream Vy home palette.
+
+   `--bg` is the page ground and `--bg-raised` the lift beneath it; `--text`
+   and `--text-muted` are the only two type colours. `--brand` is the single
+   purple, reserved for the sign-in action and focus rings; `--accent` is
+   emitted by the featured artwork and drives the hero glow, the carousel
+   progress, the active nav rule and the card hover ring. Registered as
+   `<color>` so a change of featured title cross-fades the whole set in 600ms
+   instead of snapping.
+   -------------------------------------------------------------------------- */
+@property --accent {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #c23b2e;
+}
+@property --accent-soft {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: rgba(194, 59, 46, 0.18);
+}
+
+:root {
+  --bg: #0f0e11;
+  --bg-raised: #17111f;
+  --text: #f4f2f0;
+  --text-muted: #b9b4bf;
+  --brand: #6d3be8;
+  --accent: #c23b2e;
+  --accent-soft: rgba(194, 59, 46, 0.18);
+  --star: #f5b942;
+}
+
+/* The element that carries the sampled accent. Kept on the home root so every
+   descendant reading `--accent` inherits the in-flight value as it interpolates,
+   rather than each consumer needing a transition of its own. */
+.sv-accent-scope {
+  transition:
+    --accent 600ms var(--ease-out),
+    --accent-soft 600ms var(--ease-out);
+}
+
+/* The active destination rule. Colour alone was the header's only indicator;
+   drawn as a pseudo-element so no box changes size. */
+.sv-nav-active {
+  position: relative;
+}
+.sv-nav-active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -6px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
 /* Theme palettes — the whole shell reads from these custom properties. */
 :root,
 :root[data-theme="void"] {

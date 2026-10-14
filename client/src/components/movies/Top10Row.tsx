@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Star } from "lucide-react";
 import { ErrorBoundary, ErrorFallback } from "@/components/ErrorBoundary";
+import { genreColor } from "@/lib/genreColors";
 import { MovieCard } from "./MovieCard";
 import { RowScroller } from "./RowScroller";
 import type { Movie } from "./types";
@@ -121,9 +122,16 @@ function RankedItem({
           </h3>
           <p className="mt-1 flex items-center gap-2 text-[10px] font-medium text-zinc-500">
             {movie.year ? <span>{movie.year}</span> : null}
-            {movie.genre?.[0] ? <span>{movie.genre[0]}</span> : null}
-            {score != null ? (
-              <span className="flex items-center gap-0.5 text-amber-400">
+            {movie.genre?.[0] ? (
+              <span
+                className="font-semibold"
+                style={{ color: genreColor(movie.genre[0]) ?? undefined }}
+              >
+                {movie.genre[0]}
+              </span>
+            ) : null}
+            {score != null && score > 0 ? (
+              <span className="flex items-center gap-0.5 text-[var(--star)]">
                 <Star className="h-2.5 w-2.5 fill-current" />
                 {score.toFixed(1)}
               </span>

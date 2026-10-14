@@ -57,7 +57,7 @@ export const EpisodeCard: React.FC<EpisodeCardProps> = ({
         <button
           type="button"
           onClick={onPlay}
-          className="block w-full cursor-pointer overflow-hidden rounded-xl border border-white/5 bg-zinc-900/50 text-left transition-[border-color,transform] duration-300 hover:-translate-y-0.5 hover:border-white/20"
+          className="block w-full cursor-pointer overflow-hidden rounded-xl border border-white/5 bg-zinc-900/50 text-left transition-[border-color,transform] duration-300 hover:-translate-y-0.5 hover:border-[var(--accent)]"
           aria-label={`Play ${showName} season ${episode.season} episode ${episode.number}, ${episode.title}`}
         >
           <div className="relative aspect-video w-full overflow-hidden bg-zinc-800">
@@ -86,8 +86,8 @@ export const EpisodeCard: React.FC<EpisodeCardProps> = ({
               S{episode.season} · E{episode.number}
             </span>
 
-            {episode.vote_average ? (
-              <span className="absolute right-2 top-2 flex items-center gap-1 rounded-full bg-amber-400/90 px-1.5 py-0.5 text-[10px] font-black text-black">
+            {episode.vote_average != null && episode.vote_average > 0 ? (
+              <span className="absolute right-2 top-2 flex items-center gap-1 rounded-full bg-[var(--star)] px-1.5 py-0.5 text-[10px] font-black text-black">
                 <Star className="h-2.5 w-2.5 fill-current" />
                 {episode.vote_average.toFixed(1)}
               </span>
