@@ -12,9 +12,10 @@ async function loadMeta() {
  * which walks every provider chain behind a headless browser -- tens of
  * seconds to learn a director's name, and a queue every real Play click sat
  * behind. `/api/movies/meta` answers the same record plus the neighbours
- * wall from one cached TMDB call. These tests pin the contract: one POST,
- * the movie mapped onto the catalog's `Movie`, the wall kept as compact
- * picks, and an unanswered id reported as `null` rather than thrown.
+ * wall from one cached TMDB call. These tests pin the contract: one GET with
+ * the id on the query string (no JSON body, so no CORS preflight), the movie
+ * mapped onto the catalog's `Movie`, the wall kept as compact picks, and an
+ * unanswered id reported as `null` rather than thrown.
  */
 describe("fetchMovieMeta", () => {
   beforeEach(() => {
@@ -38,7 +39,7 @@ describe("fetchMovieMeta", () => {
     return spy;
   }
 
-  it("posts the pre-v1 alias body and maps record and wall", async () => {
+  it("asks with a GET query string and maps record and wall", async () => {
     const { fetchMovieMeta } = await loadMeta();
     const spy = mockJsonOnce({
       success: true,
@@ -81,9 +82,9 @@ describe("fetchMovieMeta", () => {
 
     expect(spy).toHaveBeenCalledTimes(1);
     const [url, init] = spy.mock.calls[0];
-    expect(url).toBe("https://backend.test/api/movies/meta");
-    expect(init.method).toBe("POST");
-    expect(JSON.parse(init.body)).toEqual({ id: "1396", media_type: "tv" });
+    expect(url).toBe("https://backend.test/api/movies/meta?id=1396&media_type=tv");
+    expect(init.method).toBe("GET");
+    expect(init.body).toBeUndefined();
 
     expect(meta).not.toBeNull();
     const { movie, similar } = meta!;
@@ -181,7 +182,7 @@ describe("fetchMovieDetails", () => {
     const movie = await fetchMovieDetails("60059", "movie");
 
     expect(spy.mock.calls[0][0]).toBe(
-      "https://backend.test/api/movies/meta"
+      "https://backend.test/api/movies/meta?id=60059&media_type=movie"
     );
     expect(movie?.title).toBe("Better Call Saul");
   });

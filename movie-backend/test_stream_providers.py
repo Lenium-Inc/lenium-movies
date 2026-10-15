@@ -206,12 +206,17 @@ def test_manifest_win_appends_the_archive_as_a_downloadable_source():
     _assert_only_handles(resolution)
 
 
-def test_progressive_extract_never_asks_the_archive():
-    """A savable provider file ends the walk: no second lookup, no latency."""
-    called = []
+def test_progressive_extract_win_never_waits_on_the_archive():
+    """A savable provider file ends the walk: no waiting, no appended archive.
 
-    def _must_not_run(*args, **kwargs):
-        called.append(args)
+    The archive tier now runs concurrently with the extract tier (its lookup
+    is cached and per-title-serialised, so it costs no extra scrape on a warm
+    title), which means it *may* have been consulted -- but never on this
+    answer's critical path and never in its payload. A progressive provider
+    file is playable and downloadable on its own, and it must ship alone the
+    moment the extract tier hands it over.
+    """
+    def _archive_hit(*args, **kwargs):
         return {"streams": [{"url": "https://archive.org/download/x/f.mp4"}]}
 
     original = _stub_extract(
@@ -219,13 +224,48 @@ def test_progressive_extract_never_asks_the_archive():
     )
     try:
         resolution = stream_providers.resolve(
-            _must_not_run, tmdb_id=603, media_type="movie", title="The Matrix"
+            _archive_hit, tmdb_id=603, media_type="movie", title="The Matrix"
         )
     finally:
         _restore(original)
     assert resolution.ok and resolution.provider == "stub"
-    assert called == [], "archive consulted behind a progressive extract win"
-    assert [a["tier"] for a in resolution.attempts] == ["extract"], resolution.attempts
+    assert len(resolution.streams) == 1, resolution.streams
+    assert resolution.streams[0].get("format") == "mp4", resolution.streams
+    # Walk order holds whatever raced: extract first, archive only after it.
+    tiers = [a["tier"] for a in resolution.attempts]
+    assert tiers[0] == "extract" and all(t == "archive" for t in tiers[1:]), tiers
+
+
+def test_tiers_run_concurrently_not_in_series():
+    """The walk costs the faster tier, not the sum of both.
+
+    Serially this takes 2s (1s extract + 1s archive); concurrently it takes
+    ~1s. That difference *is* the latency fix: on a title neither tier can
+    serve, the old order made the viewer pay the browser render and then the
+    catalog scrape before hearing "unavailable".
+    """
+    import time
+
+    def _slow_extract(*args, **kwargs):
+        time.sleep(1.0)
+        return None
+
+    def _slow_direct(*args, **kwargs):
+        time.sleep(1.0)
+        return {"streams": [{"url": "https://archive.org/download/x/f.mp4"}]}
+
+    original = extractors.extract_chain
+    extractors.extract_chain = _slow_extract
+    try:
+        started = time.monotonic()
+        resolution = stream_providers.resolve(
+            _slow_direct, tmdb_id=603, media_type="movie", title="The Matrix"
+        )
+        elapsed = time.monotonic() - started
+    finally:
+        extractors.extract_chain = original
+    assert resolution.ok and resolution.provider == "archive", resolution.attempts
+    assert elapsed < 1.8, f"the tiers ran in series: {elapsed:.2f}s"
 
 
 def test_extract_false_skips_the_browser_entirely():

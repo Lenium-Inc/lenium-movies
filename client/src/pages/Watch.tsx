@@ -236,6 +236,11 @@ export function WatchPage() {
   const resolvingRef = useRef(false);
 
   const resolveCacheRef = useRef<Map<string, ResolvedStream>>(new Map());
+  // The in-flight walk behind each cache key. The metadata effect and the
+  // auto-resolve trigger below can ask for the same title at the same moment
+  // (the prewarm starts before the metadata has landed), and two concurrent
+  // walks would double the backend's headless-browser work for one answer.
+  const resolveInflightRef = useRef<Map<string, Promise<ResolvedStream>>>(new Map());
 
   const { isInMyList, toggleMyList, addToHistory } = useLocalSession();
   const { user: authUser } = useAuth();
@@ -347,8 +352,7 @@ export function WatchPage() {
         episode?: number;
         tmdbId?: string;
         mediaType?: "movie" | "tv";
-      },
-      attempt = 1
+      }
     ): Promise<ResolvedStream> => {
       // The kind belongs in the key. A movie and a series can share a TMDB id
       // namespace, and caching on the id alone lets a film's entry satisfy a
@@ -356,21 +360,58 @@ export function WatchPage() {
       const cacheKey = `${options?.mediaType ?? "movie"}:${options?.tmdbId ?? title}`;
       const cached = resolveCacheRef.current.get(cacheKey);
       if (cached) return cached;
+      const inflight = resolveInflightRef.current.get(cacheKey);
+      if (inflight) return inflight;
 
+      // Retries live inside the one shared promise, not in a recursion through
+      // this callback: a recursion would re-enter with the same cache key and
+      // find its own in-flight entry waiting, and wait on itself forever. Every
+      // caller that joins while a walk is running rides it to whatever the
+      // retry loop finally settles on.
+      const pending = (async () => {
+        for (let attempt = 1; ; attempt++) {
+          try {
+            const stream = await resolveStream(title, year, options);
+            resolveCacheRef.current.set(cacheKey, stream);
+            return stream;
+          } catch (error) {
+            const playbackError = classifyError(error);
+            if (!playbackError.recoverable || attempt >= MAX_RETRY_ATTEMPTS) throw error;
+            const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+            await new Promise(resolve => setTimeout(resolve, delay));
+          }
+        }
+      })();
+      resolveInflightRef.current.set(cacheKey, pending);
       try {
-        const stream = await resolveStream(title, year, options);
-        resolveCacheRef.current.set(cacheKey, stream);
-        return stream;
-      } catch (error) {
-        const playbackError = classifyError(error);
-        if (!playbackError.recoverable || attempt >= MAX_RETRY_ATTEMPTS) throw error;
-        const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
-        await new Promise(resolve => setTimeout(resolve, delay));
-        return resolveWithRetry(title, year, options, attempt + 1);
+        return await pending;
+      } finally {
+        // Only on settle: a success has already landed in the cache above, and
+        // a failure must leave the key free for the next attempt.
+        resolveInflightRef.current.delete(cacheKey);
       }
     },
     []
   );
+
+  // Resolve in parallel with the metadata, not behind it. The auto-resolve
+  // trigger below is keyed on `movie`, which only exists once the metadata
+  // fetch answers -- so the page ran the two in series: a synopsis first, then
+  // the provider walk, although `_init_inputs` accepts a bare TMDB id and
+  // neither answer needs the other. Starting here puts the walk on the wire
+  // during the metadata round trip instead of after it (and during the same
+  // backend cold start, when the instance is waking for both anyway). A
+  // failure is swallowed on purpose: this is a warm-up, and the trigger below
+  // is what owns retries, error UI, taste recording, and playback.
+  useEffect(() => {
+    if (!tmdbId) return;
+    void resolveWithRetry("", undefined, {
+      tmdbId,
+      mediaType: urlType === "tv" ? "tv" : "movie",
+    }).catch(() => {
+      /* the auto-resolve reports this if the viewer actually plays */
+    });
+  }, [tmdbId, urlType, resolveWithRetry]);
 
   const resolveAndPlay = useCallback(
     async (targetSeason: number, targetEpisode: number) => {
@@ -1022,37 +1063,56 @@ export function WatchPage() {
       return;
     }
     let active = true;
-    const seed = new Set(seedGenres.map(g => g.toLowerCase()));
-    Promise.allSettled(
-      seedGenres.map(genre =>
-        fetchDiscover({ media_type: isSeries ? "tv" : "movie", genre, per_page: 12 })
-      )
-    ).then(results => {
-      if (!active) return;
-      const currentKey = String(movie.providerId ?? movie.id);
-      const seen = new Set<string>();
-      const merged: CatalogItem[] = [];
-      for (const result of results) {
-        if (result.status !== "fulfilled") continue;
-        for (const item of result.value.items) {
-          const key = String(item.tmdb_id ?? item.id);
-          if (key === currentKey || seen.has(key)) continue;
-          seen.add(key);
-          merged.push(item);
+    // The shelf lives under a tab that is not open on arrival, but it used to
+    // fan out three discover calls the moment the metadata landed -- on the
+    // same backend that is mid-way through the provider walk that decides
+    // whether anything plays. Defer to the browser's idle queue so the walk
+    // owns the connection first; the 4s timeout keeps a never-idle tab from
+    // never loading the wall.
+    let idleHandle: number | null = null;
+    let fallbackHandle: ReturnType<typeof setTimeout> | null = null;
+    const load = () => {
+      const seed = new Set(seedGenres.map(g => g.toLowerCase()));
+      Promise.allSettled(
+        seedGenres.map(genre =>
+          fetchDiscover({ media_type: isSeries ? "tv" : "movie", genre, per_page: 12 })
+        )
+      ).then(results => {
+        if (!active) return;
+        const currentKey = String(movie.providerId ?? movie.id);
+        const seen = new Set<string>();
+        const merged: CatalogItem[] = [];
+        for (const result of results) {
+          if (result.status !== "fulfilled") continue;
+          for (const item of result.value.items) {
+            const key = String(item.tmdb_id ?? item.id);
+            if (key === currentKey || seen.has(key)) continue;
+            seen.add(key);
+            merged.push(item);
+          }
         }
-      }
-      const overlap = (item: CatalogItem) =>
-        (item.genres ?? []).reduce(
-          (count, g) => (seed.has(g.toLowerCase()) ? count + 1 : count),
-          0
+        const overlap = (item: CatalogItem) =>
+          (item.genres ?? []).reduce(
+            (count, g) => (seed.has(g.toLowerCase()) ? count + 1 : count),
+            0
+          );
+        merged.sort(
+          (a, b) => overlap(b) - overlap(a) || (b.popularity ?? 0) - (a.popularity ?? 0)
         );
-      merged.sort(
-        (a, b) => overlap(b) - overlap(a) || (b.popularity ?? 0) - (a.popularity ?? 0)
-      );
-      setSimilar(merged.slice(0, 8));
-    });
+        setSimilar(merged.slice(0, 8));
+      });
+    };
+    if (typeof window.requestIdleCallback === "function") {
+      idleHandle = window.requestIdleCallback(load, { timeout: 4000 });
+    } else {
+      fallbackHandle = setTimeout(load, 2000);
+    }
     return () => {
       active = false;
+      if (idleHandle !== null && typeof window.cancelIdleCallback === "function") {
+        window.cancelIdleCallback(idleHandle);
+      }
+      if (fallbackHandle !== null) clearTimeout(fallbackHandle);
     };
   }, [movie?.id, movie?.providerId, isSeries, genreKey]);
 
@@ -1091,7 +1151,10 @@ export function WatchPage() {
   }
 
   const streamPoster = movie.backdrop
-    ? getImageUrl(movie.backdrop, "original")
+    // w1280, not original: this sits in the player column (and as the
+    // VideoPlayer's poster), where the 1920px original (~1MB) buys nothing
+    // over TMDB's 1280px rendition on any screen that can show it.
+    ? getImageUrl(movie.backdrop, "w1280")
     : movie.poster
       ? getImageUrl(movie.poster, "w780")
       : "";

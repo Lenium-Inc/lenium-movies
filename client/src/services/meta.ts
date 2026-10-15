@@ -179,10 +179,13 @@ export async function fetchMovieMeta(
   try {
     let response: Response | undefined;
     for (let attempt = 0; attempt < 2; attempt++) {
-      response = await fetch(apiUrl("/api/movies/meta"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: tmdbId, media_type: kind }),
+      // GET with the fields on the query string: the route accepts both
+      // shapes, and without a JSON body there is no CORS preflight -- which on
+      // a watch-page open was a full extra round trip to the backend before
+      // the metadata call itself could start.
+      const query = new URLSearchParams({ id: tmdbId, media_type: kind });
+      response = await fetch(apiUrl(`/api/movies/meta?${query.toString()}`), {
+        method: "GET",
         signal: controller.signal,
       });
       if (response.ok || !isWorthRetrying(response.status)) break;

@@ -189,6 +189,12 @@
     <link rel="dns-prefetch" href="//image.tmdb.org" />
     <link rel="preconnect" href="https://image.tmdb.org" />
 
+    <!-- The API is on its own origin. Without the handshake warmed up here,
+         the first metadata call of a visit spends ~200-300ms on TCP+TLS before
+         a byte of it can move. `crossorigin` so the connection lands in the
+         CORS pool that the page's fetches actually reuse. -->
+    <link rel="preconnect" href="https://vy-e721.onrender.com" crossorigin />
+
     <!--
       Fonts, as <link> tags instead of a CSS @import.
 

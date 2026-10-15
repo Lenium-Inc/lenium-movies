@@ -620,23 +620,23 @@ export async function resolveStream(
   year?: number | null,
   options?: StreamResolveOptions
 ): Promise<ResolvedStream> {
-  const body: Record<string, unknown> = year ? { title, year } : { title };
+  const params = new URLSearchParams();
+  params.set("title", title);
+  if (year) params.set("year", String(year));
   // Always send the media kind, even when it is the default. The backend falls
   // back to `"movie"` on an absent field, and a series resolved as a film is a
   // lookup in the wrong catalog -- the title matches, the answer is "not found".
-  body.media_type = options?.mediaType ?? "movie";
-  if (options) {
-    if (options.tmdbId) body.id = options.tmdbId;
-    if (options.season) body.season = options.season;
-    if (options.episode) body.episode = options.episode;
-  }
+  params.set("media_type", options?.mediaType ?? "movie");
+  if (options?.tmdbId) params.set("id", options.tmdbId);
+  if (options?.season) params.set("season", String(options.season));
+  if (options?.episode) params.set("episode", String(options.episode));
+  // GET, not POST: a JSON body trips a CORS preflight, and the preflight is a
+  // full extra round trip to Render before the resolve even starts. The route
+  // reads the same fields off the query string (`_init_inputs`), and the
+  // response carries `no-store` because it is full of per-request handles.
   const response = await fetchWithTimeout(
-    `${MOVIE_API_BASE_URL}/api/movies/resolve`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    },
+    `${MOVIE_API_BASE_URL}/api/movies/resolve?${params.toString()}`,
+    { method: "GET" },
     MOVIE_RESOLVE_TIMEOUT_MS
   );
   if (response.status === 404) throw new StreamNotFoundError(title);
@@ -760,16 +760,20 @@ function isGetStreamPayload(value: unknown): value is {
 export const STREAM_RESOLVE_TIMEOUT_MS = 30_000;
 
 /**
- * Budget for `/api/movies/resolve`. This endpoint does more than the init
- * leg the player polls:
- * on a catalog miss it can scrape Archive.org synchronously for up to five
- * candidate identifiers, each a 30s x 2 metadata fetch plus a 25s stream probe.
- * It was previously called with a bare `fetch` and no timeout at all, so a slow
- * scrape left the watch page on a spinner with no error and no way to cancel.
- * 45s leaves room for the metadata lookup plus a cold start while still
- * guaranteeing the client stops waiting.
+ * Budget for `/api/movies/resolve`.
+ *
+ * The endpoint bounds itself: the extract chain and the archive lookup run
+ * concurrently under one server-side tier budget (`RESOLVE_TIER_BUDGET_SECONDS`,
+ * 12s by default), so a warm answer -- stream or honest miss -- lands in
+ * ~13s at the outside. What the client timeout still has to cover is the
+ * instance that has scaled to zero: a cold Render boot eats 15-20s before the
+ * request reaches Python at all, and a timeout shorter than that would abort
+ * every first visit of the day. 25s clears boot + budget while still cutting
+ * a genuinely hung request roughly in half compared to the old 45s, and a
+ * timeout thrown here is classified recoverable, so the cold-start case is
+ * retried warm instead of surfacing as "unavailable".
  */
-export const MOVIE_RESOLVE_TIMEOUT_MS = 45_000;
+export const MOVIE_RESOLVE_TIMEOUT_MS = 25_000;
 
 /**
  * Per-provider diagnostics when this response means "every provider failed",

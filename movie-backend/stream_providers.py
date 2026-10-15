@@ -18,6 +18,8 @@ the browser entirely and resolve archive-only.
 from __future__ import annotations
 
 import os
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import requests
@@ -37,6 +39,12 @@ MIN_FEATURE_MIN = float(os.getenv("STREAM_MIN_FEATURE_MIN", "15"))
 #: extract tier runs by default. Opting out is for a box with no Chrome, or
 #: for measuring the archive tier on its own.
 EXTRACT_OPT_IN = os.getenv("STREAM_EXTRACT", "1").lower() not in ("0", "false", "no")
+#: Wall clock for the tier pair. The two tiers run at once, so the walk costs
+#: the *faster* tier rather than the sum -- on a title neither could serve, the
+#: serial version made the viewer pay the browser render *and* the catalog
+#: scrape (~23s observed) to hear "unavailable". Defaults to the extract chain
+#: budget so `EXTRACTOR_BUDGET_SECONDS` stays the one knob.
+TIER_BUDGET = float(os.getenv("RESOLVE_TIER_BUDGET_SECONDS", extractors.BUDGET))
 
 
 @dataclass
@@ -183,6 +191,21 @@ def _archive_tier(direct_fetcher, title, year, refresh, runtime, attempts):
     return Resolution(True, "archive", streams, subs, src.get("referer", ""), attempts)
 
 
+def _settle(future, deadline: float):
+    """The future's value if it lands before `deadline`, else `None` (a miss).
+
+    A tier that overruns is abandoned, not cancelled: it finishes on its own
+    and writes its cache (the extract chain's `MISS_TTL`, the archive's own),
+    so the next viewer of the same title pays nothing for this one's
+    impatience. An exception escaping a tier is a miss by the same rule the
+    per-tier `try` blocks apply -- one broken provider must not 500 the walk.
+    """
+    try:
+        return future.result(timeout=max(0.0, deadline - time.monotonic()))
+    except Exception:  # noqa: BLE001 - overrun or a raising tier: both are misses
+        return None
+
+
 def resolve(
     direct_fetcher,
     tmdb_id,
@@ -197,42 +220,74 @@ def resolve(
 ) -> Resolution:
     """Return the first tier that yields playable streams, in priority order.
 
-    Extract first, because it is the only tier that can reach a modern film.
-    Archive follows: it covers the titles the provider does not carry, and it
-    costs a network round trip rather than a browser render, so running it
-    after a miss is cheap. Passing `extract=False` skips the browser, which is
-    what a box without Chrome -- or a measurement of the archive tier alone --
-    needs.
+    Extract wins whenever it answers, because it is the only tier that can
+    reach a modern film; the archive is the answer for titles the provider
+    does not carry. The two run *concurrently* under one `TIER_BUDGET` so the
+    walk costs the faster tier instead of the sum -- the archive's result is
+    already in hand when the extract tier misses, and already cached when the
+    extract tier wins with a manifest that needs a supplement. Passing
+    `extract=False` skips the browser, which is what a box without Chrome --
+    or a measurement of the archive tier alone -- needs.
 
     One supplement breaks the short-circuit. A provider answer can be
     playable-but-not-savable: HLS and DASH are manifests, and saving one as a
     single file would need a server-side remux this host does not do, so the
     download route refuses them by design. When the extract tier wins with
-    manifest-only streams, the archive is asked a second time -- as a
-    supplement, not a fallback -- and its progressive file, if it has one,
-    rides along after the manifests. The play path is unchanged (the manifest
-    stays first), but the client's download button gains a real file instead
-    of an honest dead end. The lookup is the cached, per-title-serialised one,
-    so the extra ask costs seconds only on a cold title.
+    manifest-only streams, the archive's concurrent answer -- a progressive
+    file, if it has one -- rides along after the manifests. The play path is
+    unchanged (the manifest stays first), but the client's download button
+    gains a real file instead of an honest dead end.
     """
     attempts: list[dict] = []
-    tiers = ["extract", "archive"] if extract else ["archive"]
 
-    for tier in tiers:
-        if tier == "extract":
-            res = _extract_tier(tmdb_id, media_type, season, episode, title, attempts)
-        else:
-            res = _archive_tier(direct_fetcher, title, year, refresh, runtime, attempts)
-        if not res:
-            continue
-        if tier == "extract" and all(
-            str(s.get("format") or "") in ("hls", "dash") for s in res.streams
-        ):
-            extra = _archive_tier(
-                direct_fetcher, title, year, refresh, runtime, attempts
-            )
-            if extra:
-                res.streams.extend(extra.streams)
-        return res
+    if not extract:
+        res = _archive_tier(direct_fetcher, title, year, refresh, runtime, attempts)
+        return res or Resolution(False, attempts=attempts)
 
-    return Resolution(False, attempts=attempts)
+    # Per-tier lists, merged in walk order afterwards: the tiers append from
+    # different threads, and the attempt log answers to the client as
+    # diagnostics -- it has to read `extract`, then `archive`, no matter
+    # which of them finished first.
+    extract_attempts: list[dict] = []
+    archive_attempts: list[dict] = []
+    pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="resolve-tier")
+    try:
+        extract_future = pool.submit(
+            _extract_tier, tmdb_id, media_type, season, episode, title, extract_attempts
+        )
+        archive_future = pool.submit(
+            _archive_tier,
+            direct_fetcher, title, year, refresh, runtime, archive_attempts,
+        )
+        deadline = time.monotonic() + TIER_BUDGET
+
+        res = _settle(extract_future, deadline)
+        supplement = bool(
+            res
+            and res.streams
+            and all(str(s.get("format") or "") in ("hls", "dash") for s in res.streams)
+        )
+        # A progressive extract win is playable *and* savable: the walk is
+        # over, and waiting on the archive now would only add its latency to
+        # an answer that is already complete.
+        extra = _settle(archive_future, deadline) if (res is None or supplement) else None
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+    attempts.extend(extract_attempts)
+    attempts.extend(archive_attempts)
+
+    if res is None:
+        # The archive answered while the provider missed: its attempt log
+        # rides along with its streams, so the returned Resolution reports the
+        # whole walk rather than only the tier that won.
+        if extra is not None:
+            extra.attempts = attempts
+            return extra
+        return Resolution(False, attempts=attempts)
+
+    if supplement and extra:
+        res.streams.extend(extra.streams)
+        res.subtitles.extend(extra.subtitles)
+    res.attempts = attempts
+    return res

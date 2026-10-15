@@ -1,0 +1,26 @@
+# Render's free tier sleeps after ~15 min without traffic, and a cold start
+# costs the viewer 15-20s before the backend answers anything -- the single
+# worst latency in the product. A ping every 10 min keeps the instance warm.
+#
+# GitHub runs scheduled workflows on a best-effort clock (delays are normal
+# under load) and disables them entirely after 60 days without repo activity;
+# `workflow_dispatch` is here so the job can also be run by hand from the
+# Actions tab when checking whether the service is up.
+name: Keep backend awake
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake the Render service
+        # `--fail` makes a 5xx fail the job instead of quietly "succeeding",
+        # so a dying service shows up as a red run in the Actions tab.
+        run: |
+          curl --fail --silent --show-error --max-time 60 \
+            --retry 3 --retry-delay 15 --retry-all-errors \
+            https://vy-e721.onrender.com/

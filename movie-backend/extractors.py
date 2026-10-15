@@ -25,13 +25,17 @@ UA = (
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 TIMEOUT = float(os.getenv("EXTRACTOR_TIMEOUT", "7"))
-#: One render needs room to load a page, run a wasm module and receive the
-#: playlist document. Nine seconds -- the old chain budget -- is not enough for
-#: that, and cutting a render off mid-flight wastes the whole attempt rather
-#: than half of it.
-BUDGET = float(os.getenv("EXTRACTOR_BUDGET_SECONDS", "25"))
+#: Wall clock for the whole chain, and therefore the number a viewer waits
+#: before the archive tier even starts. The chain is one browser render plus
+#: its HTTP plumbing: a render that is going to answer has the id and the
+#: playlist within a few seconds of `domcontentloaded`, and one that has not
+#: answered by here is an ad wrapper or a title the provider does not carry --
+#: holding the request open for another 15s only delays the honest miss.
+BUDGET = float(os.getenv("EXTRACTOR_BUDGET_SECONDS", "12"))
 #: Hard ceiling on a single page render, independent of the chain budget.
-BROWSER_RENDER_TIMEOUT = float(os.getenv("BROWSER_RENDER_TIMEOUT_SECONDS", "16"))
+#: Below `BUDGET` so the chain -- not this cap -- is what stops a run that
+#: leaves time for a second extractor.
+BROWSER_RENDER_TIMEOUT = float(os.getenv("BROWSER_RENDER_TIMEOUT_SECONDS", "10"))
 #: An embed page is kilobytes. Past this the fetch is not a page and reading
 #: it whole would be an allocation primitive reachable from a third party.
 MAX_BODY_BYTES = 2 * 1024 * 1024

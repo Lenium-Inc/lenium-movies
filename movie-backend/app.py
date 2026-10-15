@@ -685,7 +685,12 @@ def search_suggest():
 
 @app.route('/')
 def health_check():
-    return {"status": "online", "service": "vy-backend"}, 200
+    response = {"status": "online", "service": "vy-backend"}
+    # The keep-alive cron (`.github/workflows/keep-awake.yml`) pings this URL
+    # every 10 minutes to stop the free-tier instance sleeping. A shared cache
+    # answering from its edge would satisfy the cron while Render's idle timer
+    # kept running, so the probe must reach the origin every time.
+    return jsonify(response), 200, {"Cache-Control": "no-store"}
 
 # ---------------------------------------------------------------------------
 # Playback: one init call; every downstream leg is an opaque handle
@@ -1346,7 +1351,7 @@ def playback_init():
         )
     telemetry.record_event("playback_init")
 
-    return jsonify(
+    response = jsonify(
         {
             "success": True,
             "exact": True,
@@ -1358,6 +1363,12 @@ def playback_init():
             "movie": movie,
         }
     )
+    # This route answers GET as well as POST, and its payload is a fistful of
+    # per-request handles that expire: `no-store` is what stops an intermediary
+    # (or the browser's own heuristic cache) replaying yesterday's tokens to
+    # today's viewer.
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.route("/api/movies/resolve", methods=["GET", "POST", "OPTIONS"])
@@ -1434,6 +1445,22 @@ def _similar_wall(details: dict, media_type: str) -> list[dict]:
     return wall
 
 
+def _meta_response(payload: dict):
+    """Answer `/api/movies/meta` with a header a shared cache may obey.
+
+    The record is public TMDB data -- the same bytes for every viewer, with no
+    session in it -- and the client asks for it with GET, so `public` lets
+    Cloudflare answer a repeat open from its edge instead of paying the round
+    trip to Render (the HAR that motivated this recorded `cf-cache-status:
+    DYNAMIC` on every metadata call: POST, therefore uncacheable). Five
+    minutes is generous for a synopsis and well inside the process-local
+    `TTLCache` that sits behind it.
+    """
+    response = jsonify(payload)
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return response
+
+
 @app.route("/api/movies/meta", methods=["GET", "POST", "OPTIONS"])
 def movie_meta():
     """Full metadata plus a similar-titles wall, without resolving anything.
@@ -1473,7 +1500,7 @@ def movie_meta():
     with _meta_cache_lock:
         cached = _meta_cache.get(cache_key)
     if cached is not None:
-        return jsonify(cached)
+        return _meta_response(cached)
 
     details = tmdb.fetch_media_details(tmdb_id, media_type)
     if not details or str(details.get("id")) != str(tmdb_id):
@@ -1544,7 +1571,7 @@ def movie_meta():
     }
     with _meta_cache_lock:
         _meta_cache[cache_key] = payload
-    return jsonify(payload)
+    return _meta_response(payload)
 
 
 def _token_of(play_url: str) -> str | None:
@@ -2895,11 +2922,18 @@ def catalog_discover():
         per_page = int(request.args.get("per_page", 24))
     except (TypeError, ValueError):
         per_page = 24
-    return jsonify(
+    response = jsonify(
         catalog_service.discover(
             media_type=media_type, page=page, per_page=per_page, genre=genre
         )
     )
+    # Identical for every viewer (no region, no session in the payload) and
+    # keyed wholly by the query string, so a shared cache may answer it: the
+    # Watch page's similar-titles wall fires three of these, and every browse
+    # shelf fires more. Two minutes is short enough that a fresh trending row
+    # still shows up while the viewer is on the site.
+    response.headers["Cache-Control"] = "public, max-age=120"
+    return response
 
 
 @app.route("/api/catalog/search", methods=["GET", "OPTIONS"])

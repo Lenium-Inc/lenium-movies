@@ -25,9 +25,11 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-#: Cap on one render. The id and the playlist normally arrive inside a few
-#: seconds; past this the page is an ad wrapper or a dead host.
-RENDER_TIMEOUT = float(os.getenv("BROWSER_RENDER_TIMEOUT", "18"))
+#: Cap on one render, for callers that pass no budget of their own. The id and
+#: the playlist normally arrive inside a few seconds; past this the page is an
+#: ad wrapper or a dead host, and waiting longer only moves the viewer's
+#: "unavailable" message later.
+RENDER_TIMEOUT = float(os.getenv("BROWSER_RENDER_TIMEOUT", "10"))
 #: Playwright's sync API raises if used off the thread that started it, so the
 #: browser lives on one thread for the life of the process.
 _MAX_PENDING = 4
