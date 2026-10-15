@@ -1,6 +1,6 @@
 import { useLocation } from "wouter";
 import { Play } from "lucide-react";
-import { buildWatchPath } from "@/lib/watchRoute";
+import { buildTitlePath } from "@/lib/watchRoute";
 import { RowScroller } from "./RowScroller";
 import type { Movie } from "./types";
 
@@ -15,9 +15,11 @@ import type { Movie } from "./types";
  * stage manager would tape down -- the smallest possible ornament, and the
  * thing the eye goes to first.
  *
- * A card plays on click instead of opening the details sheet: the shelf's
- * whole promise is "pick this back up", and a detour through metadata is the
- * opposite of that.
+ * A card opens the title page, like every other click path on the site. The
+ * resume point is not lost in the detour: `buildTitlePath` carries the
+ * season/episode as query params, and the title page's Play button hands them
+ * straight to the watch route, so "pick this back up" still resumes where the
+ * viewer stopped rather than restarting at S1E1.
  */
 
 interface ContinueRowProps {
@@ -44,9 +46,10 @@ export function ContinueRow({ title, items }: ContinueRowProps) {
   const play = (movie: Movie) => {
     const tmdbId = parseInt(movie.providerId || String(movie.id), 10);
     if (!tmdbId || Number.isNaN(tmdbId)) return;
+    // Route through the details page like every other click path; the resume
+    // season/episode ride along so Play can pick up where the viewer stopped.
     navigate(
-      buildWatchPath(tmdbId, {
-        mediaType: movie.mediaType || "movie",
+      buildTitlePath(tmdbId, movie.mediaType || "movie", {
         season: movie.resumeSeason,
         episode: movie.resumeEpisode,
       })

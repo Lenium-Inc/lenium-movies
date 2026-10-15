@@ -55,6 +55,22 @@ export default function TitlePage() {
   const routeQuery = useMemo(() => new URLSearchParams(search || ""), [search]);
   const kind: "movie" | "tv" =
     routeQuery.get("type") === "tv" ? "tv" : "movie";
+  /*
+   * Resume targeting, carried in the URL by the Continue Watching shelf (and
+   * by any other caller that opens a series at a known episode). Every click
+   * path now routes through this page, so the season/episode have to survive
+   * the detour: they are read here and handed straight to `buildWatchPath` by
+   * the Play button. `Number.parseInt` yields NaN when the param is absent or
+   * malformed, and NaN is not nullish -- so `NaN ?? 1` would stay NaN and ship
+   * `?season=NaN` to the watch route. Coerce to undefined so the route's own
+   * S1E1 default applies.
+   */
+  const resumeSeason = Number.isFinite(Number.parseInt(routeQuery.get("season") ?? "", 10))
+    ? Number.parseInt(routeQuery.get("season") ?? "", 10)
+    : undefined;
+  const resumeEpisode = Number.isFinite(Number.parseInt(routeQuery.get("episode") ?? "", 10))
+    ? Number.parseInt(routeQuery.get("episode") ?? "", 10)
+    : undefined;
 
   const [meta, setMeta] = useState<MovieMeta | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "missing">(
@@ -317,6 +333,11 @@ export default function TitlePage() {
                           navigate(
                             buildWatchPath(movie.providerId, {
                               mediaType: movie.mediaType,
+                              // Resume targeting, carried here from the Continue
+                              // Watching shelf so "pick this back up" survives
+                              // the detour through this page. Ignored for a film.
+                              season: resumeSeason,
+                              episode: resumeEpisode,
                             })
                           )
                         }

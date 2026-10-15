@@ -10,6 +10,7 @@ import {
   syncSavedFromRemote,
 } from "@/services/lists";
 import { apiShares, type SharedProfile } from "@/services/auth";
+import { buildTitlePath } from "@/lib/watchRoute";
 
 export default function MyList() {
   const {
@@ -237,7 +238,10 @@ export default function MyList() {
                 className="flex gap-4 rounded-xl border border-white/10 bg-white/5 transition hover:border-white/20"
               >
                 <Link
-                  href={`/watch/${entry.providerId ?? entry.id}`}
+                  href={buildTitlePath(
+                    entry.providerId ?? entry.id,
+                    entry.mediaType === "tv" ? "tv" : "movie"
+                  )}
                   className="relative shrink-0 overflow-hidden rounded-lg bg-white/10"
                   style={{ width: 112, height: 168 }}
                 >

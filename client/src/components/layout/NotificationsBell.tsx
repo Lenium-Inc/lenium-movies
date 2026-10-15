@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Bell, BellRing, CalendarClock, Trash2, X } from "lucide-react";
 import { Link } from "wouter";
 import { tmdbImage } from "@/lib/tmdbImages";
+import { buildTitlePath } from "@/lib/watchRoute";
 import {
   clearReminders,
   daysUntil,
@@ -72,7 +73,10 @@ export function NotificationsBell() {
     return (
       <li key={reminder.id} className="group flex items-center gap-3">
         <Link
-          href={`/watch/${encodeURIComponent(reminder.id)}`}
+          href={buildTitlePath(
+            reminder.id,
+            reminder.mediaType === "tv" ? "tv" : "movie"
+          )}
           onClick={() => setOpen(false)}
           className="flex min-w-0 flex-1 items-center gap-3 rounded-lg p-2 transition hover:bg-zinc-800"
         >

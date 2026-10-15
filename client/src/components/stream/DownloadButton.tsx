@@ -6,6 +6,7 @@ import {
 import {
   buildDownloadFilename,
   classifyDownloadUrl,
+  isMintedDownloadHandle,
   type DownloadCandidate,
 } from "@/lib/downloadSource";
 
@@ -154,9 +155,10 @@ export function DownloadButton({
               { title, year },
               tier.candidate
             );
-            // A same-origin handle is the download route itself; a raw
-            // archive.org URL still needs the relay alias built around it.
-            const href = tier.candidate.url.startsWith("/")
+            // A minted handle is the download route itself (already absolutised
+            // to the API origin); a raw archive.org URL still needs the relay
+            // alias built around it.
+            const href = isMintedDownloadHandle(tier.candidate.url)
               ? tier.candidate.url
               : proxiedDownloadUrl(tier.candidate.url, filename);
             return (

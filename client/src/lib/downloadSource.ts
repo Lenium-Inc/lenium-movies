@@ -36,6 +36,37 @@ const DOWNLOADABLE_EXTENSIONS: Record<string, string> = {
 
 const PLAYLIST_EXTENSIONS = [".m3u8", ".mpd"];
 
+/** The backend's save route: a handle here is already a validated file. */
+const DOWNLOAD_HANDLE_PATH = "/api/v1/playback/download";
+
+/**
+ * A base for parsing, so a relative handle (`/api/...`) is readable without
+ * pretending it is absolute. `url.invalid` is reserved by RFC 2606 and can
+ * never collide with a real host.
+ */
+const PARSE_BASE = "https://url.invalid";
+
+/**
+ * True when `url` is the backend's minted download handle.
+ *
+ * Matched on pathname rather than a leading `/`, because the client now
+ * absolutises every `/api/...` leg against the API origin before it reaches
+ * this layer (see `resolvePlaybackHandle`). A check for `startsWith("/")` would
+ * miss every handle in production, where they arrive as
+ * `https://<api-host>/api/v1/playback/download?token=…`, and the saveable file
+ * would silently fall through to the raw-URL pool and be reported missing.
+ */
+export function isMintedDownloadHandle(
+  url: string | null | undefined
+): boolean {
+  if (!url || typeof url !== "string" || !url.trim()) return false;
+  try {
+    return new URL(url.trim(), PARSE_BASE).pathname === DOWNLOAD_HANDLE_PATH;
+  } catch {
+    return false;
+  }
+}
+
 function extensionOf(pathname: string): string {
   const last = pathname.slice(pathname.lastIndexOf("/") + 1);
   const dot = last.lastIndexOf(".");
@@ -96,9 +127,7 @@ export interface DownloadSourceLike {
 export function pickDownloadCandidate(movie: DownloadSourceLike | null | undefined): DownloadCandidate {
   if (!movie) return { kind: "unsupported", url: "" };
   const streams = Array.isArray(movie.streams) ? movie.streams : [];
-  const minted = streams.find(
-    s => typeof s?.downloadUrl === "string" && s.downloadUrl.startsWith("/")
-  );
+  const minted = streams.find(s => isMintedDownloadHandle(s?.downloadUrl));
   if (minted?.downloadUrl) {
     return { kind: "progressive", url: minted.downloadUrl };
   }

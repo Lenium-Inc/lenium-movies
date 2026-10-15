@@ -16,6 +16,7 @@ import { formatRuntime } from "@/lib/format";
 import { tmdbImage } from "@/lib/tmdbImages";
 import { genreColor, withAlpha } from "@/lib/genreColors";
 import { absoluteUrl } from "@/lib/siteUrl";
+import { buildTitlePath } from "@/lib/watchRoute";
 import { resolveTrailer } from "@/lib/tmdbTrailers";
 import { TrailerBrandingMask } from "@/components/stream/TrailerBrandingMask";
 import { useTrailerPlayback } from "@/hooks/useTrailerPlayback";
@@ -248,7 +249,16 @@ export function Spotlight({
       console.warn("[Spotlight] No TMDB id for title:", movie.title);
       return;
     }
-    navigate(`/watch/${tmdbId}`);
+    // The details page first, like every other click path. Landing straight on
+    // the player here was the visible half of the "two UIs" split: a hero Play
+    // dropped the viewer into stream resolution while a shelf card opened the
+    // title window, so the same site answered the same action two ways.
+    navigate(
+      buildTitlePath(tmdbId, movie.mediaType === "tv" ? "tv" : "movie", {
+        season: movie.resumeSeason,
+        episode: movie.resumeEpisode,
+      })
+    );
   };
 
   const handleShare = async (movie: Movie) => {

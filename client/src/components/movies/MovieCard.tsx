@@ -6,7 +6,7 @@ import {
   POSTER_SRCSET_SIZES,
   tmdbSrcSet,
 } from "@/lib/tmdbImages";
-import { buildWatchPath } from "@/lib/watchRoute";
+import { buildTitlePath } from "@/lib/watchRoute";
 import type { Movie } from "./types";
 
 interface MovieCardProps {
@@ -83,12 +83,15 @@ export const MovieCard: React.FC<MovieCardProps> = ({
       console.warn("[MovieCard] Invalid TMDB ID:", movie.providerId);
       return;
     }
-    // `buildWatchPath` is the single place that knows a series needs `type=tv`
+    // `buildTitlePath` is the single place that knows a series needs `type=tv`
     // and an episode, and a film must carry neither. Hand-writing the path here
     // is what previously sent series to a route with no episode to play.
+    //
+    // The details page, not the player: every click path on the site now opens
+    // `/title/:id` so the same action never answers two different ways. The
+    // resume season/episode ride along for the Continue Watching case.
     navigate(
-      buildWatchPath(tmdbId, {
-        mediaType,
+      buildTitlePath(tmdbId, mediaType, {
         season: movie.resumeSeason,
         episode: movie.resumeEpisode,
       })

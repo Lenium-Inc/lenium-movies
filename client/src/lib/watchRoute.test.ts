@@ -80,7 +80,25 @@ describe("buildTitlePath", () => {
   });
 
   it("carries the kind for a series, and only for a series", () => {
-    expect(buildTitlePath(1396, "tv")).toBe("/title/1396?type=tv");
     expect(buildTitlePath(1396, "movie")).toBe("/title/1396");
+  });
+
+  it("gives a series resume params so a Continue Watching pick survives the details page", () => {
+    // Every click now routes through /title first, so the shelf's promise --
+    // "pick this back up" -- depends on the season/episode riding along. A
+    // series with no resume point still needs the params, because an absent
+    // pair would drop the viewer to S1E1.
+    expect(buildTitlePath(1396, "tv")).toBe(
+      "/title/1396?type=tv&season=1&episode=1",
+    );
+    expect(buildTitlePath(1396, "tv", { season: 3, episode: 7 })).toBe(
+      "/title/1396?type=tv&season=3&episode=7",
+    );
+  });
+
+  it("never puts resume params on a film", () => {
+    expect(buildTitlePath(22980, "movie", { season: 2, episode: 5 })).toBe(
+      "/title/22980",
+    );
   });
 });

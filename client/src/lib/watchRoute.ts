@@ -52,11 +52,22 @@ export function buildWatchPath(
  * kind rides as `type=tv` because a TMDB id means nothing without its media
  * type. One builder so the page, the cards and the wall can never disagree
  * about what a title's address is.
+ *
+ * `resume` is the Continue Watching case. That shelf's whole promise is "pick
+ * this back up", and routing it through the details page (which every click
+ * now does) would otherwise drop the viewer back to S1E1 of a series they were
+ * three episodes into. The season/episode ride along as query params so the
+ * title page's Play button can hand them straight to the watch route; they are
+ * ignored for a film, which has no episode to restore.
  */
 export function buildTitlePath(
   tmdbId: string | number,
   mediaType: MediaType = "movie",
+  resume?: { season?: number; episode?: number },
 ): string {
-  const base = `/title/${tmdbId}`;
-  return mediaType === "tv" ? `${base}?type=tv` : base;
+  if (mediaType !== "tv") return `/title/${tmdbId}`;
+  const base = `/title/${tmdbId}?type=tv`;
+  const season = resume?.season ?? 1;
+  const episode = resume?.episode ?? 1;
+  return `${base}&season=${season}&episode=${episode}`;
 }

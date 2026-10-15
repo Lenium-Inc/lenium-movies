@@ -45,9 +45,15 @@ export function sanitizeSubtitles(value: unknown): StreamSubtitle[] {
   for (const entry of value) {
     if (!entry || typeof entry !== "object") continue;
     const record = entry as Record<string, unknown>;
-    const url = typeof record.url === "string" ? record.url.trim() : "";
+    const raw = typeof record.url === "string" ? record.url.trim() : "";
+    if (!raw) continue;
+    // Caption handles are minted as `/api/proxy/subtitle?track=…` and must be
+    // absolutised for the same reason the media legs are — see
+    // `resolvePlaybackHandle`. A `<track>` fetches cross-origin in prod, so a
+    // relative handle would resolve against Vercel and 404 into the SPA shell.
+    const url = resolvePlaybackHandle(raw);
     const lang = typeof record.lang === "string" ? record.lang.trim() : "";
-    if (!url || !lang) continue;
+    if (!lang) continue;
     // Two files for the same language would collide in the track list, since
     // the player selects by language code.
     const key = lang.toLowerCase();
@@ -290,6 +296,35 @@ export function apiUrl(path: string): string {
   return `${MOVIE_API_BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
+/**
+ * Absolutise a backend-minted playback handle so the browser fetches it from
+ * the API origin rather than the SPA's own origin.
+ *
+ * The backend answers every downstream playback leg as a *relative* path —
+ * `/api/v1/playback/media?token=…`, `/api/v1/playback/frame?token=…`,
+ * `/api/v1/playback/download?token=…`, `/api/proxy/manifest?token=…`,
+ * `/api/proxy/subtitle?track=…`. That is correct when the SPA and the API share
+ * an origin, which is the local-dev shape (Vite proxies `/api` to :5000).
+ *
+ * In production they do not: the SPA is on Vercel, the API on Render. A
+ * relative handle is then resolved against Vercel, whose only `/api` answer is
+ * the SPA catch-all rewrite, which serves `index.html`. So the `<video>` element
+ * is handed an HTML document (the black "won't play"), hls.js is asked to parse
+ * a manifest out of markup, and the download anchor navigates to the homepage
+ * instead of saving a file. All three are one bug: the handle never reached the
+ * API.
+ *
+ * Only `/api/`-prefixed paths are rewritten. Absolute URLs (third-party embeds,
+ * raw Archive.org files) and non-API relative paths are passed through
+ * untouched, and the rewrite is idempotent — an already-absolute handle no
+ * longer starts with `/api/`, so re-running it is a no-op. In dev the base is
+ * empty, so this leaves the path relative and Vite's proxy still applies.
+ */
+export function resolvePlaybackHandle(url: string): string {
+  if (!url.startsWith("/api/")) return url;
+  return apiUrl(url);
+}
+
 function isStreamMovie(value: unknown): value is StreamMovie {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
@@ -427,7 +462,7 @@ function normalizeResolvedMovie(value: unknown): StreamMovie | null {
     poster_url: typeof value.poster_url === "string" ? value.poster_url : "",
     backdrop_url:
       typeof value.backdrop_url === "string" ? value.backdrop_url : "",
-    stream_url: String(value.stream_url),
+    stream_url: resolvePlaybackHandle(String(value.stream_url)),
     year: toStreamYear(value.year),
     media_type: mediaType,
     season:
@@ -488,7 +523,7 @@ function normalizeResolvedMovie(value: unknown): StreamMovie | null {
                 STREAM_QUALITY_ORDER.find(q => label.includes(q)) ??
                 qualityFromHeight(height);
               return {
-                url: record.url,
+                url: resolvePlaybackHandle(record.url),
                 quality,
                 width: typeof record.width === "number" ? record.width : 0,
                 height,
@@ -496,7 +531,7 @@ function normalizeResolvedMovie(value: unknown): StreamMovie | null {
                 downloadUrl:
                   typeof record.download_url === "string" &&
                   record.download_url.trim()
-                    ? record.download_url.trim()
+                    ? resolvePlaybackHandle(record.download_url.trim())
                     : null,
               };
             })
@@ -505,13 +540,22 @@ function normalizeResolvedMovie(value: unknown): StreamMovie | null {
       : {}),
     ...(value.mirrors && Array.isArray(value.mirrors)
       ? {
-          mirrors: value.mirrors.filter((mirror): mirror is StreamMirror =>
-            Boolean(
-              mirror &&
-                typeof (mirror as StreamMirror).name === "string" &&
-                typeof (mirror as StreamMirror).url === "string"
-            )
-          ),
+          mirrors: value.mirrors
+            .map((mirror): StreamMirror | null => {
+              if (
+                !mirror ||
+                typeof (mirror as StreamMirror).name !== "string" ||
+                typeof (mirror as StreamMirror).url !== "string"
+              ) {
+                return null;
+              }
+              const typed = mirror as StreamMirror;
+              return {
+                name: typed.name,
+                url: resolvePlaybackHandle(typed.url),
+              };
+            })
+            .filter((mirror): mirror is StreamMirror => mirror !== null),
         }
       : {}),
     // The failover chain, in the backend's own probed order. This normalizer
@@ -529,7 +573,11 @@ function normalizeResolvedMovie(value: unknown): StreamMovie | null {
                 typeof record.name === "string" && record.name.trim()
                   ? record.name.trim()
                   : "Alternate source";
-              return { name, url: record.url, is_embed: record.is_embed !== false };
+              return {
+                name,
+                url: resolvePlaybackHandle(record.url),
+                is_embed: record.is_embed !== false,
+              };
             })
             .filter(
               (entry): entry is StreamProviderCandidate => entry !== null
@@ -873,11 +921,22 @@ export async function getStreamSource(
     throw new StreamExhaustedError();
   }
   const movie = payload.movie;
-  const mirrors = Array.isArray(movie.mirrors) ? movie.mirrors : [];
+  // Absolutise the tokenised legs here too: this path returns the raw init
+  // payload rather than going through `normalizeResolvedMovie`, so a relative
+  // `/api/v1/playback/...` handle would otherwise reach the player unresolved
+  // and be fetched from the SPA origin in production. See
+  // `resolvePlaybackHandle`.
+  const primaryUrl = resolvePlaybackHandle(movie.stream_url);
+  const mirrors = (Array.isArray(movie.mirrors) ? movie.mirrors : []).map(
+    mirror => ({
+      ...mirror,
+      url: resolvePlaybackHandle(mirror.url),
+    })
+  );
   const rawSources =
     Array.isArray(movie.sources) && movie.sources.length > 0
-      ? movie.sources
-      : [movie.stream_url, ...mirrors.map(m => m.url)];
+      ? movie.sources.map(resolvePlaybackHandle)
+      : [primaryUrl, ...mirrors.map(m => m.url)];
   const sources = Array.from(
     new Set(
       rawSources.filter(
@@ -887,7 +946,7 @@ export async function getStreamSource(
   );
   const subtitles = sanitizeSubtitles(movie.subtitles);
   return {
-    url: movie.stream_url,
+    url: primaryUrl,
     sources,
     mirrors,
     /**

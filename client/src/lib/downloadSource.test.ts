@@ -3,6 +3,7 @@ import {
   buildDownloadFilename,
   classifyDownloadUrl,
   downloadUnavailableReason,
+  isMintedDownloadHandle,
   pickDownloadCandidate,
   sanitizeFilenamePart,
 } from "@/lib/downloadSource";
@@ -92,6 +93,48 @@ describe("classifyDownloadUrl", () => {
     expect(classifyDownloadUrl("https://archive.org/download/i/stream").kind).toBe(
       "unsupported"
     );
+  });
+});
+
+describe("isMintedDownloadHandle", () => {
+  it("recognises a relative handle", () => {
+    expect(isMintedDownloadHandle("/api/v1/playback/download?token=abc")).toBe(
+      true
+    );
+  });
+
+  it("recognises an absolutised handle (production shape)", () => {
+    // The client now absolutises every /api leg against the API origin before
+    // it reaches this layer, so a check for a leading "/" would miss every
+    // handle in production and report a saveable file as missing.
+    expect(
+      isMintedDownloadHandle(
+        "https://vy-e721.onrender.com/api/v1/playback/download?token=abc"
+      )
+    ).toBe(true);
+  });
+
+  it("rejects a play handle and every non-download path", () => {
+    expect(isMintedDownloadHandle("/api/v1/playback/media?token=abc")).toBe(
+      false
+    );
+    expect(isMintedDownloadHandle("/api/v1/playback/frame?token=abc")).toBe(
+      false
+    );
+    expect(isMintedDownloadHandle("/api/proxy/manifest?token=abc")).toBe(false);
+  });
+
+  it("rejects a raw archive.org file", () => {
+    expect(
+      isMintedDownloadHandle("https://archive.org/download/i/Movie.mp4")
+    ).toBe(false);
+  });
+
+  it("rejects empty and malformed input", () => {
+    expect(isMintedDownloadHandle("")).toBe(false);
+    expect(isMintedDownloadHandle(null)).toBe(false);
+    expect(isMintedDownloadHandle(undefined)).toBe(false);
+    expect(isMintedDownloadHandle("   ")).toBe(false);
   });
 });
 
