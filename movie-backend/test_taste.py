@@ -13,6 +13,7 @@ import random
 import sys
 import tempfile
 import traceback
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -364,6 +365,36 @@ def test_profile_ids_are_not_coerced_to_integers():
     assert client.get(
         "/api/taste/state", headers=headers, query_string={"profile_id": str(pid)}
     ).status_code == 200
+
+
+def test_event_timestamps_are_iso_not_epoch_millis():
+    """`taste_events.created_at` is TIMESTAMPTZ on postgres, TEXT on sqlite.
+
+    Writing epoch milliseconds there is accepted by sqlite's loose typing and
+    rejected outright by postgres ("invalid input syntax for type timestamp"),
+    which 500'd every play, skip and like on the deployment while every local
+    test stayed green. The stored value must be an ISO-8601 string the postgres
+    column can parse -- same shape the sibling `updated_at` columns already use.
+    """
+    client = _client()
+    headers, _ = _account(client, "clock")
+    pid = _profile(client, headers)
+    assert client.post(
+        "/api/taste", headers=headers,
+        json={"profile_id": pid, "kind": "play", "genres": ["horror"]},
+    ).status_code == 200
+
+    row = _store()._query(
+        "SELECT created_at FROM taste_events WHERE profile_id = ?",
+        (pid,),
+        fetch_all=True,
+    )
+    assert row, "the play was not recorded"
+    stamp = str(row[0]["created_at"])
+    # Digit-only means epoch milliseconds again, which is the postgres 500.
+    assert not stamp.isdigit(), f"created_at is epoch millis: {stamp!r}"
+    # 3.9's fromisoformat predates the trailing-Z form, so map it to an offset.
+    datetime.fromisoformat(stamp.replace("Z", "+00:00"))  # raises if unparseable
 
 
 def test_malformed_feed_parameters_do_not_error():

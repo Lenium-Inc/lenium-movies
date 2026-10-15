@@ -1406,7 +1406,13 @@ class Store:
                 float(weight),
                 ",".join(genres or []),
                 ",".join(people or []),
-                int(time.time() * 1000),
+                # An ISO timestamp, not epoch milliseconds: `created_at` is
+                # TIMESTAMPTZ on postgres, and postgres rejects a bare integer
+                # there ("invalid input syntax for type timestamp"), which made
+                # every play/skip/like 500 on the deployment while sqlite's
+                # loose typing hid it locally. `_now()` is the same string the
+                # sibling `updated_at` columns already store.
+                _now(),
             ),
         )
 
