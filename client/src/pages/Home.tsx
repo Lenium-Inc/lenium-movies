@@ -196,6 +196,33 @@ export default function Home() {
             `z-10` is what puts the shelves back in front. Overlap is capped so the
             hero's title, copy and buttons are never covered by a shelf. */}
         <main className="relative z-10 mx-auto mt-8 max-w-[1480px] px-4 pb-24 sm:px-6 lg:px-8">
+          {/*
+            The site's own words, on the page a crawler lands on first.
+
+            The spotlight above is the page's h1, but it names whichever film is
+            currently featured -- so before this block the homepage told a
+            search engine nothing about what the site *is*. This copy states the
+            product in plain language (free, public domain, no sign-up) so a
+            snippet for "free movie platform" has something to quote.
+
+            Visible, not `sr-only`: hidden text is a pattern Google scrutinises
+            because it is how keyword stuffing is usually dressed up, and a
+            one-line description of the product is not worth that scrutiny. It is
+            muted and small so it reads as a strapline rather than as body copy.
+          */}
+          {isHomeView ? (
+            <section aria-label="About Stream Vy">
+              <h2 className="text-sm font-semibold text-[var(--text)]">
+                Free movies online, no sign-up
+              </h2>
+              <p className="mt-1 max-w-2xl text-sm leading-6 text-[var(--text-muted)]">
+                Stream Vy is a free movie platform for watching public domain and
+                openly licensed films online. Browse classic and independent
+                movies, stream in your browser with no subscription, and pick up
+                where you left off.
+              </p>
+            </section>
+          ) : null}
           {view === "collections" ? (
             <section className="py-12">
               <h1 className="text-2xl font-bold">Collections</h1>

@@ -49,14 +49,14 @@
       here still matches what that module produces for "/".
     -->
     <!-- seo:route-head:start -->
-    <title>Stream Vy — Your screen, your stories</title>
+    <title>Stream Vy — Watch Free Movies Online</title>
     <meta
       name="description"
-      content="High-end minimalist VOD streaming platform."
+      content="Stream Vy is a free movie platform for watching public domain and openly licensed films online. No sign-up, no subscription — press play."
     />
     <meta
       name="keywords"
-      content="free movies, stream movies online, public domain movies, free streaming, watch movies free, public domain films, movie database"
+      content="free movies, free movie platform, watch free movies online, stream movies online, free streaming, watch movies free, public domain movies, public domain films"
     />
     <meta
       name="robots"
@@ -79,11 +79,11 @@
     <meta property="og:site_name" content="Stream Vy" />
     <meta
       property="og:title"
-      content="Stream Vy — Your screen, your stories"
+      content="Stream Vy — Watch Free Movies Online"
     />
     <meta
       property="og:description"
-      content="High-end minimalist VOD streaming platform."
+      content="Stream Vy is a free movie platform for watching public domain and openly licensed films online. No sign-up, no subscription — press play."
     />
     <meta property="og:url" content="__SITE_ORIGIN__/" />
     <meta property="og:image" content="__SITE_ORIGIN__/lenium-mark.svg" />
@@ -101,11 +101,11 @@
     <meta name="twitter:card" content="summary_large_image" />
     <meta
       name="twitter:title"
-      content="Stream Vy — Your screen, your stories"
+      content="Stream Vy — Watch Free Movies Online"
     />
     <meta
       name="twitter:description"
-      content="High-end minimalist VOD streaming platform."
+      content="Stream Vy is a free movie platform for watching public domain and openly licensed films online. No sign-up, no subscription — press play."
     />
     <meta name="twitter:image" content="__SITE_ORIGIN__/lenium-mark.svg" />
     <!-- seo:route-head:end -->
@@ -141,7 +141,7 @@
         "name": "Stream Vy",
         "alternateName": ["Stream Vy"],
         "url": "__SITE_ORIGIN__/",
-        "description": "High-end minimalist VOD streaming platform.",
+        "description": "Stream Vy is a free movie platform for watching public domain and openly licensed films online. No sign-up, no subscription — press play.",
         "image": "__SITE_ORIGIN__/lenium-mark.svg",
         "sameAs": ["https://github.com/Lenium-Inc/lenium-movies"],
         "creator": {
@@ -213,6 +213,39 @@
   </head>
   <body>
     <div id="root"></div>
+    <!--
+      Crawlable copy for crawlers that do not execute JavaScript.
+
+      The body is otherwise a single empty <div id="root">: the homepage is
+      rendered by the bundle, so a crawler that reads the HTML as served sees a
+      blank page with an accurate <title> and description but no words to quote.
+      Googlebot runs JavaScript and sees the real page; many other crawlers --
+      including the ones that answer "what is this site" for AI assistants --
+      do not. This block gives them the site's own description in plain text
+      without a second copy to maintain: the wording matches the meta
+      description above and the intro copy the app renders on the home view.
+    -->
+    <noscript>
+      <main>
+        <h1>Stream Vy — Watch Free Movies Online</h1>
+        <p>
+          Stream Vy is a free movie platform for watching public domain and
+          openly licensed films online. No sign-up, no subscription — press
+          play.
+        </p>
+        <p>
+          Browse classic and independent movies, stream in your browser, and
+          pick up where you left off.
+        </p>
+        <nav>
+          <ul>
+            <li><a href="/terms">Terms of Service</a></li>
+            <li><a href="/privacy">Privacy Policy</a></li>
+            <li><a href="/dmca">Copyright &amp; DMCA</a></li>
+          </ul>
+        </nav>
+      </main>
+    </noscript>
     <script type="module" src="/src/main.tsx"></script>
     <!--
       No analytics beacons, and none may be added unconditionally.

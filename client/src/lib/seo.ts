@@ -37,30 +37,51 @@
  */
 
 export const SITE_NAME = "Stream Vy";
-export const SITE_TAGLINE = "Your screen, your stories";
-export const SITE_TITLE = `${SITE_NAME} — ${SITE_TAGLINE}`;
+
+/**
+ * The homepage's `<title>`, and the fallback for every route without a better
+ * one.
+ *
+ * Written for the query a stranger actually types -- "watch free movies
+ * online" -- rather than for the brand. Nobody searches for a tagline, and the
+ * previous title ("Your screen, your stories") told a crawler nothing about
+ * what the site is, which is the single most valuable slot in the head. The
+ * brand leads so a branded search still matches, and the phrase follows.
+ */
+export const SITE_TITLE = "Stream Vy — Watch Free Movies Online";
 
 /**
  * Shown as the description for the homepage and as the fallback for every route
  * that has nothing better to say.
+ *
+ * Two audiences read this: the crawler deciding what the site is about, and the
+ * human reading the result snippet under the title. Both need the same three
+ * facts -- free, no sign-up, public domain -- stated plainly. The previous copy
+ * ("High-end minimalist VOD streaming platform") named the design language
+ * instead of the product, so a snippet built from it could not tell a searcher
+ * the films cost nothing to watch.
  */
 export const SITE_DESCRIPTION =
-  "High-end minimalist VOD streaming platform.";
+  "Stream Vy is a free movie platform for watching public domain and openly licensed films online. No sign-up, no subscription — press play.";
 
 /**
  * `keywords` is not a ranking signal, and no major engine has read it in over a
  * decade. It is kept here, and emitted, only because it is already in
  * `index.html` and removing it would be a copy change rather than a code one.
  * If this list is ever touched, deleting it entirely is the better edit.
+ *
+ * The terms mirror the title and description rather than inventing new ones,
+ * so the three cannot contradict each other.
  */
 export const SITE_KEYWORDS = [
   "free movies",
+  "free movie platform",
+  "watch free movies online",
   "stream movies online",
-  "public domain movies",
   "free streaming",
   "watch movies free",
+  "public domain movies",
   "public domain films",
-  "movie database",
 ];
 
 /**

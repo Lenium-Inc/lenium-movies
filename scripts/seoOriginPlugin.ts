@@ -347,13 +347,36 @@ export async function fetchCatalogueIds(
       Math.max(1, hintedPages - page + 1) || concurrency
     );
     const batch = Array.from({ length: batchSize }, (_, i) => page + i);
+    /*
+     * Each page fails on its own, and a failed page is treated as an empty one.
+     *
+     * `Promise.all` used to reject the whole batch the moment any single page
+     * threw, and `loadCatalogueIds` caught that by returning no ids at all --
+     * so one 500 or one 60s timeout on the Render free tier emptied the sitemap
+     * of every title, which is the entire point of walking the catalogue. The
+     * measured behaviour confirms this is not hypothetical: a walk of ~160 pages
+     * hit timeouts at page ~122 under 8-way concurrency, which under the old
+     * code would have shipped a four-URL sitemap.
+     *
+     * An empty result still feeds the staleness backstop below: a batch that
+     * fails *and* contributes nothing counts toward `staleBatches`, so a backend
+     * that has gone away ends the walk after two tries instead of paging on into
+     * the timeout.
+     */
     const fetched = await Promise.all(
-      batch.map(p => fetcher(pageUrl(p)) as Promise<Page>)
+      batch.map(async (p): Promise<Page | null> => {
+        try {
+          return (await fetcher(pageUrl(p))) as Page;
+        } catch {
+          return null;
+        }
+      })
     );
 
     let added = 0;
     let sawMore = false;
     for (const result of fetched) {
+      if (!result) continue;
       added += add(items(result));
       if (result.has_more !== false) sawMore = true;
     }

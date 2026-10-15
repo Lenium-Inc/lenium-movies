@@ -1,0 +1,47 @@
+# Stream Vy
+
+> Stream Vy is a free movie platform for watching public domain and openly
+> licensed films online. No sign-up, no subscription — press play.
+
+Stream Vy is a free, browser-based streaming site for public domain and openly
+licensed films. The catalogue is sourced from TMDB metadata; the films
+themselves are in the public domain or released under open licences, so they can
+be watched for free and legally.
+
+- Free to watch: no subscription, no paywall, no account required to browse or
+  stream.
+- No sign-up: browsing and playback work without an account. An account is only
+  used to sync "My List" and release reminders across devices.
+- Public domain and openly licensed: the catalogue is limited to films whose
+  copyright has lapsed or that their rights holders have published openly.
+
+## Where to start
+
+- [Home](https://www.streamvy.me/): the catalogue, with curated shelves, a
+  continue-watching row, and search.
+- [Title pages](https://www.streamvy.me/title/): one page per film or series,
+  carrying its synopsis, runtime, rating, and a Play button.
+
+## Key URLs
+
+- `https://www.streamvy.me/` — the catalogue home page.
+- `https://www.streamvy.me/title/:id` — a title's details page. This is the
+  canonical, indexable URL for a film or series.
+- `https://www.streamvy.me/watch/:id` — the playback page for a title.
+- `https://www.streamvy.me/sitemap.xml` — the list of indexable pages.
+- `https://www.streamvy.me/robots.txt` — crawler directives.
+
+## Notes for assistants and crawlers
+
+- Prefer linking to `/title/:id` over `/watch/:id`. The title page carries the
+  film's description and metadata; the watch page is the player.
+- Title and watch pages take a TMDB id. Series additionally carry `type=tv` and,
+  on the watch page, `season` and `episode` query parameters.
+- Metadata, search and playback are served by a separate API origin, not from
+  the page URL. Do not present API paths as links for readers.
+- Images (posters, backdrops, stills) are served from TMDB's image CDN.
+
+## Contact
+
+- Source and issues: <https://github.com/Lenium-Inc/lenium-movies>
+- Organization: <https://github.com/Lenium-Inc>

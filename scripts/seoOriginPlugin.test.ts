@@ -1,14 +1,74 @@
 import { describe, expect, it } from "vitest";
 import {
   SITE_ORIGIN_TOKEN,
+  fetchCatalogueIds,
   injectOrigin,
   normalizeOrigin,
   prerenderFileName,
   prerenderRoutes,
   renderRobots,
   renderSitemap,
+  type Fetcher,
 } from "./seoOriginPlugin";
 import { INDEXABLE_PATHS, ROBOTS_DISALLOW_PATHS } from "../client/src/lib/seo";
+
+describe("fetchCatalogueIds", () => {
+  /*
+   * The failure this guards against: one page of the catalogue walk 500s or
+   * times out, and the whole sitemap loses every title. That is not
+   * hypothetical -- the Render free tier drops requests under 8-way
+   * concurrency, and a walk of ~160 pages hit timeouts partway through. Under
+   * the old `Promise.all`, a single rejection emptied the sitemap entirely.
+   */
+  const page = (ids: string[], hasMore: boolean) => ({
+    items: ids.map(id => ({ id: `tmdb-${id}` })),
+    has_more: hasMore,
+    per_page: 2,
+  });
+
+  it("keeps the pages it can read when one page in the batch fails", async () => {
+    const fetcher: Fetcher = async url => {
+      const n = Number(new URL(url).searchParams.get("page"));
+      if (n === 2) throw new Error("500 from the backend");
+      if (n === 1) return page(["100", "200"], true);
+      return page([], false);
+    };
+
+    // Page 2 is the flaky one; pages 1 and 3 must still contribute.
+    const ids = await fetchCatalogueIds("https://api.example", fetcher, 8);
+
+    expect(ids).toEqual(["100", "200"]);
+  });
+
+  it("propagates a first-page failure, which loadCatalogueIds turns into a warning", async () => {
+    const fetcher: Fetcher = async () => {
+      throw new Error("backend gone");
+    };
+
+    /*
+     * Page 1 is the walk's only source of `per_page` and `has_more`, so there is
+     * nothing to resume from when it fails -- the walk rejects rather than
+     * guessing. `loadCatalogueIds` is the catcher: it logs a warning and returns
+     * no ids, so the build still ships a static-routes sitemap instead of
+     * failing outright.
+     */
+    await expect(
+      fetchCatalogueIds("https://api.example", fetcher, 8)
+    ).rejects.toThrow("backend gone");
+  });
+
+  it("strips the catalogue's tmdb- prefix so ids match the watch route", async () => {
+    const fetcher: Fetcher = async url => {
+      const n = Number(new URL(url).searchParams.get("page"));
+      if (n === 1) return page(["969681"], false);
+      return page([], false);
+    };
+
+    const ids = await fetchCatalogueIds("https://api.example", fetcher, 8);
+
+    expect(ids).toEqual(["969681"]);
+  });
+});
 
 describe("normalizeOrigin", () => {
   it("trims whitespace and trailing slashes", () => {
