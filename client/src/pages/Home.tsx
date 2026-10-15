@@ -10,7 +10,7 @@ import {
   SELECT_TITLE_EVENT,
   type PaletteItem,
 } from "@/components/layout/NavbarSearch";
-import { fetchMovieDetails } from "@/pages/Watch";
+import { fetchMovieDetails } from "@/services/meta";
 import { tmdbImage } from "@/lib/tmdbImages";
 import {
   CatalogEmptyState,

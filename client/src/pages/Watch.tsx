@@ -14,7 +14,6 @@ import {
   fetchDiscover,
   fetchTrailer,
   getStreamSource,
-  MOVIE_RESOLVE_TIMEOUT_MS,
   resolveStream,
   sanitizeSubtitles,
   StreamNotFoundError,
@@ -25,6 +24,7 @@ import {
   type StreamMovie,
   type TrailerInfo,
 } from "@/services/api";
+import { fetchMovieDetails } from "@/services/meta";
 import { VideoPlayer, type StreamVariant } from "@/components/stream/VideoPlayer";
 import { DownloadButton } from "@/components/stream/DownloadButton";
 import { StreamLoader, type StreamLoadStage } from "@/components/stream/StreamLoader";
@@ -77,7 +77,6 @@ const REMOTE_PROGRESS_MS = 30_000;
 const MAX_RETRY_ATTEMPTS = 3;
 const COLD_START_BACKOFF_MS = 4000;
 const RETRY_BASE_DELAY_MS = 1000;
-const RETRY_DELAY_MS = 1200;
 const MAX_AUTO_RETRY_WINDOW_MS = 2 * 60 * 1000;
 
 /**
@@ -174,73 +173,6 @@ function classifyError(error: unknown) {
   }
 
   return { type: "unknown", message: "We couldn't load this stream. Please try again.", recoverable: true, retryCount: 0 };
-}
-
-function isWorthRetrying(status: number): boolean {
-  return status === 404 || status === 408 || status === 429 || status >= 500;
-}
-
-export async function fetchMovieDetails(
-  tmdbId: string,
-  kind: "movie" | "tv" = "movie"
-): Promise<Movie | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), MOVIE_RESOLVE_TIMEOUT_MS);
-  try {
-    let response: Response | undefined;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      response = await fetch(apiUrl("/api/movies/resolve"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: tmdbId, media_type: kind }),
-        signal: controller.signal,
-      });
-      if (response.ok || !isWorthRetrying(response.status)) break;
-      if (attempt === 0) await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
-    }
-
-    if (!response?.ok) return null;
-    const data = await response.json();
-    if (!data.movie) return null;
-
-    const m = data.movie;
-    const mediaType = m.media_type === "tv" ? "tv" : "movie";
-    const year = m.year ? parseInt(m.year) : null;
-    const runtime = typeof m.runtime === "number" ? m.runtime : null;
-    const rating = m.rating ?? null;
-    const score = typeof m.vote_average === "number" ? m.vote_average : null;
-    const genre = Array.isArray(m.genres) ? m.genres : [];
-    const director = m.director ?? null;
-    const cast = Array.isArray(m.cast) ? m.cast : [];
-    const country = m.country ?? null;
-    const language = m.language ?? null;
-    const releaseDate = m.release_date ?? null;
-
-    return {
-      id: parseInt(m.id),
-      providerId: m.id,
-      title: m.title,
-      year,
-      runtime,
-      rating,
-      score,
-      genre,
-      poster: m.poster_url,
-      backdrop: m.backdrop_url || m.poster_url,
-      synopsis: m.overview || "",
-      director,
-      source: "tmdb",
-      mediaType,
-      cast,
-      country,
-      language,
-      releaseDate,
-    };
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 export function WatchPage() {

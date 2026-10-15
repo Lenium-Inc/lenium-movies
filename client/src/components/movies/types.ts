@@ -30,6 +30,12 @@ export type Movie = {
   director: string | null;
   /** Cast members */
   cast: string[];
+  /**
+   * The cast as people, with the id each one links by. Present only when the
+   * record came from `/api/movies/meta`; the resolve payload carries the
+   * flattened `cast` names and nothing linkable.
+   */
+  castMembers?: CastMember[];
   /** Country of origin */
   country: string | null;
   /** Primary language */
@@ -78,6 +84,42 @@ export type Movie = {
    */
   resumeSeason?: number;
   resumeEpisode?: number;
+};
+
+/**
+ * One person on the title page's cast row.
+ *
+ * The id is the whole reason this is not just a name: a cast row whose
+ * members link nowhere is a list, and these links are how a viewer walks
+ * from a film to the person who was in it.
+ */
+export type CastMember = {
+  /** TMDB person id as the provider speaks it. */
+  id: string;
+  name: string;
+  character: string;
+  /** TMDB profile photo path, absent when the person has no headshot. */
+  profilePath: string | null;
+};
+
+/**
+ * One neighbour on the details window's "More Like This" wall.
+ *
+ * Deliberately slimmer than `Movie`: the wall answers "what else is like
+ * this?", and a poster, a title and a year are what a viewer scans. The full
+ * record is fetched only when one of these is actually picked, so the sheet
+ * never waits on a title it is merely displaying.
+ */
+export type SimilarItem = {
+  /** TMDB id as the provider speaks it -- the key the watch route wants. */
+  providerId: string;
+  mediaType: "movie" | "tv";
+  title: string;
+  year: number | null;
+  /** TMDB poster path or absolute URL; run through the sheet's image helper. */
+  poster: string | null;
+  score: number | null;
+  synopsis: string;
 };
 
 /** A verified direct quality variant from the backend */
