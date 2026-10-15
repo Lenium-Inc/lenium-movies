@@ -1,22 +1,21 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useLocation, useSearch } from "wouter";
 import {
   genreFilterOptions,
   INFINITE_VIEWS,
   useCatalog,
 } from "@/hooks/useCatalog";
+import { useHeroAccent } from "@/hooks/useHeroAccent";
+import { genreColor, withAlpha } from "@/lib/genreColors";
 import { Navbar } from "@/components/layout/Navbar";
 import {
   APPLY_SEARCH_EVENT,
   SELECT_TITLE_EVENT,
   type PaletteItem,
 } from "@/components/layout/NavbarSearch";
-import { fetchMovieDetails } from "@/services/meta";
 import { tmdbImage } from "@/lib/tmdbImages";
-import {
-  CatalogEmptyState,
-  SearchStatusBar,
-} from "@/components/movies/CatalogEmptyState";
-import { Details } from "@/components/movies/Details";
+import { buildTitlePath } from "@/lib/watchRoute";
+import { CatalogEmptyState, SearchStatusBar } from "@/components/movies/CatalogEmptyState";
 import { Spotlight } from "@/components/movies/Spotlight";
 import { Top10Row } from "@/components/movies/Top10Row";
 import { MovieRow } from "@/components/movies/MovieRow";
@@ -28,11 +27,18 @@ import { TopProgressBar } from "@/components/ui/TopProgressBar";
 import type { Movie } from "@/components/movies/types";
 import type { View } from "@/components/layout/navigation";
 
+const CATALOG_SECTIONS = new Set<string>([
+  "home",
+  "movies",
+  "trending",
+  "tv",
+]);
+
 /**
- * Root catalog page: wires the Netflix-style top navigation, all movie
- * shelves, and the details modal around the shared `useCatalog` state owner.
- * Any modal/selection state (menu, discovery, movie details) lives here,
- * separate from the data layer in the hook.
+ * Root catalog page: wires the Netflix-style top navigation and all movie
+ * shelves around the shared `useCatalog` state owner. Selecting a title
+ * navigates to its `/title/:id` page; the modal/selection state that lives
+ * here is menu and discovery chrome only.
  */
 export default function Home() {
   const {
@@ -64,9 +70,24 @@ export default function Home() {
     loadMoreDiscover,
   } = useCatalog();
 
-  const [selected, setSelected] = useState<Movie | null>(null);
+  const [, navigate] = useLocation();
+  const routeSearch = useSearch();
+
+  const openTitle = (movie: Movie) => {
+    navigate(buildTitlePath(movie.providerId || movie.id, movie.mediaType));
+  };
 
   const [heroActive, setHeroActive] = useState<Movie | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams(routeSearch || "");
+    const section = params.get("section");
+    if (section && CATALOG_SECTIONS.has(section)) {
+      setSection(section as View);
+    }
+    const query = params.get("q");
+    if (query) setSearch(query);
+  }, []);
 
   // The navbar search can push a plain query back into the catalog grid
   // ("Show all results"), or an empty one to clear it (the input's X or
@@ -83,46 +104,18 @@ export default function Home() {
     return () => window.removeEventListener(APPLY_SEARCH_EVENT, onApply);
   }, [setSearch]);
 
-  // A search-suggest pick carries only an id, title and poster. Open the
-  // details sheet with that much so the click responds instantly, then swap
-  // in the full record when the resolve lands (synopsis, genres, runtime,
-  // cast). The guard keeps a slow response for a previous pick from
-  // overwriting the current one -- or a sheet the viewer already closed.
+  // A search-suggest pick carries an id, a title and a media type -- exactly
+  // what a title page's URL is built from, so it navigates rather than
+  // assembling a partial record for a modal that no longer exists here.
   useEffect(() => {
     const onSelect = (event: Event) => {
       const item = (event as CustomEvent<PaletteItem | undefined>).detail;
       if (!item || typeof item.id !== "string" || !item.title) return;
-      const numericId = parseInt(item.id, 10);
-      setSelected({
-        id: Number.isFinite(numericId) ? numericId : 0,
-        providerId: item.id,
-        title: item.title,
-        year: item.year ? parseInt(item.year, 10) || null : null,
-        runtime: null,
-        rating: null,
-        score: null,
-        genre: [],
-        poster: item.posterUrl || null,
-        backdrop: null,
-        synopsis: "",
-        director: null,
-        cast: [],
-        country: null,
-        language: null,
-        releaseDate: null,
-        source: "tmdb",
-        mediaType: item.mediaType,
-      });
-      void fetchMovieDetails(item.id).then(full => {
-        if (!full) return;
-        setSelected(current =>
-          current && String(current.providerId) === item.id ? full : current
-        );
-      });
+      navigate(buildTitlePath(item.id, item.mediaType));
     };
     window.addEventListener(SELECT_TITLE_EVENT, onSelect);
     return () => window.removeEventListener(SELECT_TITLE_EVENT, onSelect);
-  }, []);
+  }, [navigate]);
 
   const isClientSearch = search.trim().length > 0;
   const isHomeView = view === "home" && !isClientSearch;
@@ -142,6 +135,16 @@ export default function Home() {
   // upscaled to fill an 80vh wash across the full viewport width.
   const heroArtUrl = heroBackdrop ? tmdbImage(heroBackdrop, "original") : null;
 
+  // The accent is emitted by whatever artwork the hero is showing, so the nav
+  // rule, the carousel progress and the hero glow all change with the slide.
+  const accent = useHeroAccent(heroArtUrl);
+  const accentStyle = {
+    background: "linear-gradient(180deg, var(--bg) 0%, var(--bg-raised) 100%)",
+    color: "var(--text)",
+    "--accent": accent,
+    "--accent-soft": withAlpha(accent, 0.18),
+  } as CSSProperties;
+
   return (
     /*
      * `bg-[#050505]` was a hand-picked near-black that matched nothing else in
@@ -149,7 +152,7 @@ export default function Home() {
      * `#0b0c10` / slate, so this one wrapper read as a slightly different black
      * behind the shelves. The shell owns the background now.
      */
-    <div className="min-h-screen text-[#FFFFFF]">
+    <div className="sv-accent-scope min-h-screen" style={accentStyle}>
       <TopProgressBar isLoading={loading || searchLoading || discoverLoading} />
       {isHomeView && heroArtUrl ? (
         <div
@@ -164,7 +167,7 @@ export default function Home() {
           {/* Fades the blurred art back into the base colour. `transparent`
               is used deliberately: a named base here would paint a visible
               ellipse edge over the shell's own gradient. */}
-          <div className="absolute inset-0 bg-[radial-gradient(ellipse_90%_70%_at_50%_0%,transparent_20%,var(--sv-base)_100%)]" />
+          <div className="absolute inset-0 bg-[radial-gradient(ellipse_90%_70%_at_50%_0%,transparent_20%,var(--bg)_100%)]" />
         </div>
       ) : null}
       <div className="relative z-10">
@@ -181,7 +184,7 @@ export default function Home() {
             <Spotlight
               items={heroItems}
               onActiveChange={setHeroActive}
-              onMoreInfo={setSelected}
+              onMoreInfo={openTitle}
             />
           </div>
         ) : null}
@@ -196,7 +199,7 @@ export default function Home() {
           {view === "collections" ? (
             <section className="py-12">
               <h1 className="text-2xl font-bold">Collections</h1>
-              <p className="mt-2 max-w-xl text-sm leading-6 text-[#99999d]">
+              <p className="mt-2 max-w-xl text-sm leading-6 text-[var(--text-muted)]">
                 Curated collections will appear when real collection records are
                 imported and approved. No placeholder collections are shown.
               </p>
@@ -204,7 +207,7 @@ export default function Home() {
           ) : view === "genres" ? (
             <section className="py-8">
               <div className="mb-6">
-                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#8b8b90]">
+                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--text-muted)]">
                   Browse the real catalogue
                 </p>
                 <h1 className="mt-1 text-2xl font-bold">Genres</h1>
@@ -219,7 +222,7 @@ export default function Home() {
                         setGenre(item);
                         setView("movies");
                       }}
-                      className="rounded-md border border-white/10 px-4 py-3 text-sm font-semibold text-[#d0d0cc] hover:border-white/30 hover:bg-white/[0.05]"
+                      className="rounded-md border border-white/10 px-4 py-3 text-sm font-semibold text-[var(--text-muted)] hover:border-white/30 hover:bg-white/[0.05]"
                     >
                       {item}
                     </button>
@@ -293,6 +296,7 @@ export default function Home() {
                     >
                       {genreFilterOptions.map(item => {
                         const active = genre === item;
+                        const dot = item === "All" ? null : genreColor(item);
                         return (
                           <button
                             key={item}
@@ -300,12 +304,19 @@ export default function Home() {
                             onClick={() => setGenre(item)}
                             aria-pressed={active}
                             className={
-                              "shrink-0 rounded-full px-4 py-2 text-sm font-medium transition-all duration-200 " +
+                              "flex shrink-0 items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition-all duration-200 " +
                               (active
-                                ? "scale-105 bg-white px-5 font-bold text-black shadow-md"
-                                : "text-neutral-400 hover:text-white")
+                                ? "scale-105 bg-[var(--accent)] px-5 font-bold text-white shadow-md"
+                                : "text-[var(--text-muted)] hover:text-[var(--text)]")
                             }
                           >
+                            {dot ? (
+                              <span
+                                aria-hidden
+                                className="h-2 w-2 shrink-0 rounded-full"
+                                style={{ backgroundColor: dot }}
+                              />
+                            ) : null}
                             {item}
                           </button>
                         );
@@ -314,7 +325,7 @@ export default function Home() {
                   ) : (
                     <>
                       <div>
-                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#8b8b90]">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--text-muted)]">
                           Browse the catalogue
                         </p>
                         {/* An h2, not an h1: the spotlight above already owns the
@@ -351,7 +362,7 @@ export default function Home() {
                     savedIds={savedIds}
                     onSelect={movie => {
                       recordAffinity(movie, 0.5);
-                      setSelected(movie);
+                      openTitle(movie);
                     }}
                     onSave={movie => {
                       recordAffinity(movie, 0.8);
@@ -381,7 +392,7 @@ export default function Home() {
                       savedIds={savedIds}
                       onSelect={movie => {
                         recordAffinity(movie, 0.5);
-                        setSelected(movie);
+                        openTitle(movie);
                       }}
                       onSave={movie => {
                         recordAffinity(movie, 0.8);
@@ -427,7 +438,7 @@ export default function Home() {
                           savedIds={savedIds}
                           onSelect={movie => {
                             recordAffinity(movie, 0.5);
-                            setSelected(movie);
+                            openTitle(movie);
                           }}
                           onSave={movie => {
                             recordAffinity(movie, 0.8);
@@ -440,7 +451,7 @@ export default function Home() {
                           title={row.title}
                           items={row.items}
                           savedIds={savedIds}
-                          onSelect={setSelected}
+                          onSelect={openTitle}
                           onSave={toggleSave}
                           variant={row.kind === "score" ? "score" : "poster"}
                           grid
@@ -456,14 +467,14 @@ export default function Home() {
                 their metadata and imagery appear, and every poster, backdrop,
                 synopsis, rating and cast list in this catalogue comes from
                 there. It was missing entirely. */}
-              <p className="mt-10 text-[11px] leading-5 text-zinc-600">
+              <p className="mt-10 text-[11px] leading-5 text-[var(--text-muted)]">
                 This product uses the TMDB API but is not endorsed or certified
                 by TMDB.{" "}
                 <a
                   href="https://www.themoviedb.org/"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="underline underline-offset-4 transition hover:text-zinc-400"
+                  className="underline underline-offset-4 transition hover:text-[var(--text)]"
                 >
                   Movie metadata &amp; artwork by TMDB
                 </a>
@@ -475,18 +486,18 @@ export default function Home() {
 
         <footer className="border-t border-white/5 px-4 py-8 sm:px-6 lg:px-8">
           <div className="mx-auto flex max-w-[1400px] flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <p className="max-w-xl text-xs leading-5 text-zinc-500">
+            <p className="max-w-xl text-xs leading-5 text-[var(--text-muted)]">
               Public-domain and openly licensed film, streamed from third-party
               hosts. We don&apos;t host any of it — see the{" "}
               <a
                 href="/terms"
-                className="text-zinc-400 underline underline-offset-4 transition hover:text-zinc-200"
+                className="text-[var(--text-muted)] underline underline-offset-4 transition hover:text-[var(--text)]"
               >
                 Terms of Service
               </a>
               .
             </p>
-            <nav className="flex items-center gap-5 text-xs text-zinc-400">
+            <nav className="flex items-center gap-5 text-xs text-[var(--text-muted)]">
               <a href="/terms" className="transition hover:text-white">
                 Terms
               </a>
@@ -515,14 +526,6 @@ export default function Home() {
           </div>
         </footer>
       </div>
-      {selected && (
-        <Details
-          movie={selected}
-          onClose={() => setSelected(null)}
-          onSave={() => toggleSave(selected)}
-          saved={savedIds.includes(selected.id)}
-        />
-      )}
     </div>
   );
 }

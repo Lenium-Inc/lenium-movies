@@ -882,6 +882,54 @@ input[type="search"]::-webkit-search-decoration {
   }
 }
 
+/* ==========================================================================
+   The details window — program notes, not a settings panel
+
+   The window reads like the page a cinema prints for one screening: a
+   Space Mono eyebrow labels every fact, hairlines separate them, and the
+   neighbours shelf at the bottom is framed like lobby cards. The scrim over
+   the artwork runs to the velvet navy the Continue Watching band is cut
+   from, so the two surfaces belong to the same house.
+   ========================================================================== */
+.mw-eyebrow {
+  font-family: "Space Mono", ui-monospace, SFMono-Regular, monospace;
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.mw-facts {
+  display: flex;
+  flex-direction: column;
+  align-self: start;
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: linear-gradient(
+    160deg,
+    rgba(11, 19, 48, 0.5),
+    rgba(9, 9, 11, 0.4)
+  );
+}
+
+.mw-fact + .mw-fact {
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* Lobby cards: they lift when pointed at, and only then. The play badge and
+   the image zoom live on the group in the markup; this is the lift. */
+.mw-card {
+  border-radius: 6px;
+  transition: transform 260ms var(--ease-out);
+}
+@media (hover: hover) {
+  .mw-card:hover {
+    transform: translateY(-4px);
+  }
+}
+
 /*
  * Off-screen catalogue cards skip layout, paint and image decoding. The feed
  * holds hundreds of 2:3 posters, and without this every one of them is laid

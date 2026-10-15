@@ -16,6 +16,7 @@ import { RouteSeo } from "./components/layout/RouteSeo";
 // loads only when its path is actually visited.
 const Profile = lazy(() => import("./pages/Profile"));
 const WatchPage = lazy(() => import("./pages/Watch").then(m => ({ default: m.WatchPage })));
+const TitlePage = lazy(() => import("./pages/Title"));
 const MyList = lazy(() => import("./pages/MyList"));
 const ShareInvite = lazy(() => import("./pages/ShareInvite"));
 const SharedList = lazy(() => import("./pages/SharedList"));
@@ -91,6 +92,7 @@ function Router() {
           <Route path="/share/shared/:ownerId" component={SharedList} />
           <Route path="/share/:token" component={ShareInvite} />
           <Route path="/watch/:id" component={WatchPage} />
+          <Route path="/title/:id" component={TitlePage} />
           {/*
             The account roster. Publicly routed, because the page itself is the
             gate: it renders a signed-out or not-allowed state rather than
