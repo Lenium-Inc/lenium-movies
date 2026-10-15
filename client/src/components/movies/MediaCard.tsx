@@ -4,6 +4,7 @@ import { Link } from "wouter";
 import type { TrailerInfo } from "@/services/api";
 import { formatRuntime } from "@/lib/format";
 import { resolveTrailer, trailerThumbnail } from "@/lib/tmdbTrailers";
+import { TrailerBrandingMask } from "@/components/stream/TrailerBrandingMask";
 
 interface MediaCardProps {
   id: string;
@@ -30,11 +31,11 @@ export const TrailerEmbed = React.forwardRef<
   TrailerInfo & { onLoad?: () => void }
 >(({ provider, id, title, onLoad }, ref) => {
   // The player URL is built by the one resolver, not here. `loop` is on because
-  // this is a hover preview; `controls` is off because the poster underneath is
-  // the interactive layer and a provider's control bar would fight it.
+  // this is a hover preview; controls are off for every frame the app mounts,
+  // so the poster underneath stays the interactive layer.
   const resolved = resolveTrailer(
     { provider, id, title },
-    { loop: true, controls: false },
+    { loop: true },
   );
   const poster = trailerThumbnail({ provider, id });
 
@@ -59,6 +60,7 @@ export const TrailerEmbed = React.forwardRef<
         className="h-full w-full"
         onLoad={onLoad}
       />
+      <TrailerBrandingMask />
     </div>
   );
 });

@@ -120,7 +120,7 @@ export default function TitlePage() {
   const { failed: trailerFailed, frameRef: trailerFrameRef } = useEmbedFailure(
     trailer ? `${trailer.provider}:${trailer.id}` : null
   );
-  const trailerSrc = resolveTrailer(trailer, { loop: false, controls: true });
+  const trailerSrc = resolveTrailer(trailer, { loop: false });
 
   useEffect(() => {
     setTrailerFrameLoaded(false);

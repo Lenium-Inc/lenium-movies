@@ -109,17 +109,33 @@ function params(site: TrailerSite, id: string, opts: PreviewOptions): string {
     case "youtube": {
       // `loop=1` needs `playlist` set to the same id, or YouTube loops a
       // one-item playlist and drops it after the first play. `iv_load_policy=3`
-      // keeps the iframe out of the page's viewability metrics. `rel=0` drops
+      // keeps annotation boxes out of the frame entirely. `rel=0` drops
       // the end-screen suggestions. `playsinline` stops iOS from hijacking the
       // card into fullscreen on autoplay.
+      //
+      // `controls=0` is fixed, not an option. Every frame this app mounts is
+      // decorative -- the hero toggles through `postMessage` (see
+      // `useTrailerPlayback`), and the title and watch pages play the clip
+      // behind copy the viewer is there to read. A provider control bar over
+      // any of those is chrome that cannot be meaningfully used, and on the
+      // hover previews it would sit on top of the poster, which is the
+      // interactive layer. Making it a parameter meant every new call site had
+      // to remember to switch it off, and two had not.
       //
       // `enablejsapi=1` is what makes the hero trailer controllable by
       // `postMessage` without loading the IFrame API script -- see
       // `useTrailerPlayback`. It is required, not optional, for that path.
+      //
+      // There is no parameter for playback quality. The `vq`/`hd` keys belonged
+      // to the retired Flash player and the iframe embed ignores them; the only
+      // lever left is the IFrame API's `setPlaybackQuality`, which needs the
+      // ~250KB SDK this file deliberately avoids and which YouTube now treats as
+      // a suggestion it is free to ignore. The embed picks the highest quality
+      // the connection sustains, which is the same thing a viewer gets.
       const query = new URLSearchParams({
         autoplay: "1",
         mute: "1",
-        controls: opts.controls ? "1" : "0",
+        controls: "0",
         loop: opts.loop ? "1" : "0",
         playlist: id,
         playsinline: "1",
@@ -143,7 +159,7 @@ function params(site: TrailerSite, id: string, opts: PreviewOptions): string {
         autoplay: "1",
         muted: "1",
         loop: opts.loop ? "1" : "0",
-        controls: opts.controls ? "1" : "0",
+        controls: "0",
         enablejsapi: "1",
       }).toString();
 
@@ -152,7 +168,7 @@ function params(site: TrailerSite, id: string, opts: PreviewOptions): string {
         autoplay: "1",
         muted: "1",
         loop: opts.loop ? "1" : "0",
-        controls: opts.controls ? "1" : "0",
+        controls: "0",
         dnt: "1",
       }).toString();
   }
@@ -161,8 +177,6 @@ function params(site: TrailerSite, id: string, opts: PreviewOptions): string {
 export interface PreviewOptions {
   /** Loop the clip. On for a hover preview, off for a watched trailer. */
   loop?: boolean;
-  /** Show the provider's controls. On for a dedicated player, off for a preview. */
-  controls?: boolean;
   /**
    * The `origin` parameter some players require before they will play.
    *
@@ -194,7 +208,7 @@ export function resolveTrailer(
   const site = toSite(trailer.provider);
   if (!site) return null;
 
-  const options: PreviewOptions = { loop: true, controls: false, ...opts };
+  const options: PreviewOptions = { loop: true, ...opts };
   const query = params(site, trailer.id, options);
   const base = serverBase(trailer, site);
 

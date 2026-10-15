@@ -1046,7 +1046,7 @@ export function WatchPage() {
     setPlayingTrailer(false);
   }, [movie?.id]);
 
-  const resolvedTrailer = useMemo(() => resolveTrailer(trailer, { controls: true }), [trailer]);
+  const resolvedTrailer = useMemo(() => resolveTrailer(trailer), [trailer]);
   const trailerThumb = useMemo(() => trailerThumbnail(trailer), [trailer]);
 
   useEffect(() => {

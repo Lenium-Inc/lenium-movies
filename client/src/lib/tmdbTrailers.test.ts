@@ -65,6 +65,32 @@ describe("resolveTrailer", () => {
     expect(resolveTrailer({ provider: "YouTube", id: "abc" })).not.toBeNull();
     expect(resolveTrailer({ provider: "Vimeo", id: "99" })).not.toBeNull();
   });
+
+  it("never asks a provider for controls, on any surface", () => {
+    /*
+     * Every trailer frame in this app is decorative: the hero autoplays and
+     * toggles through our own `postMessage` commands, and the title and watch
+     * pages frame the clip behind copy. A provider control bar over any of
+     * those is chrome the viewer cannot meaningfully use -- and on the hover
+     * previews it would fight the poster underneath, which is the interactive
+     * layer. So `controls` is fixed off in the resolver rather than left to
+     * each caller to remember; it is not even an option on `PreviewOptions`.
+     */
+    for (const site of [youtube, vimeo, dailymotion]) {
+      const src = resolveTrailer(site)?.src ?? "";
+      expect(src, site.provider).toContain("controls=0");
+      expect(src, site.provider).not.toContain("controls=1");
+    }
+  });
+
+  it("keeps YouTube's own branding out of the frame", () => {
+    // `modestbranding` drops the logo from the control bar; the corner watermark
+    // it does not remove is covered by `TrailerBrandingMask` at every call site.
+    const src = resolveTrailer(youtube)?.src ?? "";
+    expect(src).toContain("modestbranding=1");
+    // `iv_load_policy=3` keeps annotation boxes out of the frame entirely.
+    expect(src).toContain("iv_load_policy=3");
+  });
 });
 
 describe("trailerThumbnail", () => {

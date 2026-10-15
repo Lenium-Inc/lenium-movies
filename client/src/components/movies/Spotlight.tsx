@@ -189,7 +189,7 @@ export function Spotlight({
   );
 
   const resolvedTrailer = useMemo(
-    () => resolveTrailer(trailerFor, { loop: false, controls: false }),
+    () => resolveTrailer(trailerFor, { loop: false }),
     [trailerFor]
   );
   const playback = useTrailerPlayback(resolvedTrailer?.site ?? null);
