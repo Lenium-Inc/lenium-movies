@@ -66,6 +66,39 @@ export function normalizeOrigin(value: string | undefined | null): string {
 }
 
 /**
+ * The production origin Vercel injects at build time, or `""` outside one.
+ *
+ * This is the fallback for a build with no `VITE_SITE_URL`, and it exists
+ * because the failure it prevents is silent: with no origin the plugin writes
+ * no sitemap.xml at all, omits the `Sitemap` line from robots.txt, and leaves
+ * `canonical` as a relative path -- so the site deploys looking healthy while
+ * being effectively invisible to submission. Vercel already knows the
+ * deployment's own production domain (`VERCEL_PROJECT_PRODUCTION_URL`), so a
+ * production build can resolve its origin with no configuration rather than
+ * depending on someone remembering an env var.
+ *
+ * Deliberately production-only. The `VERCEL_ENV=preview` case is where a
+ * hardcoded host once caused real damage: every preview advertised itself as
+ * the live site, which is exactly the bug `__SITE_ORIGIN__` was introduced to
+ * remove. A preview therefore keeps the empty origin -- relative URLs and no
+ * sitemap, which is honest -- rather than borrowing production's identity.
+ *
+ * The value is a bare domain with no scheme, so `https://` is added here;
+ * defensive stripping of a scheme or trailing slash handles the case where a
+ * future platform change reports it differently, since a doubled
+ * `https://https://` in a sitemap would be a confidently broken file.
+ */
+export function vercelProductionOrigin(
+  env: Record<string, string | undefined> = process.env
+): string {
+  if (env.VERCEL_ENV !== "production") return "";
+  const host = env.VERCEL_PROJECT_PRODUCTION_URL?.trim();
+  if (!host) return "";
+  const bare = host.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+  return bare ? `https://${bare}` : "";
+}
+
+/**
  * Replace the token in a document.
  *
  * A single pass, so an origin that itself contains the token cannot be
@@ -516,12 +549,18 @@ export function seoOriginPlugin(): Plugin {
      * the static head silently kept its unresolved token. `loadEnv` is the
      * supported way to read the same files the client is built from, and reading
      * the real environment too means a platform-injected variable still wins.
+     *
+     * The Vercel fallback is last so an explicit `VITE_SITE_URL` always beats
+     * the platform's own idea of the domain -- the operator may deliberately
+     * serve from a different host (a www/apex split, a stable alias) than the
+     * one Vercel reports, and the sitemap must name the host the site is
+     * actually read at.
      */
     configResolved(config) {
       const fromFile = loadEnv(config.mode, config.envDir, "VITE_SITE_URL");
-      origin = normalizeOrigin(
-        fromFile.VITE_SITE_URL ?? process.env.VITE_SITE_URL
-      );
+      origin =
+        normalizeOrigin(fromFile.VITE_SITE_URL ?? process.env.VITE_SITE_URL) ||
+        vercelProductionOrigin();
     },
 
     transformIndexHtml(html: string) {
@@ -575,11 +614,11 @@ export function seoOriginPlugin(): Plugin {
 
       if (!origin) {
         this.warn(
-          "No VITE_SITE_URL set, so sitemap.xml was not written: a sitemap " +
-            "needs absolute URLs and would be rejected if written with " +
-            "relative paths. robots.txt has no sitemap URL for the same " +
-            "reason. The canonical and og:url in index.html are relative for " +
-            "the same reason."
+          "No VITE_SITE_URL set (and not a Vercel production build), so " +
+            "sitemap.xml was not written: a sitemap needs absolute URLs and " +
+            "would be rejected if written with relative paths. robots.txt has " +
+            "no sitemap URL for the same reason. The canonical and og:url in " +
+            "index.html are relative for the same reason."
         );
         return;
       }

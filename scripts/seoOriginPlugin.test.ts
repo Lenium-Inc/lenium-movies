@@ -8,6 +8,7 @@ import {
   prerenderRoutes,
   renderRobots,
   renderSitemap,
+  vercelProductionOrigin,
   type Fetcher,
 } from "./seoOriginPlugin";
 import { INDEXABLE_PATHS, ROBOTS_DISALLOW_PATHS } from "../client/src/lib/seo";
@@ -84,6 +85,61 @@ describe("normalizeOrigin", () => {
     for (const value of [undefined, null, "", "   "]) {
       expect(normalizeOrigin(value)).toBe("");
     }
+  });
+});
+
+describe("vercelProductionOrigin", () => {
+  /*
+   * The failure this guards against was observed on the live site: a build with
+   * no origin wrote no sitemap.xml at all (the request fell through to the SPA
+   * rewrite and answered text/html), dropped the Sitemap line from robots.txt,
+   * and left `canonical="/"` -- while the deploy itself looked completely
+   * healthy. Vercel injects its own production domain, so a production build
+   * can resolve an origin with nobody remembering an env var.
+   */
+  it("resolves the platform's production domain on a production build", () => {
+    expect(
+      vercelProductionOrigin({
+        VERCEL_ENV: "production",
+        VERCEL_PROJECT_PRODUCTION_URL: "www.streamvy.me",
+      })
+    ).toBe("https://www.streamvy.me");
+  });
+
+  it("never lends production's identity to a preview build", () => {
+    /*
+     * The bug `__SITE_ORIGIN__` exists to prevent: every preview advertising
+     * itself as the live site. A preview keeps an empty origin instead --
+     * relative URLs and no sitemap, which is honest.
+     */
+    expect(
+      vercelProductionOrigin({
+        VERCEL_ENV: "preview",
+        VERCEL_PROJECT_PRODUCTION_URL: "lenium-git-fix.vercel.app",
+      })
+    ).toBe("");
+  });
+
+  it("stays empty when the platform reports no host", () => {
+    expect(vercelProductionOrigin({ VERCEL_ENV: "production" })).toBe("");
+    expect(vercelProductionOrigin({})).toBe("");
+    expect(
+      vercelProductionOrigin({
+        VERCEL_ENV: "production",
+        VERCEL_PROJECT_PRODUCTION_URL: "   ",
+      })
+    ).toBe("");
+  });
+
+  it("adds the scheme, and never doubles one", () => {
+    // The platform reports a bare domain today; a future change reporting a
+    // full URL would otherwise produce `https://https://...` in every <loc>.
+    expect(
+      vercelProductionOrigin({
+        VERCEL_ENV: "production",
+        VERCEL_PROJECT_PRODUCTION_URL: "https://streamvy.me/",
+      })
+    ).toBe("https://streamvy.me");
   });
 });
 

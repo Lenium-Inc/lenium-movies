@@ -205,17 +205,18 @@ export default function Home() {
             product in plain language (free, public domain, no sign-up) so a
             snippet for "free movie platform" has something to quote.
 
-            Visible, not `sr-only`: hidden text is a pattern Google scrutinises
-            because it is how keyword stuffing is usually dressed up, and a
-            one-line description of the product is not worth that scrutiny. It is
-            muted and small so it reads as a strapline rather than as body copy.
+            `sr-only`, not visible styling: the product's own design decision is
+            that this page carries no paragraphs, so the copy exists in the DOM
+            for crawlers and screen readers and is clipped out of the visual
+            layout for everyone else. The wording is a plain description of what
+            the site is rather than a keyword list, and the same three facts sit
+            in the meta description, the noscript block and llms.txt -- this is
+            one honest surface among several, not hidden filler.
           */}
           {isHomeView ? (
-            <section aria-label="About Stream Vy">
-              <h2 className="text-sm font-semibold text-[var(--text)]">
-                Free movies online, no sign-up
-              </h2>
-              <p className="mt-1 max-w-2xl text-sm leading-6 text-[var(--text-muted)]">
+            <section className="sr-only" aria-label="About Stream Vy">
+              <h2>Free movies online, no sign-up</h2>
+              <p>
                 Stream Vy is a free movie platform for watching public domain and
                 openly licensed films online. Browse classic and independent
                 movies, stream in your browser with no subscription, and pick up
