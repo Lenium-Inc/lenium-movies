@@ -1,19 +1,22 @@
 import { describe, expect, it } from "vitest";
 import {
   SITE_ORIGIN_TOKEN,
-  fetchCatalogueIds,
+  fetchCatalogue,
   injectOrigin,
   normalizeOrigin,
   prerenderFileName,
   prerenderRoutes,
+  prerenderTitlePages,
+  renderCatalogueSitemap,
   renderRobots,
   renderSitemap,
   vercelProductionOrigin,
+  type CatalogueEntry,
   type Fetcher,
 } from "./seoOriginPlugin";
 import { INDEXABLE_PATHS, ROBOTS_DISALLOW_PATHS } from "../client/src/lib/seo";
 
-describe("fetchCatalogueIds", () => {
+describe("fetchCatalogue", () => {
   /*
    * The failure this guards against: one page of the catalogue walk 500s or
    * times out, and the whole sitemap loses every title. That is not
@@ -21,8 +24,20 @@ describe("fetchCatalogueIds", () => {
    * concurrency, and a walk of ~160 pages hit timeouts partway through. Under
    * the old `Promise.all`, a single rejection emptied the sitemap entirely.
    */
-  const page = (ids: string[], hasMore: boolean) => ({
-    items: ids.map(id => ({ id: `tmdb-${id}` })),
+  const item = (id: string, title = `Film ${id}`) => ({
+    id: `tmdb-${id}`,
+    title,
+    year: 2024,
+    overview: `Overview of ${title}.`,
+    poster_url: `https://image.tmdb.org/t/p/w500/${id}.jpg`,
+    media_type: "movie",
+  });
+  const page = (
+    ids: string[],
+    hasMore: boolean,
+    make: (id: string) => Record<string, unknown> = item
+  ) => ({
+    items: ids.map(id => make(id)),
     has_more: hasMore,
     per_page: 2,
   });
@@ -36,12 +51,12 @@ describe("fetchCatalogueIds", () => {
     };
 
     // Page 2 is the flaky one; pages 1 and 3 must still contribute.
-    const ids = await fetchCatalogueIds("https://api.example", fetcher, 8);
+    const catalogue = await fetchCatalogue("https://api.example", fetcher, 8);
 
-    expect(ids).toEqual(["100", "200"]);
+    expect(catalogue.map(entry => entry.id)).toEqual(["100", "200"]);
   });
 
-  it("propagates a first-page failure, which loadCatalogueIds turns into a warning", async () => {
+  it("propagates a first-page failure, which loadCatalogue turns into a warning", async () => {
     const fetcher: Fetcher = async () => {
       throw new Error("backend gone");
     };
@@ -49,25 +64,66 @@ describe("fetchCatalogueIds", () => {
     /*
      * Page 1 is the walk's only source of `per_page` and `has_more`, so there is
      * nothing to resume from when it fails -- the walk rejects rather than
-     * guessing. `loadCatalogueIds` is the catcher: it logs a warning and returns
-     * no ids, so the build still ships a static-routes sitemap instead of
+     * guessing. `loadCatalogue` is the catcher: it logs a warning and returns
+     * no records, so the build still ships a static-routes sitemap instead of
      * failing outright.
      */
     await expect(
-      fetchCatalogueIds("https://api.example", fetcher, 8)
+      fetchCatalogue("https://api.example", fetcher, 8)
     ).rejects.toThrow("backend gone");
   });
 
-  it("strips the catalogue's tmdb- prefix so ids match the watch route", async () => {
+  it("strips the catalogue's tmdb- prefix so ids match the title route", async () => {
     const fetcher: Fetcher = async url => {
       const n = Number(new URL(url).searchParams.get("page"));
       if (n === 1) return page(["969681"], false);
       return page([], false);
     };
 
-    const ids = await fetchCatalogueIds("https://api.example", fetcher, 8);
+    const catalogue = await fetchCatalogue("https://api.example", fetcher, 8);
 
-    expect(ids).toEqual(["969681"]);
+    expect(catalogue.map(entry => entry.id)).toEqual(["969681"]);
+  });
+
+  it("keeps the title, synopsis, year and poster each page already carries", async () => {
+    /*
+     * The endpoint always returned these; the walk used to delete them, which
+     * is why a prerendered film page had nothing truthful to put in its
+     * `<title>` or description. One request, same payload -- minus the
+     * deletion.
+     */
+    const fetcher: Fetcher = async () => page(["1236045"], false);
+
+    const [entry] = await fetchCatalogue("https://api.example", fetcher, 8);
+
+    expect(entry).toEqual({
+      id: "1236045",
+      title: "Film 1236045",
+      year: 2024,
+      overview: "Overview of Film 1236045.",
+      posterUrl: "https://image.tmdb.org/t/p/w500/1236045.jpg",
+    });
+  });
+
+  it("falls back to release_date when year is absent, and keeps an untitled record out of no page's way", async () => {
+    const fetcher: Fetcher = async () =>
+      page(["1"], false, () => ({
+        id: "tmdb-1",
+        title: "  ",
+        release_date: "1922-04-06",
+        overview: null,
+        poster_url: null,
+      }));
+
+    const [entry] = await fetchCatalogue("https://api.example", fetcher, 8);
+
+    // No usable year from `year`, but the raw date still yields one.
+    expect(entry.year).toBe(1922);
+    // Blank strings normalise to empty, so the prerender can skip a page it
+    // cannot title.
+    expect(entry.title).toBe("");
+    expect(entry.overview).toBe("");
+    expect(entry.posterUrl).toBe("");
   });
 });
 
@@ -358,5 +414,142 @@ describe("prerenderRoutes", () => {
       expect(page.source, page.fileName).not.toContain("noindex");
       expect(page.source, page.fileName).toContain("index, follow");
     }
+  });
+});
+
+describe("renderCatalogueSitemap", () => {
+  const film = (id: string, title = `Film ${id}`): CatalogueEntry => ({
+    id,
+    title,
+    year: 2024,
+    overview: `Overview of ${title}.`,
+    posterUrl: `https://image.tmdb.org/t/p/w500/${id}.jpg`,
+  });
+
+  it("lists each film at /title/:id, the page that is actually indexed", () => {
+    /*
+     * `/watch/:id` used to be the listed URL, from when the player was the only
+     * film page. The details page is the one with a synopsis and a poster, it
+     * is what every click routes through, and the player is `noindex` -- so
+     * listing it pointed crawlers at a page that asks not to be indexed.
+     */
+    const xml = renderCatalogueSitemap(
+      [film("1236045", "Animals")],
+      "https://vy.example"
+    );
+    expect(xml).toContain("<loc>https://vy.example/title/1236045</loc>");
+    expect(xml).not.toContain("/watch/");
+  });
+
+  it("keeps the static routes ahead of the catalogue entries", () => {
+    const xml = renderCatalogueSitemap([film("1")], "https://vy.example");
+    const locations = Array.from(
+      xml.matchAll(/<loc>([^<]+)<\/loc>/g)
+    ).map(match => match[1]);
+    expect(locations.slice(0, INDEXABLE_PATHS.length)).toEqual([
+      "https://vy.example/",
+      "https://vy.example/terms",
+      "https://vy.example/privacy",
+      "https://vy.example/dmca",
+    ]);
+    expect(locations).toContain("https://vy.example/title/1");
+  });
+
+  it("escapes an origin with metacharacters in every <loc>", () => {
+    const xml = renderCatalogueSitemap([film("1")], "https://vy.example/?a=1&b=<2");
+    expect(xml).toContain("&amp;");
+  });
+});
+
+describe("prerenderTitlePages", () => {
+  const template = [
+    "<head>",
+    "    <!-- seo:route-head:start -->",
+    "    <title>Homepage</title>",
+    '    <link rel="canonical" href="__SITE_ORIGIN__/" />',
+    "    <!-- seo:route-head:end -->",
+    '    <meta name="google-site-verification" content="tok" />',
+    "  </head>",
+    "  <body></body>",
+  ].join("\n");
+
+  const animals: CatalogueEntry = {
+    id: "1236045",
+    title: "Animals",
+    year: 2026,
+    overview: "Two friends go looking for a stolen elephant.",
+    posterUrl: "https://image.tmdb.org/t/p/w500/poster.jpg",
+  };
+
+  it("emits one file per film at title/<id>.html", () => {
+    const pages = prerenderTitlePages(template, "https://vy.example", [
+      animals,
+    ]);
+    expect(pages.map(page => page.fileName)).toEqual(["title/1236045.html"]);
+  });
+
+  it("gives the page the film's own title, description and canonical", () => {
+    const [page] = prerenderTitlePages(template, "https://vy.example", [
+      animals,
+    ]);
+
+    expect(page.source).toContain(
+      "<title>Animals (2026) - Watch Free on Stream Vy</title>"
+    );
+    expect(page.source).toContain(
+      "Two friends go looking for a stolen elephant."
+    );
+    expect(page.source).toContain(
+      'rel="canonical" href="https://vy.example/title/1236045"'
+    );
+    // ...and not the homepage's, which is the whole point: without this every
+    // film page served a copy of the homepage head.
+    expect(page.source).not.toContain("<title>Homepage</title>");
+    expect(page.source).toContain('index, follow');
+  });
+
+  it("carries Movie JSON-LD a crawler can read without running JavaScript", () => {
+    const [page] = prerenderTitlePages(template, "https://vy.example", [
+      animals,
+    ]);
+
+    // The same id head.ts writes at runtime, so hydration updates this block
+    // in place instead of appending a second script beside it.
+    expect(page.source).toContain('data-jsonld="movie-jsonld"');
+    expect(page.source).toContain('"@type":"Movie"');
+    expect(page.source).toContain('"name":"Animals"');
+    expect(page.source).toContain(
+      '"url":"https://vy.example/title/1236045"'
+    );
+    expect(page.source).toContain(
+      '"image":"https://image.tmdb.org/t/p/w500/poster.jpg"'
+    );
+  });
+
+  it("resolves the origin token and keeps the tags that do not vary by film", () => {
+    const [page] = prerenderTitlePages(template, "https://vy.example", [
+      animals,
+    ]);
+    expect(page.source).not.toContain(SITE_ORIGIN_TOKEN);
+    expect(page.source).toContain('name="google-site-verification" content="tok"');
+  });
+
+  it("skips a film with no title rather than shipping a page it cannot name", () => {
+    // A blank title would produce "Watch Free on Stream Vy" as the whole
+    // <title>, which every other page already does better. The id still
+    // resolves through the SPA, whose live head is strictly better than a
+    // confidently wrong static one.
+    const pages = prerenderTitlePages(template, "https://vy.example", [
+      { ...animals, title: "" },
+    ]);
+    expect(pages).toEqual([]);
+  });
+
+  it("falls back to a description that does not invent a synopsis", () => {
+    const [page] = prerenderTitlePages(template, "https://vy.example", [
+      { ...animals, overview: "" },
+    ]);
+    expect(page.source).toContain("Watch Animals (2026) free on Stream Vy");
+    expect(page.source).not.toContain("Two friends");
   });
 });

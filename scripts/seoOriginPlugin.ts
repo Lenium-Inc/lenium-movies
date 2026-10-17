@@ -49,6 +49,8 @@ import {
   ROUTE_HEAD_START,
   ROBOTS_DISALLOW_PATHS,
   applyRouteHead,
+  injectBeforeHeadEnd,
+  movieJsonLdHtml,
   pageSeo,
 } from "../client/src/lib/seo";
 
@@ -272,9 +274,28 @@ export const ROUTE_CRAWL_HINTS: Record<
 /** Titles change when the catalogue gains one, so `weekly` is honest for them. */
 const WATCH_HINT = { changefreq: "weekly" as const, priority: 0.8 };
 
+/**
+ * One film as the build knows it: enough for a sitemap `<loc>` and for the
+ * head of a prerendered page.
+ *
+ * The catalogue endpoint already returns the title, synopsis, release year and
+ * poster of every item; the walk used to keep only the id and throw the rest
+ * away, which is why film pages could be listed in the sitemap but not given
+ * their own `<title>` or description at build time.
+ */
+export interface CatalogueEntry {
+  /** Bare TMDB id -- the catalogue prefixes it as `tmdb-969681`. */
+  id: string;
+  title: string;
+  /** Release year, or null when the record has no usable date. */
+  year: number | null;
+  overview: string;
+  posterUrl: string;
+}
+
 /** One `<url>` entry for a title page. */
-function watchEntry(tmdbId: string, origin: string): string {
-  const loc = escapeXml(`${origin}/watch/${tmdbId}`);
+function titleEntry(entry: CatalogueEntry, origin: string): string {
+  const loc = escapeXml(`${origin}/title/${entry.id}`);
   return [
     "  <url>",
     `    <loc>${loc}</loc>`,
@@ -312,30 +333,73 @@ const defaultFetcher: Fetcher = async url => {
   throw lastError;
 };
 
-export async function fetchCatalogueIds(
+/**
+ * Walk the catalogue and return one record per film.
+ *
+ * Renamed from `fetchCatalogueIds`: the walk used to keep only the id, which
+ * was enough for a sitemap `<loc>` but not for the prerendered page that loc
+ * points at -- a film page whose head carries the homepage's title describes
+ * nothing to the crawler that reads the first HTML. The full record costs no
+ * extra requests; it is the same payload, minus the deletion.
+ */
+export async function fetchCatalogue(
   apiBase: string,
   fetcher: Fetcher = defaultFetcher,
   concurrency = 8
-): Promise<string[]> {
+): Promise<CatalogueEntry[]> {
   const base = apiBase.replace(/\/+$/, "");
   const pageUrl = (page: number) => `${base}/api/catalog/discover?page=${page}`;
+  type CatalogueItem = {
+    id?: unknown;
+    title?: unknown;
+    year?: unknown;
+    release_date?: unknown;
+    overview?: unknown;
+    poster_url?: unknown;
+  };
   type Page = {
-    items?: Array<{ id?: unknown }>;
+    items?: CatalogueItem[];
     has_more?: boolean;
     total?: number;
     per_page?: number;
   };
 
-  const first = (await fetcher(pageUrl(1))) as Page;
-  const items = (page: Page) =>
-    (page.items ?? []).map(item => {
-      // The catalogue prefixes ids as `tmdb-969681`; the watch route uses the
-      // bare TMDB id, which is what `buildWatchPath` produces.
-      const raw = String(item?.id ?? "");
-      return raw.startsWith("tmdb-") ? raw.slice(5) : raw;
-    });
+  const entry = (item: CatalogueItem): CatalogueEntry | null => {
+    // The catalogue prefixes ids as `tmdb-969681`; the title route uses the
+    // bare TMDB id, which is what `buildTitlePath` produces.
+    const raw = String(item?.id ?? "");
+    const id = raw.startsWith("tmdb-") ? raw.slice(5) : raw;
+    if (!id) return null;
 
-  const perPage = first.per_page ?? items(first).length ?? 1;
+    const title = typeof item.title === "string" ? item.title.trim() : "";
+    // `year` is the resolved number; `release_date` is the raw date it came
+    // from. Both are checked because a record missing one usually has the
+    // other, and a page titled only "Watch Free on Stream Vy" is worse than
+    // no page at all.
+    const year =
+      typeof item.year === "number" && Number.isFinite(item.year)
+        ? item.year
+        : /^(\d{4})/.exec(String(item.release_date ?? ""))?.[1]
+          ? Number(/^(\d{4})/.exec(String(item.release_date ?? ""))![1])
+          : null;
+
+    return {
+      id,
+      title,
+      year,
+      overview: typeof item.overview === "string" ? item.overview.trim() : "",
+      posterUrl:
+        typeof item.poster_url === "string" ? item.poster_url.trim() : "",
+    };
+  };
+
+  const entries = (page: Page) =>
+    (page.items ?? [])
+      .map(entry)
+      .filter((item): item is CatalogueEntry => item !== null);
+
+  const first = (await fetcher(pageUrl(1))) as Page;
+  const perPage = first.per_page ?? entries(first).length ?? 1;
   /*
    * Walk the catalogue with concurrent batches until the backend stops saying
    * `has_more`, rather than trusting `total`.
@@ -354,20 +418,20 @@ export async function fetchCatalogueIds(
       ? Math.ceil(first.total / (perPage || 1))
       : 1;
 
-  const ids: string[] = [];
+  const items: CatalogueEntry[] = [];
   const seen = new Set<string>();
-  const add = (values: string[]) => {
+  const add = (values: CatalogueEntry[]) => {
     let added = 0;
-    for (const id of values) {
-      if (id && !seen.has(id)) {
-        seen.add(id);
-        ids.push(id);
+    for (const item of values) {
+      if (!seen.has(item.id)) {
+        seen.add(item.id);
+        items.push(item);
         added += 1;
       }
     }
     return added;
   };
-  add(items(first));
+  add(entries(first));
 
   let page = 2;
   let more = first.has_more !== false;
@@ -384,12 +448,12 @@ export async function fetchCatalogueIds(
      * Each page fails on its own, and a failed page is treated as an empty one.
      *
      * `Promise.all` used to reject the whole batch the moment any single page
-     * threw, and `loadCatalogueIds` caught that by returning no ids at all --
-     * so one 500 or one 60s timeout on the Render free tier emptied the sitemap
-     * of every title, which is the entire point of walking the catalogue. The
-     * measured behaviour confirms this is not hypothetical: a walk of ~160 pages
-     * hit timeouts at page ~122 under 8-way concurrency, which under the old
-     * code would have shipped a four-URL sitemap.
+     * threw, and the loader caught that by returning no records at all -- so one
+     * 500 or one 60s timeout on the Render free tier emptied the sitemap of every
+     * title, which is the entire point of walking the catalogue. The measured
+     * behaviour confirms this is not hypothetical: a walk of ~160 pages hit
+     * timeouts at page ~122 under 8-way concurrency, which under the old code
+     * would have shipped a four-URL sitemap.
      *
      * An empty result still feeds the staleness backstop below: a batch that
      * fails *and* contributes nothing counts toward `staleBatches`, so a backend
@@ -410,7 +474,7 @@ export async function fetchCatalogueIds(
     let sawMore = false;
     for (const result of fetched) {
       if (!result) continue;
-      added += add(items(result));
+      added += add(entries(result));
       if (result.has_more !== false) sawMore = true;
     }
     more = sawMore;
@@ -423,19 +487,19 @@ export async function fetchCatalogueIds(
      */
     staleBatches = added === 0 ? staleBatches + 1 : 0;
     if (staleBatches >= 2) break;
-    if (ids.length >= MAX_SITEMAP_URLS) break;
+    if (items.length >= MAX_SITEMAP_URLS) break;
   }
 
-  return ids.slice(0, MAX_SITEMAP_URLS);
+  return items.slice(0, MAX_SITEMAP_URLS);
 }
 
-/** The static routes plus one entry per title. */
+/** The static routes plus one entry per film. */
 export function renderCatalogueSitemap(
-  ids: readonly string[],
+  entries: readonly CatalogueEntry[],
   origin: string,
   lastmodByPath: Readonly<Record<string, string>> = {}
 ): string {
-  const entries = INDEXABLE_PATHS.map(path => {
+  const urls = INDEXABLE_PATHS.map(path => {
     const loc = `${origin}${path === "/" ? "/" : path}`;
     const lastmod = lastmodByPath[path];
     // A path with no entry here is still listed, just without hints -- which
@@ -453,8 +517,8 @@ export function renderCatalogueSitemap(
       .filter(Boolean)
       .join("\n");
   });
-  entries.push(...ids.map(id => watchEntry(id, origin)));
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${entries.join(
+  urls.push(...entries.map(entry => titleEntry(entry, origin)));
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.join(
     "\n"
   )}\n</urlset>\n`;
 }
@@ -489,6 +553,56 @@ export function prerenderRoutes(
 }
 
 /**
+ * One real HTML document per film, at the URL the sitemap lists for it.
+ *
+ * Without this a film page ships the homepage's `<title>` and no description:
+ * the first HTML a crawler reads says "Stream Vy -- Watch Free Movies Online"
+ * for every film on the site, and only a JavaScript-executing crawler ever
+ * learns otherwise, on a second pass, for each page. The head is built by the
+ * same `pageSeo` the live app uses, so the static copy and the hydrated one
+ * cannot drift apart, and the Movie JSON-LD goes in with the same
+ * `data-jsonld` id `head.ts` writes at runtime -- so hydration updates the
+ * block in place rather than adding a second script beside it.
+ *
+ * The URL is `/title/:id`, never `/watch/:id`: the details page is the one
+ * with a synopsis and a poster, it is what every click routes through, and
+ * the player is `noindex` so listing it would point crawlers at a page that
+ * asks not to be indexed.
+ */
+export function prerenderTitlePages(
+  html: string,
+  origin: string,
+  catalogue: readonly CatalogueEntry[]
+): Array<{ fileName: string; source: string }> {
+  return catalogue
+    // A film with no title cannot be given a truthful `<title>` tag -- the
+    // head would fall back to naming the site alone, which every other page
+    // already does better. Skipping it costs one URL in the sitemap that
+    // resolves through the SPA to the live head, which is the state every
+    // film page was in before this existed.
+    .filter(entry => entry.title)
+    .map(entry => {
+      const path = `/title/${entry.id}`;
+      const movie = {
+        id: entry.id,
+        title: entry.title,
+        description: entry.overview || undefined,
+        image: entry.posterUrl || undefined,
+        year: entry.year,
+      };
+      const withHead = applyRouteHead(html, pageSeo(path, { movie }), origin);
+      const withJsonLd = injectBeforeHeadEnd(
+        withHead,
+        movieJsonLdHtml(movie, origin)
+      );
+      return {
+        fileName: prerenderFileName(path),
+        source: injectOrigin(withJsonLd, origin),
+      };
+    });
+}
+
+/**
  * The catalogue, read once per build.
  *
  * Failure is a warning, not an error: a build that cannot reach the backend should
@@ -496,10 +610,10 @@ export function prerenderRoutes(
  * incomplete. What it must not do is fail silently -- a catalogue that quietly
  * emptied out would drop every film from the index with nothing in the log.
  */
-async function loadCatalogueIds(plugin: {
+async function loadCatalogue(plugin: {
   warn: (message: string) => void;
   info: (message: string) => void;
-}): Promise<string[]> {
+}): Promise<CatalogueEntry[]> {
   const apiBase = (
     process.env.VITE_MOVIE_API_BASE_URL ??
     process.env.MOVIE_API_BASE_URL ??
@@ -507,15 +621,17 @@ async function loadCatalogueIds(plugin: {
   ).trim();
   if (!apiBase || apiBase === "/") {
     plugin.warn(
-      "No absolute VITE_MOVIE_API_BASE_URL set, so title pages are not in " +
-        "sitemap.xml. The static routes are still listed."
+      "No absolute VITE_MOVIE_API_BASE_URL set, so film pages are neither in " +
+        "sitemap.xml nor prerendered. The static routes are still listed."
     );
     return [];
   }
   try {
-    const ids = await fetchCatalogueIds(apiBase);
-    plugin.info(`Sitemap: ${ids.length} title pages from the catalogue.`);
-    return ids;
+    const catalogue = await fetchCatalogue(apiBase);
+    plugin.info(
+      `Sitemap: ${catalogue.length} title pages from the catalogue.`
+    );
+    return catalogue;
   } catch (error) {
     plugin.warn(
       `Could not read the catalogue for sitemap.xml (${String(error)}). ` +
@@ -528,7 +644,7 @@ async function loadCatalogueIds(plugin: {
 
 export function seoOriginPlugin(): Plugin {
   let origin = "";
-  let catalogueIds: string[] = [];
+  let catalogue: CatalogueEntry[] = [];
 
   return {
     name: "streamvy:seo-origin",
@@ -540,7 +656,7 @@ export function seoOriginPlugin(): Plugin {
      */
     enforce: "post",
     async buildStart() {
-      catalogueIds = await loadCatalogueIds(this);
+      catalogue = await loadCatalogue(this);
     },
     /*
      * `configResolved` rather than reading `process.env` inline: Vite does *not*
@@ -600,6 +716,28 @@ export function seoOriginPlugin(): Plugin {
         )) {
           this.emitFile({ type: "asset", ...page });
         }
+
+        /*
+         * Only when there is an origin to name: a prerendered film page with a
+         * relative canonical is a page that disowns itself, which is the exact
+         * failure the static routes were fixed for. With no origin the film
+         * pages fall through to the SPA, whose live head is still better than a
+         * confidently wrong static one.
+         */
+        if (origin && catalogue.length > 0) {
+          const pages = prerenderTitlePages(
+            injectOrigin(entry.source, origin),
+            origin,
+            catalogue
+          );
+          for (const page of pages) {
+            this.emitFile({ type: "asset", ...page });
+          }
+          this.info(
+            `Prerendered ${pages.length} film pages with their own title, ` +
+              "description and Movie JSON-LD."
+          );
+        }
       } else {
         this.warn(
           "index.html was not found in the bundle; nothing prerendered."
@@ -627,7 +765,7 @@ export function seoOriginPlugin(): Plugin {
         type: "asset",
         fileName: "sitemap.xml",
         source: renderCatalogueSitemap(
-          catalogueIds,
+          catalogue,
           origin,
           gitLastmodByPath(process.cwd())
         ),

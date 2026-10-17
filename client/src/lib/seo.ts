@@ -109,18 +109,22 @@ const PRIVATE_PREFIXES = [
 ] as const;
 
 /*
- * `/watch` is deliberately NOT private.
+ * `/watch` is deliberately NOT in `PRIVATE_PREFIXES`, and equally deliberately
+ * `noindex` -- the two are different controls and this site needs both.
  *
- * A title page is this site's only content -- a catalogue of public-domain and
- * openly licensed films -- and leaving it noindex means the work of loading and
- * hosting every film buys no organic traffic at all. It was noindex while
- * `index.html` was served for every route, because a page whose canonical pointed
- * at `/` cannot be indexed honestly; now that a watch page carries its own title,
- * description and canonical, that objection no longer applies.
+ * A film page is this site's only content, so it has to be indexable; that is
+ * `/title/:id`, the details page every click routes through and the URL the
+ * sitemap lists. `/watch/:id` is the player that page's Play button opens. It
+ * was the indexable page once, before the details page existed, which is why
+ * `pageSeo` used to give it a full head; with both routes live, indexing the
+ * player too would put every film in the index twice, split across two URLs
+ * competing with their own canonical.
  *
- * `robots.txt` also still permits `/watch`, and that is required rather than
- * incidental: a crawler has to be able to fetch the page to see the `index` that
- * replaces the old `noindex`.
+ * `robots.txt` must still allow fetching `/watch`: `Disallow` stops a crawler
+ * fetching a URL, which would stop it reaching the `noindex` that actually
+ * drops the page -- leaving the URL sitting in the index as "blocked by
+ * robots.txt". The meta tag is the control that works, so the path stays
+ * fetchable and stays out of the index through its own head.
  */
 
 /**
@@ -150,7 +154,7 @@ export const ROBOTS_DISALLOW_PATHS = [
 ] as const;
 
 /**
- * Every URL that belongs in `sitemap.xml`.
+ * Every URL that belongs in `sitemap.xml`, plus one entry per film.
  *
  * Exported because the sitemap is generated from it at build time (see
  * `scripts/seoOriginPlugin.ts`) rather than hand-maintained. The previous sitemap
@@ -159,12 +163,10 @@ export const ROBOTS_DISALLOW_PATHS = [
  * step with `pageSeo` below -- and a fourth copy of an origin that is wrong in
  * every other environment.
  *
- * Movie pages are absent, and that is a real limitation rather than an oversight:
- * `/watch/:id` is `noindex`, so listing it would invite crawlers to index pages
- * this app tells them not to index. A catalogue of several thousand titles is
- * also well past the point where a hand-written file is the right shape. The
- * honest version of that feature is to index the title pages and generate the
- * sitemap from the catalogue, in that order.
+ * Film pages are not in this list because they are not a fixed list: the build
+ * walks the catalogue and emits one `/title/:id` entry per film, and prerenders
+ * the same pages as real HTML. Only the routes that exist regardless of what
+ * the catalogue holds belong here.
  */
 export const INDEXABLE_PATHS = ["/", "/terms", "/privacy", "/dmca"] as const;
 
@@ -254,28 +256,49 @@ export function pageSeo(
   const watchId = watchIdFromPath(path);
 
   /*
-   * A title or watch page before its details have loaded has no title and no
+   * A title page before its details have loaded has no title and no
    * description, and inventing either would put a wrong string in a search
    * result. So it stays noindex until the lookup lands, then becomes
    * indexable. A crawler that runs JavaScript -- which Googlebot does -- sees
    * the indexed version.
+   *
+   * `/watch/:id` is the player the title page's Play button opens, and it is
+   * noindex even once loaded: the film already has an indexable page at
+   * `/title/:id`, and indexing both would put every film in the index twice.
+   * It still carries a real title and the film's image while loading so the
+   * browser tab and any shared link read correctly; only the crawler-facing
+   * decision differs.
    */
   if (watchId) {
     const movie = context.movie;
-    if (!movie) {
-      return { path, title: `${SITE_NAME} - Loading`, description: "", indexable: false };
+    const year = movie?.year ? ` (${movie.year})` : "";
+    const loaded = movie
+      ? {
+          title: `${movie.title}${year} - Watch Free on ${SITE_NAME}`,
+          description:
+            movie.description ||
+            `Watch ${movie.title}${year} free on ${SITE_NAME}, the free movie streaming platform for public domain and openly licensed films.`,
+          image: movie.image || OG_IMAGE,
+        }
+      : { title: `${SITE_NAME} - Loading`, description: "", image: undefined };
+
+    if (path.startsWith("/watch")) {
+      return {
+        path,
+        title: loaded.title,
+        description: "",
+        indexable: false,
+      };
     }
-    const year = movie.year ? ` (${movie.year})` : "";
+
     return {
       path,
-      title: `${movie.title}${year} - Watch Free on ${SITE_NAME}`,
-      description:
-        movie.description ||
-        `Watch ${movie.title}${year} free on ${SITE_NAME}, the free movie streaming platform for public domain and openly licensed films.`,
+      title: loaded.title,
+      description: loaded.description,
       keywords: SITE_KEYWORDS,
-      image: movie.image || OG_IMAGE,
+      image: loaded.image,
       type: "video.other",
-      indexable: true,
+      indexable: Boolean(movie),
     };
   }
   const originless = (
@@ -382,7 +405,7 @@ export function movieSchema(
     "@context": "https://schema.org",
     "@type": "Movie",
     name: movie.title,
-    url: resolve(`/watch/${movie.id}`, origin),
+    url: resolve(`/title/${movie.id}`, origin),
   };
 
   if (movie.description) schema.description = movie.description;
@@ -399,6 +422,45 @@ export function webSiteSchema(origin: string): Record<string, unknown> {
     url: origin ? `${origin}/` : "/",
     description: SITE_DESCRIPTION,
   };
+}
+
+/**
+ * The per-title JSON-LD block as it appears in a prerendered document.
+ *
+ * `renderHeadHtml` deliberately skips `jsonld` descriptors -- the site-level
+ * blocks are literal in `index.html` and identical on every route, so
+ * regenerating them per page would mean a second copy to keep in step. The
+ * Movie block is the exception: it varies per film, so a prerendered title
+ * page has to carry its own or a crawler sees a film page with no structured
+ * data at all.
+ *
+ * The `data-jsonld` id matches what `head.ts` writes at runtime, so hydration
+ * updates this block in place instead of adding a second one. `<` is escaped
+ * as `\u003c` so a synopsis containing `</script>` cannot close the tag early
+ * and leave the rest of the JSON as stray markup.
+ */
+export function movieJsonLdHtml(
+  movie: MovieSchemaInput,
+  origin: string
+): string {
+  const data = JSON.stringify(movieSchema(movie, origin)).replace(
+    /</g,
+    "\\u003c"
+  );
+  return `    <script type="application/ld+json" data-jsonld="${MOVIE_JSONLD_ID}">${data}</script>`;
+}
+
+/**
+ * Insert a block just before `</head>`.
+ *
+ * Returns the input unchanged when there is no `</head>` to anchor on -- the
+ * caller treats that the same way `applyRouteHead` treats missing markers:
+ * the page ships unmodified rather than with a block spliced into the body.
+ */
+export function injectBeforeHeadEnd(html: string, block: string): string {
+  const index = html.lastIndexOf("</head>");
+  if (index < 0) return html;
+  return `${html.slice(0, index)}${block}\n  ${html.slice(index)}`;
 }
 
 /**

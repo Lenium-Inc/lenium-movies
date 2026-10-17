@@ -68,6 +68,7 @@ describe("isPrivatePath", () => {
      * incidental: a blocked URL cannot be fetched, so it cannot see the `index`
      * that replaced the `noindex`.
      */
+    expect(isPrivatePath("/title/603")).toBe(false);
     expect(isPrivatePath("/watch/603")).toBe(false);
     expect(isPrivatePath("/watch/1396?season=1&episode=1")).toBe(false);
   });
@@ -145,7 +146,9 @@ describe("title pages", () => {
     expect(watchIdFromPath("/my-list")).toBeNull();
   });
 
-  it("gives a title page the same head treatment as a watch path", () => {
+  it("gives a title page the film's head, and keeps the player noindex", () => {
+    // Before its details land a title page has nothing truthful to say, so it
+    // stays noindex rather than shipping a placeholder into a search result.
     const loading = pageSeo("/title/603");
     expect(loading.indexable).toBe(false);
 
@@ -153,18 +156,27 @@ describe("title pages", () => {
     expect(seo.indexable).toBe(true);
     expect(seo.title).toBe("The Matrix (1999) - Watch Free on Stream Vy");
     expect(seo.path).toBe("/title/603");
+
+    // The player the Play button opens is a different URL for the same film.
+    // Indexing both would put every film in the index twice, split across two
+    // pages competing with their own canonical -- so the player is noindex
+    // even once loaded, while still carrying the film's title for the tab.
+    const player = pageSeo("/watch/603", { movie: matrix });
+    expect(player.indexable).toBe(false);
+    expect(player.title).toBe("The Matrix (1999) - Watch Free on Stream Vy");
+    expect(player.description).toBe("");
   });
 
   it("stays noindex until the details have loaded", () => {
     // A title page with no title would otherwise be submitted with a placeholder,
     // which is worse in a search result than not being submitted yet.
-    const seo = pageSeo("/watch/603");
+    const seo = pageSeo("/title/603");
     expect(seo.indexable).toBe(false);
     expect(seo.description).toBe("");
   });
 
   it("becomes indexable with the film's own title and description", () => {
-    const seo = pageSeo("/watch/603", { movie: matrix });
+    const seo = pageSeo("/title/603", { movie: matrix });
     expect(seo.indexable).toBe(true);
     expect(seo.title).toBe("The Matrix (1999) - Watch Free on Stream Vy");
     expect(seo.description).toBe("A hacker learns the truth.");
@@ -172,7 +184,7 @@ describe("title pages", () => {
   });
 
   it("falls back to a description that does not invent a synopsis", () => {
-    const seo = pageSeo("/watch/603", {
+    const seo = pageSeo("/title/603", {
       movie: { id: "603", title: "The Matrix" },
     });
     expect(seo.description).toContain("Watch The Matrix free on Stream Vy");
@@ -180,13 +192,13 @@ describe("title pages", () => {
   });
 
   it("canonicalises a title page without its season and episode", () => {
-    // The same film at /watch/1396 and /watch/1396?season=2&episode=4 is one page.
-    const seo = pageSeo("/watch/1396?season=2&episode=4", { movie: matrix });
-    expect(seo.path).toBe("/watch/1396");
+    // The same film at /title/1396 and /title/1396?season=2&episode=4 is one page.
+    const seo = pageSeo("/title/1396?season=2&episode=4", { movie: matrix });
+    expect(seo.path).toBe("/title/1396");
     expect(buildHeadTags(seo, "https://vy.example")).toContainEqual(
       expect.objectContaining({
         kind: "link",
-        href: "https://vy.example/watch/1396",
+        href: "https://vy.example/title/1396",
       })
     );
   });
@@ -194,18 +206,24 @@ describe("title pages", () => {
   it("marks a title page as video, not a web page", () => {
     expect(
       metaContent(
-        buildHeadTags(pageSeo("/watch/603", { movie: matrix }), ORIGIN),
+        buildHeadTags(pageSeo("/title/603", { movie: matrix }), ORIGIN),
         "og:type",
         "property"
       )
     ).toBe("video.other");
   });
 
-  it("describes the film with Movie schema and an absolute poster URL", () => {
+  it("describes the film with Movie schema at the title page's URL", () => {
+    /*
+     * The schema names `/title/:id`, not `/watch/:id`: that is the page a
+     * searcher lands on, the one in the sitemap, and the one that is
+     * indexable. A schema pointing at the noindex player would describe a film
+     * at a URL that deliberately drops out of the index.
+     */
     const schema = movieSchema(matrix, ORIGIN);
     expect(schema["@type"]).toBe("Movie");
     expect(schema.name).toBe("The Matrix");
-    expect(schema.url).toBe(`${ORIGIN}/watch/603`);
+    expect(schema.url).toBe(`${ORIGIN}/title/603`);
     expect(schema.image).toBe(matrix.image);
   });
 });
@@ -303,7 +321,7 @@ describe("movieSchema", () => {
     expect("year" in ({} as Parameters<typeof movieSchema>[0])).toBe(false);
   });
 
-  it("carries the title, type and canonical watch URL", () => {
+  it("carries the title, type and canonical title-page URL", () => {
     const schema = movieSchema(
       {
         id: 603,
@@ -314,7 +332,9 @@ describe("movieSchema", () => {
     );
     expect(schema["@type"]).toBe("Movie");
     expect(schema.name).toBe("The Matrix");
-    expect(schema.url).toContain("/watch/603");
+    // The title page, not the player: that is the indexable URL, the one in
+    // the sitemap, and the one a searcher lands on.
+    expect(schema.url).toContain("/title/603");
   });
 
   it("publishes no aggregateRating, because no vote count exists", () => {
@@ -344,7 +364,7 @@ describe("movieSchema", () => {
       "name",
       "url",
     ]);
-    expect(schema.url).toBe(`${ORIGIN}/watch/603`);
+    expect(schema.url).toBe(`${ORIGIN}/title/603`);
   });
 });
 
