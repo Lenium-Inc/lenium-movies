@@ -109,7 +109,7 @@ describe("isMintedDownloadHandle", () => {
     // handle in production and report a saveable file as missing.
     expect(
       isMintedDownloadHandle(
-        "https://vy-e721.onrender.com/api/v1/playback/download?token=abc"
+        "https://api.example.com/api/v1/playback/download?token=abc"
       )
     ).toBe(true);
   });

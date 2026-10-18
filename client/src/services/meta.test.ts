@@ -19,7 +19,7 @@ async function loadMeta() {
  */
 describe("fetchMovieMeta", () => {
   beforeEach(() => {
-    vi.stubEnv("VITE_MOVIE_API_BASE_URL", "https://backend.test");
+    vi.stubEnv("VITE_API_BASE_URL", "https://backend.test");
   });
 
   afterEach(() => {
@@ -158,7 +158,7 @@ describe("fetchMovieMeta", () => {
 
 describe("fetchMovieDetails", () => {
   beforeEach(() => {
-    vi.stubEnv("VITE_MOVIE_API_BASE_URL", "https://backend.test");
+    vi.stubEnv("VITE_API_BASE_URL", "https://backend.test");
   });
 
   afterEach(() => {

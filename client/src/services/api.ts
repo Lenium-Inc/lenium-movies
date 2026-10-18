@@ -239,57 +239,48 @@ export function subtitleTrackUrl(url: string): string {
 }
 
 /**
- * Base URL of the movie backend.
+ * Base URL of the movie backend (the local Streamvy FastAPI service).
  *
- * Local dev: empty, so every request is a relative `/api/...` call that Vite
- * proxies to the Flask process on :5000.
+ * Resolution order:
  *
- * Dev: unset, and Vite proxies /api to http://localhost:5000 (vite.config.ts).
+ * 1. `VITE_API_BASE_URL` -- the canonical variable, inlined by Vite at build
+ *    time. Set it to whatever origin serves the API.
+ * 2. `VITE_MOVIE_API_BASE_URL` / `VITE_API_URL` -- legacy names, still
+ *    honoured so an existing dashboard or .env keeps working unchanged.
+ * 3. `http://127.0.0.1:8001` -- the Streamvy API's local address, which is
+ *    what an unconfigured dev build (and a build that ships the variable
+ *    blank, the shape .env.example used to carry) talks to.
  *
- * Deployed: the Vercel deployment serves only this SPA and hosts no API of its
- * own, so a relative `/api/...` call resolves against Vercel and comes back as
- * the HTML shell -- which surfaces as a cryptic `Unexpected token '<'` JSON
- * parse error and an empty catalogue, not as an obvious configuration error.
+ * The old hardcoded Render origin is gone: that namespace is reclaimable, and
+ * an unconfigured build silently shipping every viewer's bearer token to
+ * whoever re-registers it is not a fallback, it is a leak. What replaces it is
+ * the local FastAPI default, reported (never logged) through
+ * `USING_FALLBACK_BACKEND_ORIGIN` so a diagnostic surface can tell "configured"
+ * from "defaulting".
  *
- * Vite inlines VITE_MOVIE_API_BASE_URL at build time, and a variable that is
- * present but blank is not the same as an absent one: that is the shape
- * .env.example ships, and what you get from pasting that line into a dashboard.
- * So production falls back to the deployed backend rather than silently
- * pointing at the SPA's own /api/*. The fallback is deliberately silent in the
- * console: it fires on every production build that ships without the variable,
- * which made it a standing line of noise on a page that already logs resolver
- * chatter, and it told the viewer nothing they could act on. It is reported
- * instead through `USING_FALLBACK_BACKEND_ORIGIN`, which a diagnostic surface
- * can read without shouting at every visitor.
- *
- * Two things to know about the fallback. It is the origin every user's
- * `Authorization: Bearer` token is sent to (auth.ts), and *.onrender.com is a
- * reclaimable namespace: deleting the Render project frees the name for
- * someone else to register, after which tokens for this app are POSTed to
- * whoever answers. Putting a custom domain on the backend closes that off, and
- * setting VITE_MOVIE_API_BASE_URL overrides the fallback entirely -- including
- * setting it to "/" to deliberately ship same-origin behind a proxy.
+ * Trailing slashes are stripped so `apiUrl("/feed")` never produces a
+ * double-slash path.
  */
 const CONFIGURED_BACKEND_ORIGIN = (
+  import.meta.env.VITE_API_BASE_URL ||
   import.meta.env.VITE_MOVIE_API_BASE_URL ||
   import.meta.env.VITE_API_URL ||
   ""
 ).trim();
 
-const FALLBACK_BACKEND_ORIGIN = "https://vy-e721.onrender.com";
+const DEFAULT_BACKEND_ORIGIN = "http://127.0.0.1:8001";
 
 export const MOVIE_API_BASE_URL = (
   CONFIGURED_BACKEND_ORIGIN ||
-  (import.meta.env.PROD ? FALLBACK_BACKEND_ORIGIN : "")
+  DEFAULT_BACKEND_ORIGIN
 ).replace(/\/+$/, "");
 
 /**
  * True when this build carries no configured backend origin and is therefore
- * talking to the hardcoded Render URL above. The only signal the fallback
- * leaves behind -- nothing is logged.
+ * talking to the hardcoded local default above. The only signal it leaves
+ * behind -- nothing is logged.
  */
-export const USING_FALLBACK_BACKEND_ORIGIN =
-  MOVIE_API_BASE_URL === FALLBACK_BACKEND_ORIGIN;
+export const USING_FALLBACK_BACKEND_ORIGIN = !CONFIGURED_BACKEND_ORIGIN;
 
 /** Build a full API URL for the movie backend. */
 export function apiUrl(path: string): string {
@@ -668,8 +659,18 @@ export async function resolveStream(
   year?: number | null,
   options?: StreamResolveOptions
 ): Promise<ResolvedStream> {
+  // The backend keys the lookup on `title`, so it must never travel blank:
+  // `?title=` matches nothing and reads as a server-side bug rather than as a
+  // caller mistake. Trimmed, and rejected up front when there is neither a
+  // title nor a TMDB id to resolve by. URLSearchParams percent-encodes what it
+  // is given (space, `&`, `#`, non-ASCII) exactly like encodeURIComponent, so
+  // a title such as "Fish & Chips" survives the query string intact.
+  const trimmedTitle = title.trim();
+  if (!trimmedTitle && !options?.tmdbId) {
+    throw new StreamNotFoundError(title || "(untitled)");
+  }
   const params = new URLSearchParams();
-  params.set("title", title);
+  if (trimmedTitle) params.set("title", trimmedTitle);
   if (year) params.set("year", String(year));
   // Always send the media kind, even when it is the default. The backend falls
   // back to `"movie"` on an absent field, and a series resolved as a film is a

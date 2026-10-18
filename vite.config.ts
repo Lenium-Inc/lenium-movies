@@ -63,10 +63,14 @@ export default defineConfig({
   server: {
     host: true,
     proxy: {
-      // The Flask backend owns every /api route; there is no second API server.
+      // Only used in same-origin mode (VITE_API_BASE_URL="/" or blank builds
+      // pointed back here): forwards to the Streamvy FastAPI service and
+      // strips the legacy /api prefix, because those routes live at the root
+      // there (/feed, /trending, /popular, /search, /movies/{id}).
       "/api": {
-        target: "http://localhost:5000",
+        target: "http://127.0.0.1:8001",
         changeOrigin: true,
+        rewrite: path => path.replace(/^\/api/, ""),
       },
     },
     allowedHosts: ["localhost", "127.0.0.1"],

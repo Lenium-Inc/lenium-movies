@@ -394,24 +394,22 @@ export function WatchPage() {
     []
   );
 
-  // Resolve in parallel with the metadata, not behind it. The auto-resolve
-  // trigger below is keyed on `movie`, which only exists once the metadata
-  // fetch answers -- so the page ran the two in series: a synopsis first, then
-  // the provider walk, although `_init_inputs` accepts a bare TMDB id and
-  // neither answer needs the other. Starting here puts the walk on the wire
-  // during the metadata round trip instead of after it (and during the same
-  // backend cold start, when the instance is waking for both anyway). A
-  // failure is swallowed on purpose: this is a warm-up, and the trigger below
-  // is what owns retries, error UI, taste recording, and playback.
+  // Warm the resolver as soon as the metadata lands, keyed on `movie` so the
+  // request always carries a real title: the backend resolves by title (and
+  // refines with the TMDB id), and an empty `title=` query param is rejected
+  // outright by the FastAPI route. Keyed on `movie`, not on `tmdbId`, because
+  // the id alone cannot name the title. A failure is swallowed on purpose:
+  // this is a warm-up, and the trigger below is what owns retries, error UI,
+  // taste recording, and playback.
   useEffect(() => {
-    if (!tmdbId) return;
-    void resolveWithRetry("", undefined, {
+    if (!tmdbId || !movie) return;
+    void resolveWithRetry(movie.title, movie.year, {
       tmdbId,
       mediaType: urlType === "tv" ? "tv" : "movie",
     }).catch(() => {
       /* the auto-resolve reports this if the viewer actually plays */
     });
-  }, [tmdbId, urlType, resolveWithRetry]);
+  }, [tmdbId, movie, urlType, resolveWithRetry]);
 
   const resolveAndPlay = useCallback(
     async (targetSeason: number, targetEpisode: number) => {

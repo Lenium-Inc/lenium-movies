@@ -1,21 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const RENDER = "https://vy-e721.onrender.com";
+const LOCAL = "http://127.0.0.1:8001";
 
 /**
- * The deployed SPA hosts no API, so every call needs an absolute origin. These
- * cover the resolution order plus the two failure modes that shipped a broken
- * build: a variable that is absent, and one that is present but blank, which
- * looks configured in a dashboard but is not a URL.
+ * These cover the resolution order: the canonical VITE_API_BASE_URL, the two
+ * legacy names behind it, and the built-in local default that replaces both
+ * an absent variable and one that is present but blank (the shape
+ * .env.example ships, which looks configured in a dashboard but is not a URL).
  */
 async function resolveBaseUrl(
-  movieApiBaseUrl: string | undefined,
-  prod: boolean
+  apiBaseUrl: string | undefined,
+  prod: boolean,
+  legacyBaseUrl?: string,
+  apiUrlVar?: string
 ): Promise<string> {
   vi.resetModules();
   vi.stubEnv("PROD", prod);
-  vi.stubEnv("VITE_MOVIE_API_BASE_URL", movieApiBaseUrl as unknown as string);
-  vi.stubEnv("VITE_API_URL", undefined as unknown as string);
+  vi.stubEnv("VITE_API_BASE_URL", apiBaseUrl as unknown as string);
+  vi.stubEnv(
+    "VITE_MOVIE_API_BASE_URL",
+    legacyBaseUrl as unknown as string
+  );
+  vi.stubEnv("VITE_API_URL", apiUrlVar as unknown as string);
   const mod = await import("./api");
   return mod.MOVIE_API_BASE_URL;
 }
@@ -48,36 +54,49 @@ describe("MOVIE_API_BASE_URL resolution", () => {
     ).resolves.toBe("https://backend.example.com");
   });
 
-  it("falls back to the deployed backend in production when the var is absent", async () => {
-    await expect(resolveBaseUrl(undefined, true)).resolves.toBe(RENDER);
+  it("falls back to the local FastAPI address when the var is absent", async () => {
+    await expect(resolveBaseUrl(undefined, true)).resolves.toBe(LOCAL);
   });
 
-  it("falls back in production when the var is present but empty", async () => {
-    await expect(resolveBaseUrl("", true)).resolves.toBe(RENDER);
+  it("falls back when the var is present but empty", async () => {
+    await expect(resolveBaseUrl("", true)).resolves.toBe(LOCAL);
   });
 
-  it("falls back in production when the var is only whitespace", async () => {
-    await expect(resolveBaseUrl("   ", true)).resolves.toBe(RENDER);
+  it("falls back when the var is only whitespace", async () => {
+    await expect(resolveBaseUrl("   ", true)).resolves.toBe(LOCAL);
   });
 
-  it("stays relative in development, where Vite proxies /api to localhost", async () => {
-    await expect(resolveBaseUrl(undefined, false)).resolves.toBe("");
-    await expect(resolveBaseUrl("", false)).resolves.toBe("");
+  it("falls back to the same local address in development", async () => {
+    await expect(resolveBaseUrl(undefined, false)).resolves.toBe(LOCAL);
+    await expect(resolveBaseUrl("", false)).resolves.toBe(LOCAL);
   });
 
   it("lets a configured origin win in development too", async () => {
     await expect(
-      resolveBaseUrl("http://127.0.0.1:5000", false)
-    ).resolves.toBe("http://127.0.0.1:5000");
+      resolveBaseUrl("http://127.0.0.1:8001", false)
+    ).resolves.toBe("http://127.0.0.1:8001");
   });
 
-  it("honours VITE_API_URL when the primary var is blank", async () => {
-    vi.resetModules();
-    vi.stubEnv("PROD", true);
-    vi.stubEnv("VITE_MOVIE_API_BASE_URL", "");
-    vi.stubEnv("VITE_API_URL", "https://legacy.example.com");
-    const mod = await import("./api");
-    expect(mod.MOVIE_API_BASE_URL).toBe("https://legacy.example.com");
+  it("prefers VITE_API_BASE_URL over the legacy VITE_MOVIE_API_BASE_URL", async () => {
+    await expect(
+      resolveBaseUrl(
+        "https://canonical.example.com",
+        true,
+        "https://legacy.example.com"
+      )
+    ).resolves.toBe("https://canonical.example.com");
+  });
+
+  it("honours the legacy VITE_MOVIE_API_BASE_URL when the canonical var is blank", async () => {
+    await expect(
+      resolveBaseUrl("", true, "https://legacy.example.com")
+    ).resolves.toBe("https://legacy.example.com");
+  });
+
+  it("honours VITE_API_URL when both newer vars are blank", async () => {
+    await expect(
+      resolveBaseUrl("", true, "", "https://legacy.example.com")
+    ).resolves.toBe("https://legacy.example.com");
   });
 });
 
@@ -87,39 +106,35 @@ describe("fallback origin reporting", () => {
     vi.restoreAllMocks();
   });
 
-  it("stays silent when production silently uses the hardcoded fallback", async () => {
+  it("stays silent when an unconfigured build uses the hardcoded default", async () => {
     // The fallback used to log a paragraph on every build shipped without the
     // variable. It is now reported only through the flag below, so the
-    // production console keeps quiet.
+    // console keeps quiet.
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    vi.resetModules();
-    vi.stubEnv("PROD", true);
-    vi.stubEnv("VITE_MOVIE_API_BASE_URL", "");
-    vi.stubEnv("VITE_API_URL", undefined as unknown as string);
-    const mod = await import("./api");
-    expect(mod.MOVIE_API_BASE_URL).toBe(RENDER);
-    expect(mod.USING_FALLBACK_BACKEND_ORIGIN).toBe(true);
+    await expect(resolveBaseUrl("", true, "", "")).resolves.toBe(LOCAL);
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("flags the default when no origin is configured, in either mode", async () => {
+    for (const prod of [true, false]) {
+      vi.resetModules();
+      vi.stubEnv("PROD", prod);
+      vi.stubEnv("VITE_API_BASE_URL", "");
+      vi.stubEnv("VITE_MOVIE_API_BASE_URL", "");
+      vi.stubEnv("VITE_API_URL", "");
+      const mod = await import("./api");
+      expect(mod.MOVIE_API_BASE_URL).toBe(LOCAL);
+      expect(mod.USING_FALLBACK_BACKEND_ORIGIN).toBe(true);
+    }
   });
 
   it("keeps the flag false when an origin is configured", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.resetModules();
     vi.stubEnv("PROD", true);
-    vi.stubEnv("VITE_MOVIE_API_BASE_URL", "https://backend.example.com");
-    vi.stubEnv("VITE_API_URL", undefined as unknown as string);
+    vi.stubEnv("VITE_API_BASE_URL", "https://backend.example.com");
     const mod = await import("./api");
     expect(mod.USING_FALLBACK_BACKEND_ORIGIN).toBe(false);
     expect(warn).not.toHaveBeenCalled();
-  });
-
-  it("keeps the flag false in development, where the fallback never applies", async () => {
-    vi.resetModules();
-    vi.stubEnv("PROD", false);
-    vi.stubEnv("VITE_MOVIE_API_BASE_URL", "");
-    vi.stubEnv("VITE_API_URL", undefined as unknown as string);
-    const mod = await import("./api");
-    expect(mod.MOVIE_API_BASE_URL).toBe("");
-    expect(mod.USING_FALLBACK_BACKEND_ORIGIN).toBe(false);
   });
 });

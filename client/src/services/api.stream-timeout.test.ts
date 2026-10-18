@@ -30,7 +30,7 @@ async function rejection(promise: Promise<unknown>): Promise<StreamExhaustedErro
  */
 describe("getStreamSource timeout handling", () => {
   beforeEach(() => {
-    vi.stubEnv("VITE_MOVIE_API_BASE_URL", "https://backend.test");
+    vi.stubEnv("VITE_API_BASE_URL", "https://backend.test");
     vi.useFakeTimers();
   });
 
@@ -141,7 +141,7 @@ describe("getStreamSource timeout handling", () => {
  */
 describe("getStreamSource provider exhaustion", () => {
   beforeEach(() => {
-    vi.stubEnv("VITE_MOVIE_API_BASE_URL", "https://backend.test");
+    vi.stubEnv("VITE_API_BASE_URL", "https://backend.test");
   });
 
   afterEach(() => {

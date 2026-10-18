@@ -18,7 +18,7 @@ import {
  */
 describe("fetchTrailerByTmdbId", () => {
   beforeEach(() => {
-    vi.stubEnv("VITE_MOVIE_API_BASE_URL", "https://backend.test");
+    vi.stubEnv("VITE_API_BASE_URL", "https://backend.test");
   });
 
   afterEach(() => {
@@ -77,7 +77,7 @@ describe("fetchTrailerByTmdbId", () => {
 
 describe("resolveStream stream preservation", () => {
   beforeEach(() => {
-    vi.stubEnv("VITE_MOVIE_API_BASE_URL", "https://backend.test");
+    vi.stubEnv("VITE_API_BASE_URL", "https://backend.test");
   });
 
   afterEach(() => {
