@@ -55,6 +55,33 @@ _ARGS = [
     "--disable-blink-features=AutomationControlled",
     "--no-sandbox",
 ]
+#: Ad and analytics hosts the provider page pulls in. They are aborted before
+#: the request leaves the process: they never carry media, several answer with
+#: an invalid certificate (surfacing as `ERR_CERT_AUTHORITY_INVALID` in the
+#: console), and the ones that do resolve are the reason `domcontentloaded`
+#: drags out to twenty seconds. Cutting them is the single biggest win on
+#: time-to-playlist -- the provider's own `/api/` and CDN hosts are untouched.
+_BLOCKED_HOSTS = (
+    "yandex.",
+    "adsco.re",
+    "google-analytics.com",
+    "googletagmanager.com",
+    "doubleclick.net",
+    "googlesyndication.com",
+    "adnxs.com",
+    "scorecardresearch.com",
+    "facebook.net",
+    "fbcdn.net",
+    "hotjar.com",
+    "criteo.com",
+    "taboola.com",
+    "outbrain.com",
+    "adsterra.com",
+    "propellerads.com",
+    "pubmatic.com",
+    "openx.net",
+    "rubiconproject.com",
+)
 
 
 @dataclass
@@ -139,9 +166,35 @@ class _Worker(threading.Thread):
                 found.set()
 
         page.on("response", on_response)
+
+        def _maybe_block(route):
+            try:
+                if any(host in route.request.url for host in _BLOCKED_HOSTS):
+                    return route.abort()
+            except Exception:  # noqa: BLE001 - a discarded request has no url
+                pass
+            route.continue_()
+
+        page.route("**/*", _maybe_block)
+        # One deadline for the whole render: navigation and the wait for the
+        # playlist share `budget`, so `_render` can never outlive the caller's
+        # `results.get(timeout=budget + 5)` in `render`.
+        deadline = time.time() + budget
         try:
-            page.goto(url, wait_until="domcontentloaded", timeout=budget * 1000)
-            deadline = time.time() + budget
+            try:
+                # `commit`, not `domcontentloaded`: the playlist JSON is driven
+                # by the page's own script and arrives on the wire whether or
+                # not the document finishes parsing, while `domcontentloaded`
+                # here can take twenty seconds and -- bounded by
+                # `timeout=budget` -- would raise before the response we are
+                # waiting for ever lands.
+                page.goto(
+                    url,
+                    wait_until="commit",
+                    timeout=max(0.5, deadline - time.time()) * 1000,
+                )
+            except Exception:  # noqa: BLE001 - a slow or errored navigation still leaves the page running
+                pass
             while not found.is_set() and time.time() < deadline:
                 page.wait_for_timeout(200)
         finally:

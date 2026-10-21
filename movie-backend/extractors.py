@@ -27,15 +27,22 @@ UA = (
 TIMEOUT = float(os.getenv("EXTRACTOR_TIMEOUT", "7"))
 #: Wall clock for the whole chain, and therefore the number a viewer waits
 #: before the archive tier even starts. The chain is one browser render plus
-#: its HTTP plumbing: a render that is going to answer has the id and the
-#: playlist within a few seconds of `domcontentloaded`, and one that has not
-#: answered by here is an ad wrapper or a title the provider does not carry --
-#: holding the request open for another 15s only delays the honest miss.
-BUDGET = float(os.getenv("EXTRACTOR_BUDGET_SECONDS", "12"))
+#: its HTTP plumbing: the provider page pulls enough third-party script that
+#: `domcontentloaded` itself can take twenty seconds, and the `/api/b/` JSON
+#: naming the playlist lands anywhere from about twelve to twenty-three
+#: seconds in after that. A budget under that window never lets the render
+#: reach the response it is waiting for, so a title the provider *does* carry
+#: comes back as an honest miss -- the worst possible answer. The miss case is
+#: still bounded: past this the page is an ad wrapper or a title the provider
+#: does not carry, and holding open another half minute only delays that.
+#: Kept under the client's `MOVIE_RESOLVE_TIMEOUT_MS` (30s) so a viewer never
+#: has their request cut off before the server returns its own honest answer.
+BUDGET = float(os.getenv("EXTRACTOR_BUDGET_SECONDS", "25"))
 #: Hard ceiling on a single page render, independent of the chain budget.
 #: Below `BUDGET` so the chain -- not this cap -- is what stops a run that
-#: leaves time for a second extractor.
-BROWSER_RENDER_TIMEOUT = float(os.getenv("BROWSER_RENDER_TIMEOUT_SECONDS", "10"))
+#: leaves time for a second extractor, but high enough to cover the provider's
+#: real time-to-playlist rather than the single-digit seconds it once took.
+BROWSER_RENDER_TIMEOUT = float(os.getenv("BROWSER_RENDER_TIMEOUT_SECONDS", "20"))
 #: An embed page is kilobytes. Past this the fetch is not a page and reading
 #: it whole would be an allocation primitive reachable from a third party.
 MAX_BODY_BYTES = 2 * 1024 * 1024

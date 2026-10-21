@@ -813,16 +813,17 @@ export const STREAM_RESOLVE_TIMEOUT_MS = 30_000;
  *
  * The endpoint bounds itself: the extract chain and the archive lookup run
  * concurrently under one server-side tier budget (`RESOLVE_TIER_BUDGET_SECONDS`,
- * 12s by default), so a warm answer -- stream or honest miss -- lands in
- * ~13s at the outside. What the client timeout still has to cover is the
+ * 25s by default), so a warm answer -- stream or honest miss -- lands in
+ * ~26s at the outside. What the client timeout still has to cover is the
  * instance that has scaled to zero: a cold Render boot eats 15-20s before the
  * request reaches Python at all, and a timeout shorter than that would abort
- * every first visit of the day. 25s clears boot + budget while still cutting
- * a genuinely hung request roughly in half compared to the old 45s, and a
- * timeout thrown here is classified recoverable, so the cold-start case is
- * retried warm instead of surfacing as "unavailable".
+ * every first visit of the day. 30s clears the server's own budget plus boot
+ * with margin, so the viewer always sees the server's honest verdict (a stream
+ * or a genuine "no source") rather than a client-side cut-off masquerading as
+ * one -- and a timeout thrown here is classified recoverable, so the cold-start
+ * case is retried warm instead of surfacing as "unavailable".
  */
-export const MOVIE_RESOLVE_TIMEOUT_MS = 25_000;
+export const MOVIE_RESOLVE_TIMEOUT_MS = 30_000;
 
 /**
  * Per-provider diagnostics when this response means "every provider failed",
