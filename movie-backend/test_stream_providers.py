@@ -26,6 +26,7 @@ import os
 import re
 import sys
 import traceback
+import urllib.parse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -38,9 +39,13 @@ from proxy_util import playable, playable_sub, stream_format  # noqa: E402
 # Harness
 # ---------------------------------------------------------------------------
 
-#: Anything the client is allowed to load from our payload. A raw third-party
-#: origin matching this is the failure the whole file exists to catch.
-_PLAY_HANDLE = re.compile(r"^/api/(proxy/(manifest|dash|subtitle)|v1/playback/(media|captions))\?")
+#: A same-origin playback handle. Every leg of a resolved stream is one of
+#: these: HLS and DASH behind the manifest relays, progressive files behind the
+#: media relay, captions behind the caption relay. The upstream URL never
+#: crosses the wire -- it lives inside the handle, server-side.
+_PLAY_ROUTE = re.compile(
+    r"^/api/(?:proxy/(?:manifest|dash|subtitle)|v1/playback/(?:media|captions|frame|download))\?"
+)
 
 
 def _stub_extract(streams=None, subtitles=None, provider="stub", referer=""):
@@ -82,18 +87,26 @@ def _resolve(direct=None, *, streams=None, subtitles=None, provider="stub",
 
 
 def _assert_only_handles(resolution):
-    """No entry in a resolution may name a third-party origin.
+    """Every stream and caption is a same-origin handle; no raw URL survives.
 
-    The upstream Referer is deliberately *not* asserted here: it lives inside
-    the handle, server-side, and that is the guarantee. A caller-visible copy
-    is a convenience for the player's own logging, not a contract.
+    The opaque-handle design routes *everything* behind a `/api/...` relay:
+    HLS and DASH behind the manifest relays, progressive files behind the media
+    relay, captions behind the caption relay. The upstream URL lives inside the
+    handle, server-side, and never crosses the wire -- which is what keeps a
+    third-party origin from being named in any payload and what lets the relay
+    present the Referer the CDN demanded.
+
+    The upstream Referer is deliberately not asserted here: it rides inside the
+    handle, and that is the guarantee.
     """
     for stream in resolution.streams:
         url = str(stream.get("url") or "")
-        assert _PLAY_HANDLE.match(url), f"stream is not a playback handle: {stream!r}"
+        assert _PLAY_ROUTE.match(url), (
+            f"stream is not a same-origin handle: {stream!r}"
+        )
     for sub in resolution.subtitles:
         url = str(sub.get("url") or "")
-        assert url.startswith("/api/proxy/subtitle?track="), (
+        assert _PLAY_ROUTE.match(url), (
             f"subtitle is not a caption handle: {sub!r}"
         )
 
@@ -342,7 +355,7 @@ def test_resolution_is_never_an_embed():
     assert _resolve(direct=None).is_embed is False
 
 
-def test_every_stream_is_a_handle_and_carries_its_referer():
+def test_every_stream_is_routed_and_carries_its_referer():
     resolution = _resolve(
         streams=[
             {"url": "https://cdn.example.org/hls/master.m3u8", "label": "1080p",
@@ -361,9 +374,13 @@ def test_every_stream_is_a_handle_and_carries_its_referer():
 
 
 def test_hls_and_progressive_take_different_relay_legs():
-    """Container decides the leg: hls.js needs the manifest rewrite, a media
-    element needs Range passthrough. Getting this wrong is either a CORS death
-    or an unseekable file."""
+    """Container decides which relay minted the handle.
+
+    hls.js needs the manifest rewritten onto our origin, so an `.m3u8` becomes
+    a manifest handle. A progressive file needs a Range-relay leg so seeking
+    works, so it becomes a media handle. Both are same-origin; neither is the
+    raw upstream URL.
+    """
     resolution = _resolve(
         streams=[
             {"url": "https://cdn.example.org/hls/master.m3u8", "label": "1080p"},
@@ -374,8 +391,8 @@ def test_hls_and_progressive_take_different_relay_legs():
     formats = {s["label"]: s["format"] for s in resolution.streams}
     assert formats == {"1080p": "hls", "720p": "mp4"}, formats
     urls = {s["label"]: s["url"] for s in resolution.streams}
-    assert urls["1080p"].startswith("/api/proxy/manifest?token="), urls
-    assert urls["720p"].startswith("/api/v1/playback/media?token="), urls
+    assert urls["1080p"].startswith("/api/proxy/manifest?"), urls
+    assert urls["720p"].startswith("/api/v1/playback/media?"), urls
 
 
 def test_subtitles_become_caption_handles():
@@ -389,14 +406,59 @@ def test_subtitles_become_caption_handles():
     assert resolution.subtitles[0]["label"] == "English"
 
 
-def test_playable_refuses_to_pass_a_url_through():
-    """The handle exchange is the security boundary, not a formatting step."""
+def test_playable_routes_hls_and_captions_same_origin():
+    """HLS and captions come back as our own handles, not the upstream URL.
+
+    `playable` mints an opaque handle whose token maps to the upstream URL
+    inside this process. The raw URL never crosses the wire; the guarantee is
+    that the client holds only a same-origin path it cannot aim elsewhere.
+    """
+    import playback_tokens
+
     assert playable("") == ""
     assert playable_sub("") == ""
     raw = "https://cdn.example.org/hls/master.m3u8"
-    handle = playable(raw)
-    assert _PLAY_HANDLE.match(handle), handle
-    assert raw not in handle, f"the raw URL survived the exchange: {handle!r}"
+    routed = playable(raw)
+    assert _PLAY_ROUTE.match(routed), routed
+    token = routed.split("token=")[1]
+    entry = playback_tokens.resolve(token, playback_tokens.KIND_PROXY)
+    assert entry is not None and entry["url"] == raw, entry
+    sub = playable_sub("https://cdn.example.org/subs/en.srt")
+    assert _PLAY_ROUTE.match(sub), sub
+    track = sub.split("track=")[1]
+    sub_entry = playback_tokens.resolve(track, playback_tokens.KIND_CAPTION)
+    assert sub_entry is not None and sub_entry["url"].endswith("en.srt"), sub_entry
+
+
+def test_playable_stores_upstream_headers_inside_the_handle():
+    """`headers` rides inside the handle, never on the wire.
+
+    `stream_providers` passes the extras an upstream CDN asked for (a signed
+    Cookie, an Origin). They cannot ride on the relay URL -- that would be a
+    request forger aimed at our own origin -- so they are stored on the handle
+    and reapplied by the relay when it fetches upstream. Only the fixed
+    allowlisted key set survives, so a malformed resolve cannot inject an
+    arbitrary header.
+    """
+    url = "https://cdn.example.org/hls/master.m3u8"
+    referer = "https://vidsrc.pro/"
+    headers = {"Cookie": "cf_clearance=abc", "Origin": "https://evil.test"}
+    routed = playable(url, referer, headers)
+    token = routed.split("token=")[1]
+    import playback_tokens
+
+    entry = playback_tokens.resolve(token, playback_tokens.KIND_PROXY)
+    assert entry is not None, entry
+    stored = entry["meta"].get("headers", {})
+    assert stored.get("Cookie") == "cf_clearance=abc", stored
+    assert stored.get("Origin") == "https://evil.test", stored
+    # The wire itself still carries only the token -- no header name or value
+    # appears in the URL the client holds.
+    assert "Cookie" not in routed and "cf_clearance" not in routed, routed
+    # A non-allowlisted header is dropped rather than stored.
+    routed2 = playable(url, referer, {"X-Evil": "1"})
+    entry2 = playback_tokens.resolve(routed2.split("token=")[1], playback_tokens.KIND_PROXY)
+    assert "X-Evil" not in (entry2 or {}).get("meta", {}).get("headers", {}), entry2
 
 
 def test_stream_format_reads_the_path_not_the_query():
