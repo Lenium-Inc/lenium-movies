@@ -1,4 +1,5 @@
 import { EMBED_HOSTS } from "@/lib/embedSources";
+import { isProxiedVideoUrl, proxiedVideoTarget } from "@/services/streamvy";
 
 /**
  * Hosts that serve a third-party iframe player rather than a media file.
@@ -101,14 +102,31 @@ export function isEmbedSourceUrl(url: string | null | undefined): boolean {
 
 export type StreamType = "hls" | "dash" | "mp4" | "embed";
 
+/**
+ * The URL to sniff the container from.
+ *
+ * Almost every playable URL in this app is one of the API's proxy handles, and
+ * a handle's own path is opaque -- every one of them ends in
+ * `/api/proxy/video` and carries no extension at all. Reading the handle would
+ * classify every rendition as "unrecognised" and hand a DASH playlist to
+ * `<video src>`, which fails with a media error the viewer can only read as
+ * "broken". So the format is read off the upstream URL the handle carries, and
+ * the handle itself is only consulted when there is nothing to unwrap.
+ */
+function formatSourceUrl(url: string): string {
+  return proxiedVideoTarget(url) ?? url;
+}
+
 export function getStreamType(url: string): StreamType {
   if (isEmbedSourceUrl(url)) return "embed";
+
+  const target = formatSourceUrl(url);
 
   // The two direct relays carry no extension -- their path *is* the format
   // signal -- so they are read before the extension table. Without this a
   // tokenised HLS handle ranked as "unrecognised" and lost its place at the
   // head of the play order.
-  const pathname = pathnameOf(url);
+  const pathname = pathnameOf(target);
   if (pathname === MANIFEST_HANDLE_PATH) return "hls";
   if (pathname === MEDIA_HANDLE_PATH) return "mp4";
 
@@ -116,7 +134,7 @@ export function getStreamType(url: string): StreamType {
     const lower = pathname.toLowerCase();
     if (lower.endsWith(".m3u8") || lower.endsWith(".m3u")) return "hls";
     if (lower.endsWith(".mpd")) return "dash";
-    if (lower.endsWith(".mp4")) return "mp4";
+    if (lower.endsWith(".mp4") || lower.endsWith(".m4v")) return "mp4";
   }
   return "embed";
 }
@@ -135,12 +153,26 @@ export function getStreamType(url: string): StreamType {
  *    than dropped -- the registry cannot know every provider -- but it must
  *    never outrank a real manifest, because handing it to `<video>` first
  *    costs a full stall-detection cycle before the good source is tried.
+ * 3. A proxied *file*. Real bytes, relayed through the API origin with the
+ *    CORS header the CDN never sends -- so this is what actually plays, and it
+ *    sits above an unclassifiable page for the same reason a direct file does.
+ * 4. A proxied *manifest*. The relay fetches one URL; it does not follow the
+ *    segment and period references a playlist is made of, and those point back
+ *    at a host the browser cannot reach directly. A proxied manifest is kept
+ *    as the last thing to try rather than dropped -- it costs nothing to
+ *    offer -- but it must never outrank a proxied file, because trying it
+ *    first spends a whole load cycle to fail on the same manifest.
  *
  * Ties keep the order the resolver returned, so backend preference survives
  * within each tier.
  */
 export function directStreamRank(url: string): number {
+  const proxied = isProxiedVideoUrl(url);
   const type = getStreamType(url);
+  if (proxied) {
+    if (type === "mp4") return 3;
+    return 4;
+  }
   if (type === "hls") return 0;
   if (type === "mp4" || type === "dash") return 1;
   return 2;

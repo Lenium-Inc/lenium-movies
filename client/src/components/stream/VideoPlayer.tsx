@@ -259,6 +259,15 @@ export interface VideoPlayerProps {
    * seen playing.
    */
   startAtSeconds?: number;
+  /**
+   * Another surface in the same player slot (the trailer) has taken over.
+   *
+   * The movie player stays mounted underneath so toggling the trailer does not
+   * tear down and rebuild hls/dash — but its audio must not keep playing under
+   * the trailer, so this pauses it. Unpausing is left to the viewer; resuming
+   * silently behind an overlay they just closed would be surprising.
+   */
+  suspended?: boolean;
 }
 
 const QUALITY_ORDER = ["8K", "4K", "1080p", "720p", "480p", "360p", "Auto"] as const;
@@ -312,6 +321,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   onProgress,
   preferredLanguage = null,
   startAtSeconds = 0,
+  suspended = false,
 }) => {
   const [isPlaying, setIsPlaying] = useState<boolean>(autoPlay);
   const [isMuted, setIsMuted] = useState<boolean>(false);
@@ -410,6 +420,34 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, [startAtSeconds]);
 
   const videoRef = useRef<HTMLVideoElement>(null);
+
+  // Mirrored into a ref for the same reason as `startAtRef`: the stream-setup
+  // effect must not re-run when the page's `onSourceError` identity changes.
+  // The page's callback closes over its candidate list and reconnect state, so
+  // it is a new function on every one of those updates — and listing it as a
+  // dependency tore down and rebuilt hls.js/dash.js (a full manifest re-fetch
+  // and re-seek) even when the URL had not changed. Reading it through a ref
+  // keeps the effect keyed on the source alone while the handler stays fresh.
+  const onSourceErrorRef = useRef(onSourceError);
+  useEffect(() => {
+    onSourceErrorRef.current = onSourceError;
+  });
+  const reportSourceError = useCallback(() => {
+    onSourceErrorRef.current?.();
+  }, []);
+
+  // Pause while another surface (the trailer) owns the slot. The player stays
+  // mounted so closing the trailer does not rebuild it, but its audio must not
+  // keep running underneath.
+  useEffect(() => {
+    if (suspended) videoRef.current?.pause();
+  }, [suspended]);
+
+  // Throttle for the one-URL-per-rung quality path. Each swap tears down and
+  // re-attaches the engine, so a rapid burst of clicks (or a menu row hit
+  // twice while the first swap is still loading) would stack full reloads.
+  // Ladder switches above never touch this — they are in-place and free.
+  const lastQualitySwitchRef = useRef(0);
 
   // Deep link: `#audio-subtitles` opens the track menu on arrival.
   //
@@ -773,16 +811,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     // If the source stalls (no progress for a while) it is treated as a dead
     // source and handed back to the page so the failover loop can switch
-    // mirrors/servers in the background. ~6s cadence keeps auto-cycles snappy.
+    // mirrors/servers in the background. Two windows, because the two moments
+    // mean different things: a mid-playback `waiting`/`stalled` at ~6s is a
+    // stall the viewer is already watching, but the watch armed at attach has
+    // to survive a cold manifest + first segment through the proxy, which can
+    // legitimately take several seconds before the first metadata lands.
     const STALL_TIMEOUT_MS = 6000;
-    const startStallWatch = () => {
+    const INITIAL_LOAD_TIMEOUT_MS = 15000;
+    const startStallWatch = (timeoutMs: number = STALL_TIMEOUT_MS) => {
       if (stallTimerRef.current) return;
       stallTimerRef.current = setTimeout(() => {
         stallTimerRef.current = null;
         if (videoRef.current && videoRef.current.readyState < 3) {
-          onSourceError?.();
+          reportSourceError();
         }
-      }, STALL_TIMEOUT_MS);
+      }, timeoutMs);
     };
     const clearStallWatch = () => {
       if (stallTimerRef.current) {
@@ -838,7 +881,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       // candidate chain and keeps its own overlay up, so an error card painted
       // here would appear and vanish once per candidate on the way to the one
       // that works.
-      onSourceError?.();
+      reportSourceError();
     };
 
     const handleWaiting = () => {
@@ -899,6 +942,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
             hls.loadSource(sourceUrl);
             hls.attachMedia(video);
+            // Armed at attach, not only from `waiting`/`stalled`: a manifest
+            // request that hangs fires no media events at all, so an
+            // event-only watchdog never starts and the player sits on the
+            // poster until the viewer gives up. This fires once if the source
+            // has produced nothing decodable within the initial-load window.
+            startStallWatch(INITIAL_LOAD_TIMEOUT_MS);
 
             hls.on(Hls.Events.MANIFEST_PARSED, () => {
               if (hlsCancelled) return;
@@ -951,18 +1000,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               (_event: unknown, data: { fatal?: boolean }) => {
                 if (data.fatal) {
                   hls?.destroy();
-                  onSourceError?.();
+                  reportSourceError();
                 }
               }
             );
           } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
             video.src = sourceUrl;
+            startStallWatch(INITIAL_LOAD_TIMEOUT_MS);
           } else {
-            onSourceError?.();
+            reportSourceError();
           }
         })
         .catch(() => {
-          if (!hlsCancelled) onSourceError?.();
+          if (!hlsCancelled) reportSourceError();
         });
     } else if (streamType === "dash") {
       // No browser plays an `.mpd` natively, so a DASH source has to go
@@ -1087,19 +1137,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               code === "codecUnsupportedError"
             ) {
               player.destroy();
-              onSourceError?.();
+              reportSourceError();
             }
           });
           player.initialize(video, sourceUrl, false);
           dashPlayerRef.current = player;
+          startStallWatch(INITIAL_LOAD_TIMEOUT_MS);
         })
         .catch(() => {
           // The library failed to load at all. Saying so is the same contract
           // as a media element that cannot play the container.
-          if (!dashCancelled) onSourceError?.();
+          if (!dashCancelled) reportSourceError();
         });
     } else {
       video.src = sourceUrl;
+      startStallWatch(INITIAL_LOAD_TIMEOUT_MS);
     }
 
     // `hlsRef.current` is assigned inside the dynamic import's `.then()`
@@ -1121,13 +1173,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
+    // Keyed on the source and the stable callbacks only. `onSourceError` is
+    // intentionally absent — it is read through `reportSourceError`/the ref so
+    // the page's reconnect state changing cannot rebuild a healthy player.
+    // `autoCycling` is absent because it is render chrome, not setup input:
+    // listing it re-ran teardown on every failover state flip.
   }, [
     streamUrl,
     streamType,
     initAmbientCanvas,
     attemptAutoplay,
-    onSourceError,
-    autoCycling,
+    reportSourceError,
   ]);
 
   useEffect(() => {
@@ -1591,6 +1647,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (quality === currentQuality) return;
       const variant = variants.find(v => v.quality === quality);
       if (!variant) return;
+      // Debounced: a second pick within the window is dropped so it cannot
+      // queue another full engine teardown on top of the one still loading.
+      const now = Date.now();
+      if (now - lastQualitySwitchRef.current < 500) return;
+      lastQualitySwitchRef.current = now;
 
       // A source swap remounts the player, and the progress sample is
       // throttled to one per RESUME_SAMPLE_SECONDS -- without this flush the

@@ -731,7 +731,6 @@ export function WatchPage() {
   const [reconnecting, setReconnecting] = useState(false);
   const [streamUnavailable, setStreamUnavailable] = useState(false);
   const fallbackAttemptsRef = useRef(0);
-  const playerKeyRef = useRef(0);
   // Quality rung picked from the player's menu when the source is one URL per
   // rendition rather than a single adaptive ladder. `null` means "whatever the
   // resolver ranked first".
@@ -857,7 +856,9 @@ export function WatchPage() {
 
   const handleSourceError = useCallback(() => {
     if (sourceIndex + 1 < playableCandidates.length) {
-      playerKeyRef.current += 1;
+      // No remount key: advancing the index changes `currentStreamUrl`, which
+      // re-inits the engine in place on the same <video>. Bumping a key here
+      // tore the whole component down and rebuilt its controls/progress too.
       setSourceIndex(prev => Math.min(prev + 1, playableCandidates.length - 1));
     } else if (!reconnecting && !streamUnavailable) {
       fallbackAttemptsRef.current = 0;
@@ -1224,58 +1225,16 @@ export function WatchPage() {
                         <ReleaseCountdown movie={movie} />
                       </div>
                     </>
-                  ) : playingTrailer && resolvedTrailer ? (
-                    /* Trailer frame. The attribute set is the fix: no
-                       `allow-same-origin` in a sandbox makes the origin opaque
-                       and the player cannot read its own storage or fetch
-                       segments, which is exactly the black "won't play". */
+                  ) : (
                     <>
-                      {trailerThumb ? (
-                        <img
-                          key="trailer-thumb"
-                          src={trailerThumb}
-                          alt=""
-                          aria-hidden
-                          className="absolute inset-0 h-full w-full object-cover"
-                        />
-                      ) : null}
-                      {!trailerFrameLoaded ? (
-                        <div className="absolute inset-0 z-10 flex items-center justify-center">
-                          <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-white" />
-                        </div>
-                      ) : null}
-                      <iframe
-                        key={resolvedTrailer.src}
-                        src={resolvedTrailer.src}
-                        title={`${movie.title} — ${resolvedTrailer.label}`}
-                        allow={FRAME_ALLOW}
-                        sandbox={FRAME_SANDBOX}
-                        referrerPolicy="strict-origin-when-cross-origin"
-                        onLoad={() => setTrailerFrameLoaded(true)}
-                        className={`absolute inset-0 h-full w-full border-0 transition-opacity duration-300 ${
-                          trailerFrameLoaded ? "opacity-100" : "opacity-0"
-                        }`}
-                      />
-                      <TrailerBrandingMask />
-                      {/* The trailer owns the whole player slot, so the way
-                          back has to live on the trailer itself — the aside's
-                          toggle sits below the fold and reads as status, not
-                          as an exit. Top-center keeps it clear of the page's
-                          own Back (top-left) and of YouTube's chrome. */}
-                      <button
-                        type="button"
-                        onClick={() => setPlayingTrailer(false)}
-                        className="absolute left-1/2 top-4 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full bg-black/70 px-4 py-2 text-xs font-semibold tracking-wide text-white backdrop-blur transition-colors hover:bg-black/90"
-                      >
-                        <ArrowLeft className="h-3.5 w-3.5" aria-hidden />
-                        Back to movie
-                      </button>
-                    </>
-                  ) : resolved ? (
-                    <>
-                      {currentStreamUrl && !streamUnavailable ? (
+                      {/* One persistent player. It stays mounted across trailer
+                          toggles and quality swaps, so the hls/dash engine is
+                          never torn down and rebuilt — the dual-player flicker
+                          and the multi-second re-init on every click came from
+                          the old branch that unmounted this the moment the
+                          trailer opened. */}
+                      {resolved && currentStreamUrl && !streamUnavailable ? (
                         <VideoPlayer
-                          key={playerKeyRef.current}
                           streamUrl={currentStreamUrl}
                           title={displayTitle}
                           poster={streamPoster}
@@ -1284,10 +1243,11 @@ export function WatchPage() {
                           subtitles={streamSubtitles}
                           currentQuality={selectedQuality ?? "Auto"}
                           onQualityChange={quality => {
-                            // A per-rendition source swap, not an in-player
-                            // level switch: bump the key so the player remounts
-                            // cleanly on the chosen URL.
-                            playerKeyRef.current += 1;
+                            // An in-place source swap: this only changes which
+                            // URL the player is opened on, and the player
+                            // re-attaches on the same <video> element. No
+                            // remount key, so the DOM, controls, and progress
+                            // all survive the change.
                             setSelectedQuality(quality);
                           }}
                           autoCycling={autoCycling}
@@ -1299,11 +1259,64 @@ export function WatchPage() {
                               ? progressCursorRef.current.seconds
                               : storedResume
                           }
+                          suspended={playingTrailer && !!resolvedTrailer}
                           hideCloseButton
                         />
                       ) : null}
+
+                      {/* Trailer overlay, stacked above the live player rather
+                          than swapped in for it. The movie engine stays warm
+                          underneath; only this surface mounts and unmounts. */}
+                      {playingTrailer && resolvedTrailer ? (
+                        <div className="absolute inset-0 z-20">
+                          {trailerThumb ? (
+                            <img
+                              key="trailer-thumb"
+                              src={trailerThumb}
+                              alt=""
+                              aria-hidden
+                              className="absolute inset-0 h-full w-full object-cover"
+                            />
+                          ) : null}
+                          {!trailerFrameLoaded ? (
+                            <div className="absolute inset-0 z-10 flex items-center justify-center">
+                              <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-white" />
+                            </div>
+                          ) : null}
+                          {/* The attribute set is the fix: no `allow-same-origin`
+                              in a sandbox makes the origin opaque and the player
+                              cannot read its own storage or fetch segments,
+                              which is exactly the black "won't play". */}
+                          <iframe
+                            key={resolvedTrailer.src}
+                            src={resolvedTrailer.src}
+                            title={`${movie.title} — ${resolvedTrailer.label}`}
+                            allow={FRAME_ALLOW}
+                            sandbox={FRAME_SANDBOX}
+                            referrerPolicy="strict-origin-when-cross-origin"
+                            onLoad={() => setTrailerFrameLoaded(true)}
+                            className={`absolute inset-0 h-full w-full border-0 transition-opacity duration-300 ${
+                              trailerFrameLoaded ? "opacity-100" : "opacity-0"
+                            }`}
+                          />
+                          <TrailerBrandingMask />
+                          {/* The trailer owns the whole player slot, so the way
+                              back has to live on the trailer itself — the aside's
+                              toggle sits below the fold and reads as status, not
+                              as an exit. Top-center keeps it clear of the page's
+                              own Back (top-left) and of YouTube's chrome. */}
+                          <button
+                            type="button"
+                            onClick={() => setPlayingTrailer(false)}
+                            className="absolute left-1/2 top-4 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full bg-black/70 px-4 py-2 text-xs font-semibold tracking-wide text-white backdrop-blur transition-colors hover:bg-black/90"
+                          >
+                            <ArrowLeft className="h-3.5 w-3.5" aria-hidden />
+                            Back to movie
+                          </button>
+                        </div>
+                      ) : null}
                     </>
-                  ) : null}
+                  )}
 
                   {stage === "resolving_backend" || stage === "testing_candidate" ? (
                     <StreamLoader
