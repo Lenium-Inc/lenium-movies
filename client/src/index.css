@@ -819,9 +819,9 @@ input[type="search"]::-webkit-search-decoration {
    from, so the two surfaces belong to the same house.
    ========================================================================== */
 .mw-eyebrow {
-  font-family: "Space Mono", ui-monospace, SFMono-Regular, monospace;
+  font-family: "DM Sans", ui-sans-serif, system-ui, sans-serif;
   font-size: 10px;
-  font-weight: 400;
+  font-weight: 500;
   letter-spacing: 0.18em;
   text-transform: uppercase;
 }

@@ -211,7 +211,7 @@ export default function TitlePage() {
       ) : status === "missing" || !meta ? (
         <div className="mx-auto flex min-h-[70vh] max-w-md flex-col items-center justify-center gap-4 px-4 text-center">
           <p className="mw-eyebrow text-white/40">Not in the catalogue</p>
-          <h1 className="font-display text-3xl italic font-semibold text-white">
+          <h1 className="text-3xl font-bold text-white">
             That title isn&apos;t here.
           </h1>
           <p className="text-sm leading-6 text-[#c5c5c1]">
@@ -295,7 +295,7 @@ export default function TitlePage() {
                           }`
                         : "Film"}
                     </p>
-                    <h1 className="mt-2 font-display text-4xl font-semibold italic leading-[1.05] text-white drop-shadow-lg sm:text-5xl lg:text-6xl">
+                    <h1 className="mt-2 text-4xl font-bold leading-[1.05] text-white drop-shadow-lg sm:text-5xl lg:text-6xl">
                       {movie.title}
                     </h1>
                     <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-[#c5c5c1]">
@@ -415,7 +415,7 @@ export default function TitlePage() {
                                   className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.06]"
                                 />
                               ) : (
-                                <span className="grid h-full w-full place-items-center font-display text-2xl italic text-white/40">
+                                <span className="grid h-full w-full place-items-center text-2xl font-semibold text-white/40">
                                   {person.name.charAt(0)}
                                 </span>
                               )}
@@ -463,7 +463,7 @@ export default function TitlePage() {
                               />
                             ) : (
                               <div className="grid h-full w-full place-items-center bg-gradient-to-br from-[#1B1B20] to-[#0a0a0c]">
-                                <span className="font-display text-3xl italic text-white/30">
+                                <span className="text-3xl font-semibold text-white/30">
                                   {item.title.charAt(0)}
                                 </span>
                               </div>
