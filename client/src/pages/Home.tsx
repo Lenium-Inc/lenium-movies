@@ -6,7 +6,7 @@ import {
   useCatalog,
 } from "@/hooks/useCatalog";
 import { useHeroAccent } from "@/hooks/useHeroAccent";
-import { genreColor, withAlpha } from "@/lib/genreColors";
+import { withAlpha } from "@/lib/genreColors";
 import { Navbar } from "@/components/layout/Navbar";
 import {
   APPLY_SEARCH_EVENT,
@@ -162,7 +162,7 @@ export default function Home() {
           <img
             src={heroArtUrl}
             alt=""
-            className="h-full w-full scale-110 object-cover opacity-70 blur-3xl"
+            className="h-full w-full scale-110 object-cover opacity-30 blur-3xl"
           />
           {/* Fades the blurred art back into the base colour. `transparent`
               is used deliberately: a named base here would paint a visible
@@ -324,7 +324,6 @@ export default function Home() {
                     >
                       {genreFilterOptions.map(item => {
                         const active = genre === item;
-                        const dot = item === "All" ? null : genreColor(item);
                         return (
                           <button
                             key={item}
@@ -332,19 +331,12 @@ export default function Home() {
                             onClick={() => setGenre(item)}
                             aria-pressed={active}
                             className={
-                              "flex shrink-0 items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition-all duration-200 " +
+                              "shrink-0 rounded-full px-4 py-2 text-sm font-medium transition-all duration-200 " +
                               (active
                                 ? "scale-105 bg-[var(--accent)] px-5 font-bold text-white shadow-md"
                                 : "text-[var(--text-muted)] hover:text-[var(--text)]")
                             }
                           >
-                            {dot ? (
-                              <span
-                                aria-hidden
-                                className="h-2 w-2 shrink-0 rounded-full"
-                                style={{ backgroundColor: dot }}
-                              />
-                            ) : null}
                             {item}
                           </button>
                         );

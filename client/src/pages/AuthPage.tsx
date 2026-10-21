@@ -319,9 +319,10 @@ export default function AuthPage({ mode }: AuthPageProps) {
         />
       ) : null}
       {/*
-        The lamp. A cold room with one warm source in it.
+        The accent light. A cold room with one violet source in it, matching
+        the auditorium's palette so signing in feels like the same product.
 
-        The base of this gradient is now translucent where it used to be opaque.
+        The base of this gradient is translucent where it used to be opaque.
         An opaque `linear-gradient(#0d0d10 -> #08080a)` painted on top of the
         backdrop above hid it completely — the ambient film had never once been
         visible, because the layer meant to *tint* it was a lid. The booth's own
@@ -334,7 +335,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
         className="absolute inset-0"
         style={{
           background:
-            "radial-gradient(ellipse 62% 48% at 50% 4%, rgba(255,174,92,0.20), transparent 62%), radial-gradient(ellipse 90% 70% at 50% 106%, rgba(255,231,194,0.07), transparent 60%), linear-gradient(180deg, rgba(13,13,16,0.88) 0%, rgba(8,8,10,0.72) 46%, rgba(8,8,10,0.92) 100%)",
+            "radial-gradient(ellipse 62% 48% at 50% 4%, rgba(139,92,246,0.20), transparent 62%), radial-gradient(ellipse 90% 70% at 50% 106%, rgba(196,181,253,0.07), transparent 60%), linear-gradient(180deg, rgba(13,13,16,0.88) 0%, rgba(8,8,10,0.72) 46%, rgba(8,8,10,0.92) 100%)",
         }}
       />
 

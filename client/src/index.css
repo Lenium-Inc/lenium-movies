@@ -167,23 +167,24 @@ input[type="search"]::-webkit-search-decoration {
    The booth — projection-booth tokens for the auth surfaces.
 
    The rest of the app is the auditorium: cool, violet-lit, near-black. The
-   sign-in screens are back of house, lit by the one warm light source in a
-   cinema. Keeping the ground deliberately COLD is what makes the accent read
-   as emitted light rather than as pigment — the same warmth as a cream-and-
-   terracotta palette, inverted onto black.
+   sign-in screens used to be back of house lit by one warm lamp, which read
+   as a different product the moment you crossed from /login into the app.
+   The accent is now the auditorium's own violet, so the gate, the focus rings
+   and the primary action all match the shelves you are signing in to see.
+   The ground stays deliberately cold — that is what makes the accent read as
+   emitted light rather than as pigment.
    ========================================================================== */
 :root {
   --booth-void: #08080a; /* the dark booth */
   --booth-carbon: #131317; /* panel behind the gate */
-  --lamp: #ffe7c2; /* xenon lamp: warm amber-white, the only accent */
-  --lamp-core: #ffae5c; /* hot core: hover, and the leading edge of the beam */
-  --booth-dust: #8b8677; /* warm grey, for everything secondary */
+  --lamp: #c4b5fd; /* violet-300: the app's accent, lifted for text/fills */
+  --lamp-core: #8b5cf6; /* the app violet: hover and the hot edge */
+  --booth-dust: #8b93a6; /* cool grey, for everything secondary */
   --signal: #6fd4a8; /* "signal locked" green — confirmed states only */
   /* Type set ON the lit surfaces. Near-black, not neutral grey: these are the
      same decision written down once instead of a hex repeated at every filled
-     button. Measured 15.4:1 on the lamp, 10.1:1 on the lamp core, 10.6:1 on
-     the signal. */
-  --lamp-ink: #1a1206;
+     button. Holds 10:1+ on both the violet and its lifted core. */
+  --lamp-ink: #180a33;
   --signal-ink: #04120c;
 }
 
@@ -306,6 +307,16 @@ input[type="search"]::-webkit-search-decoration {
 .ln-field:focus-within {
   border-color: rgba(255, 231, 194, 0.55);
   background: rgba(255, 231, 194, 0.04);
+}
+/* The wrapper above already owns this field's focus indication -- the lit
+   border, and the lamp ring on `:has(:focus-visible)` below. The global
+   `:focus-visible` rule further down this file is unlayered, so it outranks
+   the `outline-none` utility the input carries and would draw a second,
+   square, white ring inside the wrapper's rounded one. Declaring this
+   unlayered with a class selector is the same way `.ln-focus-lamp` wins the
+   same cascade: class beats bare pseudo-class, at equal layering. */
+.ln-field input {
+  outline: none;
 }
 /* Keyboard focus needs a ring the eye can find, and it must sit outside the
    border the wrapper already draws. */
@@ -773,37 +784,14 @@ input[type="search"]::-webkit-search-decoration {
 }
 
 /* ==========================================================================
-   Continue Watching — the velvet panel.
+   Continue Watching — wide resume cards.
 
-   The rest of the auditorium is lit; this one surface is fabric. A cinema's
-   navy velvet + wine curtain is the only place pigment (not emitted light)
-   lives, which is exactly what a shelf about *your own* paused screening
-   should feel like: the house lights dimmed, the curtain half drawn, your
-   seat number marked. Wine is reserved for resume semantics everywhere it
-   appears (progress rails, cue dot); navy is the ground. Violet and cyan
-   stay where they were — they are emitted light, these are cloth.
+   Deliberately the only concession this shelf makes: 16:9 frames instead of
+   2:3 posters, because a resume point is a frame of the film you were watching.
+   Everything else — heading, card chrome, progress rail — matches the rest of
+   the page. It used to sit on a wine-and-velvet panel with a pulsing cue dot
+   and an italic display heading, which read as a different product bolted on.
    ========================================================================== */
-:root {
-  --cw-velvet: #0b1330;
-  --cw-velvet-deep: #080e24;
-  --cw-wine: #9e2438;
-  --cw-wine-hot: #c93451;
-}
-
-.cw-band {
-  background:
-    radial-gradient(120% 150% at 6% -30%, rgba(158, 36, 56, 0.17), transparent 45%),
-    linear-gradient(135deg, var(--cw-velvet) 0%, var(--cw-velvet-deep) 62%, var(--fs-base, #0b0c10) 100%);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.05),
-    0 26px 64px -34px rgba(0, 0, 0, 0.95);
-}
-
-/* Wide cards: the shelf keeps row mechanics but borrows the hero's 16:9
-   frame — a mix of the two card languages the home page already speaks.
-   Deliberately *smaller* than the poster shelves: this row is the viewer's
-   own queue, a footnote that happens to be useful, not the main attraction. */
 .catalog-row-cw {
   grid-auto-columns: 64vw;
   gap: 10px;
@@ -818,67 +806,6 @@ input[type="search"]::-webkit-search-decoration {
   .catalog-row-cw {
     grid-auto-columns: 256px;
     gap: 14px;
-  }
-}
-
-.cw-card {
-  transition: transform 320ms var(--ease-out), box-shadow 320ms var(--ease-out);
-}
-@media (hover: hover) {
-  .cw-card:hover {
-    transform: translateY(-4px);
-    box-shadow: 0 18px 40px -22px rgba(0, 0, 0, 0.9);
-  }
-}
-
-/* The signature: the rail you stopped on. Fill scales from zero on mount so
-   the shelf reads as *measuring* your progress, and the cue dot — the little
-   light a stage manager marks a position with — sits on the leading edge. */
-@keyframes cw-rise {
-  from {
-    opacity: 0;
-    transform: translateY(16px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-.cw-card-rise {
-  animation: cw-rise 640ms var(--ease-out) both;
-}
-@keyframes cw-fill {
-  from {
-    transform: scaleX(0);
-  }
-  to {
-    transform: scaleX(1);
-  }
-}
-.cw-fill {
-  transform-origin: left;
-  animation: cw-fill 900ms var(--ease-out) 260ms both;
-}
-@keyframes cw-cue {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 rgba(201, 52, 81, 0.55);
-  }
-  50% {
-    box-shadow: 0 0 0 5px rgba(201, 52, 81, 0);
-  }
-}
-.cw-cue {
-  animation: cw-cue 2.6s ease-in-out 1.4s infinite;
-}
-@media (prefers-reduced-motion: reduce) {
-  .cw-card-rise,
-  .cw-fill,
-  .cw-cue {
-    animation: none;
-  }
-  .cw-fill {
-    transform: none;
   }
 }
 
