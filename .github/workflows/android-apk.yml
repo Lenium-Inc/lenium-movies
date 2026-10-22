@@ -10,6 +10,7 @@ on:
       - "vite.config.ts"
       - "package.json"
       - "package-lock.json"
+      - ".npmrc"
       - ".github/workflows/android-apk.yml"
   workflow_dispatch: {}
 
