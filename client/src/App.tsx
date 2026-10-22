@@ -4,8 +4,10 @@ import { toast } from "sonner";
 import NotFound from "@/pages/NotFound";
 import { Route, Switch, useLocation } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
+import BackendOffline from "./components/BackendOffline";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { useAuth } from "./context/AuthContext";
+import { useBackendOnline } from "./hooks/useBackendOnline";
 import { useIdleLogout } from "./hooks/useIdleLogout";
 import Home from "./pages/Home";
 import { RouteSeo } from "./components/layout/RouteSeo";
@@ -113,6 +115,8 @@ function Router() {
 }
 
 export default function App() {
+  const { online, recheck } = useBackendOnline();
+
   return (
     <ErrorBoundary>
       <ThemeProvider defaultTheme="dark">
@@ -124,9 +128,13 @@ export default function App() {
           Applied once here rather than per page, so no route can end up on a
           flat black background.
         */}
-        <div className="sv-shell min-h-screen">
-          <Router />
-        </div>
+        {online === false ? (
+          <BackendOffline onRetry={recheck} />
+        ) : (
+          <div className="sv-shell min-h-screen">
+            <Router />
+          </div>
+        )}
       </ThemeProvider>
     </ErrorBoundary>
   );
