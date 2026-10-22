@@ -22,9 +22,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -35,10 +35,12 @@ jobs:
       - name: Build web assets
         run: npx vite build
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: 21
+
+      - uses: android-actions/setup-android@v4
 
       - name: Install Android SDK packages
         run: |
@@ -58,7 +60,7 @@ jobs:
           cp android/app/build/outputs/apk/debug/app-debug.apk \
             "artifact/streamvy-${{ github.run_number }}-debug.apk"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: streamvy-android-debug
           path: artifact/*.apk
