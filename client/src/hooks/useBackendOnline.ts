@@ -4,15 +4,6 @@ import { apiUrl } from "@/services/api";
 const PROBE_INTERVAL_MS = 30_000;
 const PROBE_TIMEOUT_MS = 8_000;
 
-function isLocalOrigin(): boolean {
-  try {
-    const { hostname } = new URL(apiUrl("/"));
-    return hostname === "localhost" || hostname === "127.0.0.1";
-  } catch {
-    return false;
-  }
-}
-
 async function probe(): Promise<boolean> {
   try {
     const response = await fetch(apiUrl("/"), {
@@ -32,7 +23,7 @@ export function useBackendOnline(): { online: boolean | null; recheck: () => voi
   const recheck = useCallback(() => setNonce(value => value + 1), []);
 
   useEffect(() => {
-    if (isLocalOrigin()) {
+    if (import.meta.env.DEV) {
       setOnline(true);
       return;
     }
