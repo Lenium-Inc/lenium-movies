@@ -2,7 +2,7 @@ import { jsxLocPlugin } from "@builder.io/vite-plugin-jsx-loc";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv, type Plugin } from "vite";
 import { seoOriginPlugin } from "./scripts/seoOriginPlugin";
 
 // =============================================================================
@@ -16,7 +16,51 @@ import { seoOriginPlugin } from "./scripts/seoOriginPlugin";
 // build step that quietly logs everything a viewer's browser does.
 // =============================================================================
 
+const requireVercelApiOrigin: Plugin = {
+  name: "streamvy:require-vercel-api-origin",
+  config(_config, { command, mode }) {
+    if (command !== "build" || process.env.VERCEL !== "1") return;
+
+    const env = loadEnv(mode, import.meta.dirname, "");
+    const apiOrigin = (
+      env.VITE_API_BASE_URL ||
+      env.VITE_MOVIE_API_BASE_URL ||
+      env.VITE_API_URL ||
+      ""
+    ).trim();
+
+    if (!apiOrigin) {
+      throw new Error(
+        "Vercel build is missing VITE_API_BASE_URL. Set it to the absolute HTTPS origin of the movie API in the matching Production/Preview environment, then redeploy."
+      );
+    }
+
+    let parsed: URL;
+    try {
+      parsed = new URL(apiOrigin);
+    } catch {
+      throw new Error(
+        "VITE_API_BASE_URL must be an absolute HTTPS API origin, not a relative path."
+      );
+    }
+
+    if (
+      parsed.protocol !== "https:" ||
+      parsed.pathname !== "/" ||
+      parsed.search ||
+      parsed.hash ||
+      parsed.username ||
+      parsed.password
+    ) {
+      throw new Error(
+        "VITE_API_BASE_URL must be a clean HTTPS origin (for example, https://api.example.com), not / or an API path."
+      );
+    }
+  },
+};
+
 const plugins = [
+  requireVercelApiOrigin,
   react(),
   tailwindcss(),
   jsxLocPlugin(),
@@ -63,10 +107,10 @@ export default defineConfig({
   server: {
     host: true,
     proxy: {
-      // Only used in same-origin mode (VITE_API_BASE_URL="/" or blank builds
-      // pointed back here): forwards to the Streamvy FastAPI service and
-      // strips the legacy /api prefix, because those routes live at the root
-      // there (/feed, /trending, /popular, /search, /movies/{id}).
+      // Only used in local development when VITE_API_BASE_URL is deliberately
+      // relative: forwards to the Streamvy FastAPI service and strips the legacy
+      // /api prefix. Vercel builds require an absolute backend origin above;
+      // vercel.json has no API proxy and otherwise rewrites /api to index.html.
       "/api": {
         target: "http://127.0.0.1:8001",
         changeOrigin: true,

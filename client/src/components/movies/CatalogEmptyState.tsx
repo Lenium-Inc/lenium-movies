@@ -7,6 +7,10 @@ interface CatalogEmptyStateProps {
   query?: string;
   /** Whether a search request is currently in-flight (debouncing or fetching). */
   searchLoading?: boolean;
+  /** Request failure shown separately from a valid empty result. */
+  error?: string | null;
+  /** Retry action for the initial catalog request. */
+  onRetry?: () => void;
 }
 
 /**
@@ -21,22 +25,28 @@ export function CatalogEmptyState({
   configured,
   query,
   searchLoading = false,
+  error,
+  onRetry,
 }: CatalogEmptyStateProps) {
   const isSearch = Boolean(query?.trim());
   const title = searchLoading
     ? "Searching…"
     : isSearch
       ? `No results for "${query?.trim()}"`
-      : configured
-        ? "No movies found"
-        : "Movies aren't available right now";
+      : error
+        ? "Couldn't load movies"
+        : configured
+          ? "No movies found"
+          : "Movies aren't available right now";
   const description = searchLoading
     ? "Looking for matches…"
     : isSearch
       ? "Try a different title, or clear the search to browse the catalogue."
-      : configured
-        ? "Try another search or genre."
-        : "Please try again in a little while.";
+      : error
+        ? error
+        : configured
+          ? "Try another search or genre."
+          : "Please try again in a little while.";
 
   // Only show for empty/error states, not loading (handled by TopProgressBar)
   if (loading || searchLoading) {
@@ -50,6 +60,15 @@ export function CatalogEmptyState({
       <p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-[#99999d]">
         {description}
       </p>
+      {!isSearch && error && onRetry ? (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="mt-5 rounded-md border border-white/15 px-4 py-2 text-sm font-semibold text-white transition hover:border-white/35 hover:bg-white/[0.06] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+        >
+          Retry catalog
+        </button>
+      ) : null}
     </section>
   );
 }

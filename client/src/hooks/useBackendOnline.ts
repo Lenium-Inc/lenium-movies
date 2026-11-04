@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiUrl } from "@/services/api";
+import { isBackendHealthResponse } from "@/lib/backendHealth";
 
 const PROBE_INTERVAL_MS = 30_000;
 const PROBE_TIMEOUT_MS = 8_000;
@@ -10,7 +11,10 @@ async function probe(): Promise<boolean> {
       cache: "no-store",
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
-    return response.ok;
+    // Vercel's SPA catch-all returns index.html with HTTP 200 for unknown paths.
+    // Treating that as a healthy API hid a bad same-origin base URL until the
+    // catalog JSON parser failed and the shelves appeared empty.
+    return await isBackendHealthResponse(response);
   } catch {
     return false;
   }

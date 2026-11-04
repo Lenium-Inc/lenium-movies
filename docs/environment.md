@@ -36,14 +36,23 @@ ignored; manifest providers left unnamed keep their default relative order.
 
 | Variable                  | Effect                                                                                             |
 | ------------------------- | -------------------------------------------------------------------------------------------------- |
-| `VITE_MOVIE_API_BASE_URL` | Absolute origin of the deployed Flask backend. Empty means same-origin `/api`. Inlined by Vite at **build** time, so changing it requires a redeploy, scoped per environment. |
+| `VITE_API_BASE_URL` | Absolute origin of the deployed Flask backend. Legacy aliases `VITE_MOVIE_API_BASE_URL` and `VITE_API_URL` are also read. Inlined by Vite at **build** time, so changing it requires a redeploy, scoped per environment. |
 
-An absolute value here sends users' `Authorization: Bearer` tokens to that host.
-Set it only to a backend you control. If it is blank, production falls back to a
-hardcoded `*.onrender.com` origin, which is reclaimable: delete the Render project
-and the name can be registered by anyone, after which real tokens would be POSTed
-to whoever answers. `.env.example` explains this at length. Use a custom domain on
-the backend to remove the exposure.
+Set this to the absolute HTTPS origin of a backend you control, and include the
+frontend's exact origin in the backend `ALLOWED_ORIGINS` list. The API base is
+publicly visible in the JavaScript bundle and requests can carry bearer tokens, so
+never point it at a third-party host. If the variable is missing or blank, the
+client falls back to `http://127.0.0.1:8001`; that is suitable only when the
+backend is actually running on the same machine as the browser (normally local
+development), not for a deployed site. The documented Vercel deployment rewrites
+unknown paths to `index.html`; setting the API base to `/` therefore returns the
+SPA shell for `/api/*`, not backend JSON. Vite variables are build-time values, so
+fixing a Production or Preview setting requires rebuilding/redeploying that
+environment.
+
+Vercel builds now fail fast if none of the supported API-origin variables is set,
+or if the value is a relative path such as `/`. This prevents deploying a frontend
+that appears healthy behind an SPA fallback but cannot reach the movie API.
 
 ## Express wrapper (`server/_core/index.ts`)
 

@@ -50,6 +50,8 @@ export default function Home() {
     savedIds,
     configured,
     loading,
+    catalogError,
+    retryCatalog,
     searchLoading,
     filtered,
     rows,
@@ -276,7 +278,12 @@ export default function Home() {
               !isBrowseView &&
               !loading &&
               filtered.length === 0 ? (
-                <CatalogEmptyState loading={false} configured={configured} />
+                <CatalogEmptyState
+                  loading={false}
+                  configured={configured}
+                  error={catalogError}
+                  onRetry={retryCatalog}
+                />
               ) : null}
               {isClientSearch &&
                 filtered.length === 0 &&

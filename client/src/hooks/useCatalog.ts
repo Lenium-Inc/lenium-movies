@@ -7,9 +7,11 @@ import {
   fetchPopular,
   fetchDiscover,
   isRateLimited,
+  USING_FALLBACK_BACKEND_ORIGIN,
   type CatalogItem,
   type StreamMovie,
 } from "@/services/api";
+import { loadCatalogFeeds } from "@/lib/catalogFeeds";
 import { savedListIds, subscribeList, toggleListSave } from "@/services/lists";
 import { useActiveProfile } from "@/context/ActiveProfileContext";
 import { useTasteFeed, useTasteRecorder } from "@/hooks/useTaste";
@@ -125,6 +127,8 @@ interface UseCatalog {
   savedIds: number[];
   configured: boolean;
   loading: boolean;
+  catalogError: string | null;
+  retryCatalog: () => void;
   searchLoading: boolean;
   filtered: Movie[];
   rows: CatalogRows[];
@@ -303,7 +307,13 @@ export function useCatalog(): UseCatalog {
   const [catalogItems, setCatalogItems] = useState<StreamMovie[]>([]);
   const [searchResults, setSearchResults] = useState<StreamMovie[]>([]);
   const [loading, setLoading] = useState(true);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [catalogRequest, setCatalogRequest] = useState(0);
   const [searchLoading, setSearchLoading] = useState(false);
+  const retryCatalog = useCallback(
+    () => setCatalogRequest(value => value + 1),
+    []
+  );
 
   // Infinite-scroll browse grid (Explore / Shows / Trending)
   const [discoverItems, setDiscoverItems] = useState<Movie[]>([]);
@@ -325,41 +335,45 @@ export function useCatalog(): UseCatalog {
   const inflightSearchRef = useRef<AbortController | null>(null);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Load initial catalog from trending + popular endpoints for diversity
+  // Load the two independent feeds concurrently. A failure in one must not
+  // discard titles returned by the other.
   useEffect(() => {
+    let cancelled = false;
+
     async function fetchCatalog() {
+      setLoading(true);
+      setCatalogError(null);
       try {
-        setLoading(true);
-        // Fetch trending (movies + TV) and popular movies for a diverse mix
-        const [trending, popular] = await Promise.all([
-          fetchTrending({ time_window: "week", media_type: "all" }),
-          fetchPopular({ media_type: "movie" }),
+        const { items, errors } = await loadCatalogFeeds([
+          () => fetchTrending({ time_window: "week", media_type: "all" }),
+          () => fetchPopular({ media_type: "movie" }),
         ]);
-
-        // Combine and deduplicate by ID
-        const combined = [...trending, ...popular];
-        const seen = new Set<string>();
-        const unique = combined.filter(item => {
-          if (seen.has(item.id)) return false;
-          seen.add(item.id);
-          return true;
-        });
-
-        // Shuffle for variety on each load
-        for (let i = unique.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [unique[i], unique[j]] = [unique[j], unique[i]];
+        if (cancelled) return;
+        for (const error of errors) {
+          console.error("Failed to fetch one catalog feed:", error);
         }
-
-        setCatalogItems(unique.slice(0, 40));
+        setCatalogItems(items);
+        setCatalogError(
+          items.length === 0 && errors.length > 0
+            ? "The movie service did not return a catalog. Check the backend URL and try again."
+            : null
+        );
       } catch (err) {
+        if (cancelled) return;
         console.error("Failed to fetch catalog from backend:", err);
+        setCatalogError(
+          "The movie service could not be reached. Check the backend URL and try again."
+        );
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     }
-    fetchCatalog();
-  }, []);
+
+    void fetchCatalog();
+    return () => {
+      cancelled = true;
+    };
+  }, [catalogRequest]);
 
   // Load the first page of the aggregated catalog whenever a browse view's
   // scope (view / genre) changes. Clearing search also snaps back to browse.
@@ -817,8 +831,10 @@ export function useCatalog(): UseCatalog {
     sort,
     mediaType,
     savedIds,
-    configured: true,
+    configured: import.meta.env.DEV || !USING_FALLBACK_BACKEND_ORIGIN,
     loading,
+    catalogError,
+    retryCatalog,
     searchLoading,
     filtered,
     rows,
