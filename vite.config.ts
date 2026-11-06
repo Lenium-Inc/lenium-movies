@@ -16,51 +16,46 @@ import { seoOriginPlugin } from "./scripts/seoOriginPlugin";
 // build step that quietly logs everything a viewer's browser does.
 // =============================================================================
 
-const requireVercelApiOrigin: Plugin = {
-  name: "streamvy:require-vercel-api-origin",
+const validateMediaOrigins: Plugin = {
+  name: "streamvy:validate-media-origins",
   config(_config, { command, mode }) {
-    if (command !== "build" || process.env.VERCEL !== "1") return;
+    if (command !== "build") return;
 
     const env = loadEnv(mode, import.meta.dirname, "");
-    const apiOrigin = (
-      env.VITE_API_BASE_URL ||
-      env.VITE_MOVIE_API_BASE_URL ||
-      env.VITE_API_URL ||
-      ""
-    ).trim();
+    for (const key of [
+      "VITE_STREAMVY_API_BASE_URL",
+      "VITE_STREAMVY_PROXY_BASE_URL",
+    ]) {
+      const value = (env[key] || "").trim();
+      if (!value) continue;
 
-    if (!apiOrigin) {
-      throw new Error(
-        "Vercel build is missing VITE_API_BASE_URL. Set it to the absolute HTTPS origin of the movie API in the matching Production/Preview environment, then redeploy."
-      );
-    }
+      let parsed: URL;
+      try {
+        parsed = new URL(value);
+      } catch {
+        throw new Error(
+          `${key} must be an absolute HTTPS origin, not a relative path.`
+        );
+      }
 
-    let parsed: URL;
-    try {
-      parsed = new URL(apiOrigin);
-    } catch {
-      throw new Error(
-        "VITE_API_BASE_URL must be an absolute HTTPS API origin, not a relative path."
-      );
-    }
-
-    if (
-      parsed.protocol !== "https:" ||
-      parsed.pathname !== "/" ||
-      parsed.search ||
-      parsed.hash ||
-      parsed.username ||
-      parsed.password
-    ) {
-      throw new Error(
-        "VITE_API_BASE_URL must be a clean HTTPS origin (for example, https://api.example.com), not / or an API path."
-      );
+      if (
+        parsed.protocol !== "https:" ||
+        parsed.pathname !== "/" ||
+        parsed.search ||
+        parsed.hash ||
+        parsed.username ||
+        parsed.password
+      ) {
+        throw new Error(
+          `${key} must be a clean HTTPS origin (for example, https://api.example.com), not / or an API path.`
+        );
+      }
     }
   },
 };
 
 const plugins = [
-  requireVercelApiOrigin,
+  validateMediaOrigins,
   react(),
   tailwindcss(),
   jsxLocPlugin(),
