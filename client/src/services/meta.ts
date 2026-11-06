@@ -94,7 +94,11 @@ function runtimeMinutes(duration: unknown): number | null {
   return duration > 300 ? Math.round(duration / 60) : Math.round(duration);
 }
 
-function mapDetail(detail: MovieBoxDetail, kind: "movie" | "tv"): Movie {
+function mapDetail(
+  detail: MovieBoxDetail,
+  kind: "movie" | "tv",
+  handle?: string
+): Movie {
   const subject = detail.subject;
   const mediaType = subject.subjectType === 2 ? "tv" : kind === "tv" ? "tv" : "movie";
   const stars = Array.isArray(detail.stars) ? detail.stars : [];
@@ -113,7 +117,8 @@ function mapDetail(detail: MovieBoxDetail, kind: "movie" | "tv"): Movie {
 
   return {
     id: numericId(subject.subjectId),
-    providerId: subject.detailPath?.trim() || subject.subjectId,
+    providerId:
+      subject.detailPath?.trim() || handle?.trim() || subject.subjectId,
     title: subject.title?.trim() || detail.metadata?.title?.trim() || "Untitled",
     year: yearFromDate(subject.releaseDate),
     runtime: runtimeMinutes(subject.duration),
@@ -239,7 +244,7 @@ export async function fetchMovieMeta(
 ): Promise<MovieMeta | null> {
   try {
     const detail = await getDetail(handle);
-    const movie = mapDetail(detail, kind);
+    const movie = mapDetail(detail, kind, handle);
     const similar = await similarTitles(detail, movie.mediaType);
     return { movie, similar };
   } catch {

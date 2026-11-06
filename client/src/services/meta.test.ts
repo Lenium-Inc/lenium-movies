@@ -139,6 +139,31 @@ describe("fetchMovieMeta", () => {
     ]);
   });
 
+  it("keeps the route slug when the detail record omits detailPath", async () => {
+    const { fetchMovieMeta } = await loadMeta();
+    const withoutPath = {
+      data: {
+        ...detailEnvelope.data,
+        subject: { ...detailEnvelope.data.subject, detailPath: undefined },
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        text: async () => JSON.stringify(withoutPath),
+        json: async () => withoutPath,
+      }))
+    );
+
+    const meta = await fetchMovieMeta(SLUG, "tv");
+
+    expect(meta?.movie.providerId).toBe(SLUG);
+    expect(meta?.movie.providerId).not.toBe("9028867555875774472");
+  });
+
   it("answers null when the title does not exist", async () => {
     const { fetchMovieMeta } = await loadMeta();
     vi.stubGlobal(
