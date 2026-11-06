@@ -58,6 +58,7 @@ function mockFetch(handler: (url: string) => unknown) {
 describe("getStreamSource", () => {
   beforeEach(() => {
     vi.stubEnv("VITE_STREAMVY_API_BASE_URL", API_ORIGIN);
+    vi.stubEnv("VITE_STREAMVY_PROXY_BASE_URL", API_ORIGIN);
   });
 
   afterEach(() => {

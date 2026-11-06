@@ -15,16 +15,18 @@ describe("media relay origin", () => {
     vi.restoreAllMocks();
   });
 
-  it("falls back to the API origin when no relay is configured", async () => {
+  it("uses the Vercel Edge relay when none is configured", async () => {
     const { api, streamvy } = await load("https://media.example.com");
-    expect(streamvy.STREAMVY_PROXY_BASE_URL).toBe("https://media.example.com");
+    expect(streamvy.STREAMVY_PROXY_BASE_URL).toBe(
+      "https://www.streamvy.me/api"
+    );
     expect(
       streamvy.proxiedVideoUrl("https://cdn.example.com/a.mp4")
     ).toBe(
-      "https://media.example.com/proxy/stream?url=https%3A%2F%2Fcdn.example.com%2Fa.mp4"
+      "https://www.streamvy.me/api/proxy/stream?url=https%3A%2F%2Fcdn.example.com%2Fa.mp4"
     );
     expect(api.proxiedDownloadUrl("https://cdn.example.com/a.mp4", "a.mp4")).toBe(
-      "https://media.example.com/proxy/download?url=https%3A%2F%2Fcdn.example.com%2Fa.mp4&filename=a.mp4"
+      "https://www.streamvy.me/api/proxy/download?url=https%3A%2F%2Fcdn.example.com%2Fa.mp4&filename=a.mp4"
     );
   });
 

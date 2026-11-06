@@ -88,15 +88,18 @@ export function streamvyUrl(path: string): string {
 /**
  * The origin that relays signed media URLs.
  *
- * Vercel's Python egress is refused by the video CDN, so production points this
- * at a Cloudflare Worker while local development keeps using the API origin.
+ * The video CDN refuses Vercel's Python function egress, but the Vercel Edge
+ * runtime reaches it, so playback and downloads go through the same-origin
+ * `/api/proxy/*` routes by default.
  */
+const DEFAULT_STREAMVY_PROXY_ORIGIN = "https://www.streamvy.me/api";
+
 const CONFIGURED_STREAMVY_PROXY_ORIGIN = (
   import.meta.env.VITE_STREAMVY_PROXY_BASE_URL || ""
 ).trim();
 
 export const STREAMVY_PROXY_BASE_URL = (
-  CONFIGURED_STREAMVY_PROXY_ORIGIN || STREAMVY_API_BASE_URL
+  CONFIGURED_STREAMVY_PROXY_ORIGIN || DEFAULT_STREAMVY_PROXY_ORIGIN
 ).replace(/\/+$/, "");
 
 /** Build a full URL against the media relay origin. */

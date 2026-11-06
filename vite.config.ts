@@ -28,6 +28,7 @@ const validateMediaOrigins: Plugin = {
     ]) {
       const value = (env[key] || "").trim();
       if (!value) continue;
+      if (key === "VITE_STREAMVY_PROXY_BASE_URL" && value === "/api") continue;
 
       let parsed: URL;
       try {
