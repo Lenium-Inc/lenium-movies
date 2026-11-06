@@ -85,6 +85,27 @@ export function streamvyUrl(path: string): string {
   return `${STREAMVY_API_BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
+/**
+ * The origin that relays signed media URLs.
+ *
+ * Vercel's Python egress is refused by the video CDN, so production points this
+ * at a Cloudflare Worker while local development keeps using the API origin.
+ */
+const CONFIGURED_STREAMVY_PROXY_ORIGIN = (
+  import.meta.env.VITE_STREAMVY_PROXY_BASE_URL || ""
+).trim();
+
+export const STREAMVY_PROXY_BASE_URL = (
+  CONFIGURED_STREAMVY_PROXY_ORIGIN || STREAMVY_API_BASE_URL
+).replace(/\/+$/, "");
+
+/** Build a full URL against the media relay origin. */
+export function streamvyProxyUrl(path: string): string {
+  return `${STREAMVY_PROXY_BASE_URL}${
+    path.startsWith("/") ? path : `/${path}`
+  }`;
+}
+
 /** How long a single catalogue/metadata call may take before it is aborted. */
 export const STREAMVY_TIMEOUT_MS = 25_000;
 
@@ -690,7 +711,7 @@ export function proxiedVideoUrl(url: string, referer?: string | null): string {
   const params = new URLSearchParams({ url: absolute });
   const cleanReferer = typeof referer === "string" ? referer.trim() : "";
   if (cleanReferer) params.set("referer", cleanReferer);
-  return `${streamvyUrl(VIDEO_PROXY_PATH)}?${params.toString()}`;
+  return `${streamvyProxyUrl(VIDEO_PROXY_PATH)}?${params.toString()}`;
 }
 
 // ---------------------------------------------------------------------------

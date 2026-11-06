@@ -25,6 +25,7 @@ import {
   searchSubjects,
   suggestSubjects,
   STREAMVY_API_BASE_URL,
+  streamvyProxyUrl,
   USING_FALLBACK_STREAMVY_ORIGIN,
   type MovieBoxDetail,
   type MovieBoxItem,
@@ -252,7 +253,7 @@ export function pickStreamVariant(
  */
 export function proxiedDownloadUrl(url: string, filename: string): string {
   const params = new URLSearchParams({ url, filename });
-  return `${MOVIE_API_BASE_URL}/proxy/download?${params.toString()}`;
+  return `${streamvyProxyUrl("/proxy/download")}?${params.toString()}`;
 }
 
 /**
