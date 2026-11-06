@@ -103,10 +103,9 @@ export default defineConfig({
   server: {
     host: true,
     proxy: {
-      // Only used in local development when VITE_API_BASE_URL is deliberately
-      // relative: forwards to the Streamvy FastAPI service and strips the legacy
-      // /api prefix. Vercel builds require an absolute backend origin above;
-      // vercel.json has no API proxy and otherwise rewrites /api to index.html.
+      // Local development only: relative catalogue calls are forwarded to the
+      // Streamvy FastAPI service with the legacy /api prefix stripped. The
+      // deployed media relay lives at /api/proxy/* on Vercel Edge instead.
       "/api": {
         target: "http://127.0.0.1:8001",
         changeOrigin: true,
