@@ -164,6 +164,19 @@ describe("fetchMovieMeta", () => {
     expect(meta?.movie.providerId).not.toBe("9028867555875774472");
   });
 
+  it("keeps repeat lookups on the slug instead of the subject id", async () => {
+    const { fetchMovieMeta } = await loadMeta();
+    const spy = mockFetch();
+
+    await fetchMovieMeta(SLUG, "tv");
+    await fetchMovieMeta(SLUG, "tv");
+
+    const detailCalls = spy.mock.calls
+      .map(([input]) => String(input))
+      .filter(url => url.includes("/detail/"));
+    expect(detailCalls).toEqual([`${API_ORIGIN}/detail/${SLUG}`]);
+  });
+
   it("answers null when the title does not exist", async () => {
     const { fetchMovieMeta } = await loadMeta();
     vi.stubGlobal(

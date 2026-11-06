@@ -535,8 +535,13 @@ export function getDetail(handle: string): Promise<MovieBoxDetail> {
   const clean = (handle ?? "").trim();
   if (!clean) return Promise.reject(new Error("A title handle is required"));
 
-  const knownSlug = subjectIdByPath.get(clean) ?? null;
-  const slug = knownSlug ?? clean;
+  // `subjectIdByPath` maps a slug to its subject id, not the other way
+  // around. Reading it here used to turn a perfectly good slug into a
+  // subject id and then ask `/detail/{subject_id}`, which the live API
+  // answers with a 502. Only a subject id needs translating back to a slug.
+  const slug = isUsableSubjectId(clean)
+    ? detailPathBySubject.get(clean) ?? clean
+    : clean;
 
   const now = Date.now();
   const cached = detailCache.get(slug);
