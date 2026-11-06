@@ -28,6 +28,7 @@ const Terms = lazy(() => import("./pages/Terms"));
 const Dmca = lazy(() => import("./pages/Dmca"));
 const Privacy = lazy(() => import("./pages/Privacy"));
 const AdminUsers = lazy(() => import("./pages/AdminUsers"));
+const Vyteenda = lazy(() => import("./pages/Vyteenda"));
 
 function RouteFallback() {
   return (
@@ -86,6 +87,7 @@ function Router() {
           <Route path="/signup" component={() => <AuthPage mode="signup" />} />
           <Route path="/profile" component={Profile} />
           <Route path="/my-list" component={MyList} />
+          <Route path="/vyteenda" component={Vyteenda} />
           {/* Canonical invite link shape, plus the `/list/share/...` prefix that
             links minted outside this app (and older share messages) use. Both
             resolve to the same public page, which reads the token itself. */}

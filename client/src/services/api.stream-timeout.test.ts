@@ -1,56 +1,168 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  getStreamSource,
-  STREAM_RESOLVE_TIMEOUT_MS,
-  StreamExhaustedError,
-  StreamTimeoutError,
-} from "./api";
+const API_ORIGIN = "https://media.test";
 
-const jsonResponse = (status: number, body: unknown) => ({
-  ok: status >= 200 && status < 300,
-  status,
-  json: async () => body,
-});
+async function loadApi() {
+  vi.resetModules();
+  return import("./api");
+}
+const SUBJECT_ID = "6391474290696802080";
+const DETAIL_PATH = "inception-e1BOR6f19C7";
 
-/** Await a rejection and return it typed, so assertions can read its fields. */
-async function rejection(promise: Promise<unknown>): Promise<StreamExhaustedError> {
-  const settled = await promise.then(
-    () => null,
-    (error: unknown) => error
+const streamPayload = {
+  subject_id: SUBJECT_ID,
+  se: 0,
+  ep: 0,
+  has_resource: true,
+  sources: [
+    {
+      resolution: "720p",
+      format: "mp4",
+      url: "https://cdn.test/inception-720.mp4",
+      size: 1_000,
+    },
+    {
+      resolution: "1080p",
+      format: "mp4",
+      url: "https://cdn.test/inception-1080.mp4",
+      size: 2_000,
+    },
+  ],
+};
+
+function response(body: unknown, status = 200) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: new Headers(),
+    text: async () => JSON.stringify(body),
+    json: async () => body,
+  };
+}
+
+function mockFetch(handler: (url: string) => unknown) {
+  const spy = vi.fn(async (input: RequestInfo | URL) =>
+    handler(String(input))
   );
-  if (settled === null) throw new Error("expected the request to reject, but it resolved");
-  return settled as StreamExhaustedError;
+  vi.stubGlobal("fetch", spy);
+  return spy;
 }
 
 /**
- * The Watch page decides whether to show the error screen by error type, not
- * message: a cold-start timeout must stay retryable while a real failure must
- * not. These pin that distinction and the exact budget.
+ * Playback now needs both keys: the subject id (`tmdbId`) selects the media,
+ * and the detail slug (`detailPath`) keys the lookup. Movies must be addressed
+ * as season 0 / episode 0 -- the endpoint's `1/1` default is a season a film
+ * does not have -- and every returned CDN URL has to be routed through the
+ * proxy, because the CDN refuses a request without the MovieBox referer.
  */
-describe("getStreamSource timeout handling", () => {
+describe("getStreamSource", () => {
   beforeEach(() => {
-    vi.stubEnv("VITE_API_BASE_URL", "https://backend.test");
-    vi.useFakeTimers();
+    vi.stubEnv("VITE_STREAMVY_API_BASE_URL", API_ORIGIN);
   });
 
   afterEach(() => {
-    vi.useRealTimers();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
-  it("allows a cold start window of at least 30 seconds", () => {
-    // The brief asked for 30s: a Render free-tier instance scaled to zero needs
-    // 15-20s to boot, so anything shorter fails a healthy service.
-    expect(STREAM_RESOLVE_TIMEOUT_MS).toBe(30_000);
+  it("addresses a film as season 0, episode 0 and proxies every source", async () => {
+    const { getStreamSource } = await loadApi();
+    const spy = mockFetch(url =>
+      url.includes("/captions")
+        ? response({ captions: [] })
+        : response(streamPayload)
+    );
+
+    const result = await getStreamSource({
+      tmdbId: SUBJECT_ID,
+      detailPath: DETAIL_PATH,
+      mediaType: "movie",
+    });
+
+    const streamCall = spy.mock.calls
+      .map(call => String(call[0]))
+      .find(url => url.includes("/api/stream/") && !url.includes("/captions"));
+    expect(streamCall).toBeDefined();
+    const query = new URL(streamCall as string).searchParams;
+    expect(query.get("detail_path")).toBe(DETAIL_PATH);
+    expect(query.get("se")).toBe("0");
+    expect(query.get("ep")).toBe("0");
+
+    // Best rendition first, and every leg wrapped in the proxy idempotently.
+    expect(result.streams?.[0]).toMatchObject({
+      quality: "1080p",
+      height: 1080,
+      size: 2_000,
+    });
+    expect(result.url).toContain(`${API_ORIGIN}/proxy/stream?url=`);
+    expect(result.url).toContain(
+      encodeURIComponent("https://cdn.test/inception-1080.mp4")
+    );
+    expect(result.sources).toHaveLength(2);
   });
 
-  it("throws StreamTimeoutError when the backend never answers", async () => {
+  it("scopes a series to the selected season and episode", async () => {
+    const { getStreamSource } = await loadApi();
+    const spy = mockFetch(url =>
+      url.includes("/captions")
+        ? response({ captions: [] })
+        : response({ ...streamPayload, se: 2, ep: 5 })
+    );
+
+    await getStreamSource({
+      tmdbId: SUBJECT_ID,
+      detailPath: DETAIL_PATH,
+      mediaType: "tv",
+      season: 2,
+      episode: 5,
+    });
+
+    const streamCall = spy.mock.calls
+      .map(call => String(call[0]))
+      .find(url => url.includes("/api/stream/") && !url.includes("/captions"));
+    const query = new URL(streamCall as string).searchParams;
+    expect(query.get("se")).toBe("2");
+    expect(query.get("ep")).toBe("5");
+  });
+
+  it("reports a title with no sources as exhausted", async () => {
+    const { getStreamSource, StreamExhaustedError } = await loadApi();
+    mockFetch(url =>
+      url.includes("/captions")
+        ? response({ captions: [] })
+        : response({ ...streamPayload, sources: [] })
+    );
+
+    await expect(
+      getStreamSource({
+        tmdbId: SUBJECT_ID,
+        detailPath: DETAIL_PATH,
+        mediaType: "movie",
+      })
+    ).rejects.toBeInstanceOf(StreamExhaustedError);
+  });
+
+  it("surfaces an upstream failure as a classifiable ApiError", async () => {
+    const { getStreamSource, ApiError } = await loadApi();
+    mockFetch(() => response({ detail: "bad gateway" }, 502));
+
+    await expect(
+      getStreamSource({
+        tmdbId: SUBJECT_ID,
+        detailPath: DETAIL_PATH,
+        mediaType: "movie",
+      })
+    ).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it("aborts a request that never answers", async () => {
+    const { getStreamSource, STREAM_RESOLVE_TIMEOUT_MS } = await loadApi();
+    vi.useFakeTimers();
     vi.stubGlobal(
       "fetch",
       vi.fn(
-        (_url: string, init?: RequestInit) =>
+        (_input: RequestInfo | URL, init?: RequestInit) =>
           new Promise((_resolve, reject) => {
             init?.signal?.addEventListener("abort", () =>
               reject(new DOMException("Aborted", "AbortError"))
@@ -59,213 +171,14 @@ describe("getStreamSource timeout handling", () => {
       )
     );
 
-    const pending = getStreamSource({ tmdbId: "1", mediaType: "movie" });
-    const assertion = expect(pending).rejects.toBeInstanceOf(StreamTimeoutError);
+    const pending = getStreamSource({
+      tmdbId: SUBJECT_ID,
+      detailPath: DETAIL_PATH,
+      mediaType: "movie",
+    });
+    const assertion = expect(pending).rejects.toThrow(/timed out/);
 
     await vi.advanceTimersByTimeAsync(STREAM_RESOLVE_TIMEOUT_MS);
     await assertion;
-  });
-
-  it("does not abort a request that answers in time", async () => {
-    const fetchMock = vi.fn(async (..._args: unknown[]) => ({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        success: true,
-        provider: "archive_direct",
-        language: "en",
-        movie: { stream_url: "https://cdn.test/a.m3u8", mirrors: [] },
-      }),
-    }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const pending = getStreamSource({ tmdbId: "1", mediaType: "movie" });
-    await vi.advanceTimersByTimeAsync(1_000);
-
-    const result = await pending;
-    expect(result.url).toBe("https://cdn.test/a.m3u8");
-    expect(fetchMock).toHaveBeenCalledOnce();
-  });
-
-  it("reports a non-timeout failure as a plain Error", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({ ok: false, status: 502, json: async () => ({}) }))
-    );
-
-    // A 502 is the backend being awake and failing, so it must not be
-    // mistaken for a cold start the retry loop should forgive.
-    await expect(
-      getStreamSource({ tmdbId: "1", mediaType: "movie" })
-    ).rejects.toThrow(/status 502/);
-    await expect(
-      getStreamSource({ tmdbId: "1", mediaType: "movie" })
-    ).rejects.not.toBeInstanceOf(StreamTimeoutError);
-  });
-
-  it("scopes the selected episode into the request", async () => {
-    const fetchMock = vi.fn(async (..._args: unknown[]) => ({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        success: true,
-        provider: "vidsrc",
-        language: "en",
-        movie: { stream_url: "https://cdn.test/a.m3u8", mirrors: [] },
-      }),
-    }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await getStreamSource({
-      tmdbId: "1399",
-      mediaType: "tv",
-      season: 2,
-      episode: 5,
-    });
-
-    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
-    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-    expect(body.tmdb_id).toBe("1399");
-    expect(body.media_type).toBe("tv");
-    expect(body.season).toBe(2);
-    expect(body.episode).toBe(5);
-  });
-});
-
-/**
- * `/api/v1/playback/init` distinguishes "the chain is exhausted" from "the
- * server is busy", and the Watch page's response to the two is opposite: an
- * exhausted chain is a final answer and re-asking only re-walks providers that
- * already failed, while a shed request clears on its own and is worth waiting
- * for. The two used to share a status, so neither could be told apart.
- */
-describe("getStreamSource provider exhaustion", () => {
-  beforeEach(() => {
-    vi.stubEnv("VITE_API_BASE_URL", "https://backend.test");
-  });
-
-  afterEach(() => {
-    vi.unstubAllEnvs();
-    vi.restoreAllMocks();
-  });
-
-  it("throws StreamExhaustedError, not a generic error, on 404 PROVIDERS_EXHAUSTED", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        jsonResponse(404, {
-          success: false,
-          status: 404,
-          code: "PROVIDERS_EXHAUSTED",
-          available: false,
-        })
-      )
-    );
-
-    const pending = getStreamSource({ tmdbId: "603", mediaType: "movie" });
-    await expect(pending).rejects.toBeInstanceOf(StreamExhaustedError);
-    // A cold start must never be satisfied by this path.
-    await expect(pending).rejects.not.toBeInstanceOf(StreamTimeoutError);
-  });
-
-  it("keeps a plain 404 retryable, because it is 'no such title' not 'no source'", async () => {
-    // `/api/movies/resolve` answers 404 TITLE_NOT_FOUND for an unmatched title.
-    // Reading every 404 as exhaustion would hand the viewer a terminal screen
-    // for a request that was simply wrong.
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => jsonResponse(404, { success: false, code: "TITLE_NOT_FOUND" }))
-    );
-
-    await expect(
-      getStreamSource({ tmdbId: "603", mediaType: "movie" })
-    ).rejects.not.toBeInstanceOf(StreamExhaustedError);
-  });
-
-  it("keeps a shed 503 retryable, because it clears on its own", async () => {
-    // The memory guard's answer when the byte ceiling trips. It is transient by
-    // construction, so treating it as exhaustion -- as this did before -- turned
-    // a request that would have succeeded in ten seconds into a permanent
-    // failure screen for the viewer.
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        jsonResponse(503, {
-          error: "Server under high load. Retrying shortly.",
-          code: "RESOURCE_LIMIT_EXCEEDED",
-        })
-      )
-    );
-
-    await expect(
-      getStreamSource({ tmdbId: "603", mediaType: "movie" })
-    ).rejects.not.toBeInstanceOf(StreamExhaustedError);
-  });
-
-  it("carries the per-provider diagnostics so the terminal state explains itself", async () => {
-    const attempts = [
-      { id: "archive_direct", kind: "direct", outcome: "empty" },
-      { id: "vidsrc", kind: "embed", outcome: "unreachable" },
-    ];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        jsonResponse(404, { success: false, code: "PROVIDERS_EXHAUSTED", provider_attempts: attempts })
-      )
-    );
-
-    const error = await rejection(getStreamSource({ tmdbId: "603", mediaType: "movie" }));
-    expect(error).toBeInstanceOf(StreamExhaustedError);
-    expect(error.providerAttempts).toEqual(attempts);
-  });
-
-  it("still reports exhaustion when a legacy 503 body is unreadable", async () => {
-    // A proxy in front of the backend can replace the body with its own error
-    // page. With no code to read, 503 is the only evidence left, and the client
-    // must still reach a terminal state rather than retry forever.
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({
-        ok: false,
-        status: 503,
-        json: async () => {
-          throw new SyntaxError("Unexpected token <");
-        },
-      }))
-    );
-
-    const error = await rejection(getStreamSource({ tmdbId: "603", mediaType: "movie" }));
-    expect(error).toBeInstanceOf(StreamExhaustedError);
-    expect(error.providerAttempts).toEqual([]);
-  });
-
-  it("rejects a 200 that says available:false rather than parsing it as a source", async () => {
-    // The guard requires `success` and a string `movie.stream_url`, so a
-    // defensive backend could return an empty url with success:true. That
-    // must not reach the player as a source that can never play.
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        jsonResponse(200, {
-          success: true,
-          available: false,
-          movie: { stream_url: "", mirrors: [] },
-        })
-      )
-    );
-
-    await expect(getStreamSource({ tmdbId: "603", mediaType: "movie" })).rejects.toBeInstanceOf(
-      StreamExhaustedError
-    );
-  });
-
-  it("leaves other 5xx statuses retryable", async () => {
-    // A 502 means something upstream broke, which is exactly the case the
-    // retry budget exists for: no code names exhaustion, so no code admits it.
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(502, { success: false })));
-
-    await expect(
-      getStreamSource({ tmdbId: "603", mediaType: "movie" })
-    ).rejects.not.toBeInstanceOf(StreamExhaustedError);
   });
 });

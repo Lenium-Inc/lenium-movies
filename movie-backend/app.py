@@ -146,6 +146,7 @@ def _direct_cache_put(key: str, value: dict | None) -> None:
 
 
 _SEASON_TTL_SECONDS = 6 * 3600
+_CACHE_MAX_ENTRIES = 500
 _season_cache: dict[str, tuple[float, dict | None]] = {}
 
 
@@ -314,6 +315,10 @@ def extract_year(date_str: str | None) -> str:
 _DEFAULT_ALLOWED_ORIGINS = (
     "https://streamvy.me,https://www.streamvy.me,https://streamvy.vercel.app,"
     "https://vy-virid.vercel.app,"
+    # Capacitor's Android WebView serves the bundled SPA from these origins.
+    # Without them every fetch from the APK is blocked by CORS even though the
+    # same request works in a browser.
+    "https://localhost,capacitor://localhost,"
     "http://localhost:5173,http://127.0.0.1:5173,"
     "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5193,http://127.0.0.1:5193"
 )
@@ -527,6 +532,28 @@ def _similar_wall(details: dict, media_type: str) -> list[dict]:
     return wall
 
 
+def _public_cache(response, max_age: int = 300):
+    """Let both the browser and a shared cache keep a public catalogue answer.
+
+    `max-age` alone only helps the viewer who already received the bytes.
+    `s-maxage` is what lets the CDN in front of the API answer the next viewer
+    without waking the origin at all -- which is the difference between a warm
+    edge response and a Render round trip (or, worse, a cold start) for every
+    visit. `stale-while-revalidate` keeps catalogue shelves instant while the
+    edge refreshes them in the background, so an expiry never lands on a
+    viewer as latency.
+
+    Only for responses whose bytes are identical for every viewer and contain
+    no session material. Cacheable answer today: catalogue shelves, metadata,
+    and public artwork.
+    """
+    response.headers["Cache-Control"] = (
+        f"public, max-age={max_age}, s-maxage={max_age * 2}, "
+        f"stale-while-revalidate={max_age}"
+    )
+    return response
+
+
 def _meta_response(payload: dict):
     """Answer `/api/movies/meta` with a header a shared cache may obey.
 
@@ -536,9 +563,7 @@ def _meta_response(payload: dict):
     Five minutes is generous for a synopsis and well inside the process-local
     `TTLCache` that sits behind it.
     """
-    response = jsonify(payload)
-    response.headers["Cache-Control"] = "public, max-age=300"
-    return response
+    return _public_cache(jsonify(payload), 300)
 
 
 @app.route("/api/movies/meta", methods=["GET", "POST", "OPTIONS"])
@@ -718,7 +743,12 @@ def proxy_tmdb_image():
     # image read succeeds because the frontend origin is reflected here.
     response = Response(body, status=200)
     response.headers["Content-Type"] = content_type
-    response.headers["Cache-Control"] = "public, max-age=86400"
+    # TMDB filenames are content-addressed, so a rendition never changes under
+    # its URL. `s-maxage` lets Cloudflare keep the bytes at the edge instead of
+    # re-streaming multi-megabyte artwork from Render for every viewer.
+    response.headers["Cache-Control"] = (
+        "public, max-age=86400, s-maxage=604800, immutable"
+    )
     return response
 
 
@@ -820,7 +850,7 @@ def feeds():
     featured = [n for n in (tmdb.normalize_tmdb_item(i, i["media_type"]) for i in trending) if n][:18]
     recent = [n for n in (tmdb.normalize_tmdb_item(i, "movie") for i in popular_movies) if n][:24]
     popular = [n for n in (tmdb.normalize_tmdb_item(i, "tv") for i in popular_tv) if n][:24]
-    return jsonify({"featured": featured, "recent": recent, "popular": popular})
+    return _public_cache(jsonify({"featured": featured, "recent": recent, "popular": popular}), 300)
 
 
 @app.route("/api/trending", methods=["GET", "OPTIONS"])
@@ -851,7 +881,7 @@ def get_hero_trending():
             "release_date": item.get("release_date") or item.get("first_air_date") or "",
             "media_type": item_type,
         })
-    return jsonify(out)
+    return _public_cache(jsonify(out), 300)
 
 
 @app.route("/api/movies/trending", methods=["GET", "OPTIONS"])
@@ -868,7 +898,7 @@ def get_trending():
     catalog_service.ingest_tmdb_results(results)
     normalized = [n for n in (tmdb.normalize_tmdb_item(i, i["media_type"]) for i in results) if n]
     normalized.sort(key=lambda x: x.get("popularity", 0), reverse=True)
-    return jsonify(normalized)
+    return _public_cache(jsonify(normalized), 300)
 
 
 @app.route("/api/movies/popular", methods=["GET", "OPTIONS"])
@@ -883,7 +913,7 @@ def get_popular():
     catalog_service.ingest_tmdb_results(results, media_type)
     normalized = [n for n in (tmdb.normalize_tmdb_item(i, media_type) for i in results) if n]
     normalized.sort(key=lambda x: x.get("popularity", 0), reverse=True)
-    return jsonify(normalized)
+    return _public_cache(jsonify(normalized), 300)
 
 
 @app.route("/api/movies/now_playing", methods=["GET", "OPTIONS"])
@@ -895,7 +925,7 @@ def get_now_playing():
     catalog_service.ingest_tmdb_results(results, "movie")
     normalized = [n for n in (tmdb.normalize_tmdb_item(i, "movie") for i in results) if n]
     normalized.sort(key=lambda x: x.get("popularity", 0), reverse=True)
-    return jsonify(normalized)
+    return _public_cache(jsonify(normalized), 300)
 
 
 @app.route("/api/movies/on_the_air", methods=["GET", "OPTIONS"])
@@ -907,7 +937,7 @@ def get_on_the_air():
     catalog_service.ingest_tmdb_results(results, "tv")
     normalized = [n for n in (tmdb.normalize_tmdb_item(i, "tv") for i in results) if n]
     normalized.sort(key=lambda x: x.get("popularity", 0), reverse=True)
-    return jsonify(normalized)
+    return _public_cache(jsonify(normalized), 300)
 
 
 @app.route("/api/catalog/discover", methods=["GET", "OPTIONS"])
@@ -924,7 +954,7 @@ def catalog_discover():
         per_page = int(request.args.get("per_page", 24))
     except (TypeError, ValueError):
         per_page = 24
-    return jsonify(catalog_service.discover(media_type=media_type, page=page, per_page=per_page, genre=genre))
+    return _public_cache(jsonify(catalog_service.discover(media_type=media_type, page=page, per_page=per_page, genre=genre)), 300)
 
 
 @app.route("/api/catalog/search", methods=["GET", "OPTIONS"])
@@ -937,7 +967,7 @@ def catalog_search():
         page = int(request.args.get("page", 1))
     except (TypeError, ValueError):
         page = 1
-    return jsonify(catalog_service.search_media(query, media_type=media_type, page=page))
+    return _public_cache(jsonify(catalog_service.search_media(query, media_type=media_type, page=page)), 120)
 
 
 # --------------------------------------------------------------------------- #

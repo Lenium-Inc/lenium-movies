@@ -1,38 +1,61 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { resolveStream } from "./api";
+const API_ORIGIN = "https://media.test";
 
-const resolvePayload = {
-  available: true,
-  exact: true,
-  language: "en",
-  movie: {
-    id: "1399",
-    title: "Game of Thrones",
-    media_type: "tv",
-    stream_url: "https://vidsrc.test/embed",
+const detailEnvelope = {
+  code: 0,
+  message: "ok",
+  data: {
+    subject: {
+      subjectId: "6391474290696802080",
+      subjectType: 1,
+      title: "Inception",
+      description: "A thief who steals corporate secrets through dream-sharing.",
+      releaseDate: "2010-07-16",
+      duration: 8880,
+      genre: "Action,Sci-Fi,Thriller",
+      detailPath: "inception-e1BOR6f19C7",
+      cover: { url: "https://cdn.test/inception.jpg" },
+      stills: { url: "https://cdn.test/inception-wide.jpg" },
+      imdbRatingValue: "8.8",
+      countryName: "United States",
+    },
+    stars: [
+      { staffType: 1, name: "Leonardo DiCaprio", character: "Cobb" },
+      { staffType: 2, name: "Christopher Nolan", character: "Director" },
+    ],
+    resource: {
+      seasons: [{ se: 1, maxEp: 1 }],
+    },
+    metadata: {},
   },
 };
 
 /**
- * `/api/movies/resolve` used to be POSTed with a JSON body, and every request
- * therefore paid a CORS preflight -- an extra round trip to the backend before
- * the resolve itself could start, on the page where seconds are most visible.
- * The route reads the same fields off the query string (`_init_inputs`), so
- * these pin the wire contract the switch depends on: a GET, the fields on the
- * query string, and no `Content-Type` header that would provoke the
- * preflight back.
+ * `resolveStream` no longer searches a catalogue by title/year. The route handle
+ * is the lookup key, and the live API answers `/detail/{slug}` only -- it 502s
+ * on a subject id. These pin the new wire contract and the mapping that keeps
+ * the detail slug, the 19-digit subject id, and the season manifest intact.
  */
-describe("resolveStream request shape", () => {
-  // The backend origin is read when the module first loads, so the env stub
-  // has to land before a fresh import -- the same dance `meta.test.ts` does.
-  async function loadApi() {
-    vi.resetModules();
-    return import("./api");
-  }
+async function loadApi() {
+  vi.resetModules();
+  return import("./api");
+}
 
+function mockDetail(body: unknown, status = 200) {
+  const spy = vi.fn().mockResolvedValue({
+    ok: status >= 200 && status < 300,
+    status,
+    text: async () => JSON.stringify(body),
+    json: async () => body,
+  });
+  vi.stubGlobal("fetch", spy);
+  return spy;
+}
+
+describe("resolveStream detail lookup", () => {
   beforeEach(() => {
-    vi.stubEnv("VITE_API_BASE_URL", "https://backend.test");
+    vi.stubEnv("VITE_STREAMVY_API_BASE_URL", API_ORIGIN);
   });
 
   afterEach(() => {
@@ -40,49 +63,87 @@ describe("resolveStream request shape", () => {
     vi.restoreAllMocks();
   });
 
-  function mockResolve(body: unknown, status = 200) {
-    const spy = vi.fn().mockResolvedValue({
-      ok: status >= 200 && status < 300,
-      status,
-      json: async () => body,
-      text: async () => JSON.stringify(body),
-    });
-    vi.stubGlobal("fetch", spy);
-    return spy;
-  }
-
-  it("asks with a GET query string and no JSON body", async () => {
+  it("fetches the detail slug with a GET, not a title search", async () => {
     const { resolveStream } = await loadApi();
-    const spy = mockResolve(resolvePayload);
+    const spy = mockDetail(detailEnvelope);
 
-    await resolveStream("Game of Thrones", 2011, {
-      mediaType: "tv",
-      tmdbId: "1399",
-      season: 2,
-      episode: 5,
+    await resolveStream("inception-e1BOR6f19C7", 2010, {
+      mediaType: "movie",
     });
 
     const [url, init] = spy.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe(
-      "https://backend.test/api/movies/resolve?title=Game+of+Thrones&year=2011&media_type=tv&id=1399&season=2&episode=5"
-    );
+    expect(url).toBe(`${API_ORIGIN}/detail/inception-e1BOR6f19C7`);
     expect(init.method).toBe("GET");
     expect(init.body).toBeUndefined();
-    const headers = (init.headers ?? {}) as Record<string, string>;
-    expect(headers["Content-Type"]).toBeUndefined();
   });
 
-  it("still names media_type when the caller gave nothing else", async () => {
+  it("maps the detail record onto a metadata-only StreamMovie", async () => {
     const { resolveStream } = await loadApi();
-    const spy = mockResolve(resolvePayload);
+    mockDetail(detailEnvelope);
 
-    await resolveStream("The Matrix", 1999);
+    const result = await resolveStream("inception-e1BOR6f19C7", 2010, {
+      mediaType: "movie",
+    });
 
-    const [url] = spy.mock.calls[0] as [string];
-    const query = new URL(url).searchParams;
-    expect(query.get("media_type")).toBe("movie");
-    expect(query.get("title")).toBe("The Matrix");
-    expect(query.get("year")).toBe("1999");
-    expect(query.get("id")).toBeNull();
+    expect(result.exact).toBe(true);
+    expect(result.stream).toMatchObject({
+      id: "6391474290696802080",
+      detail_path: "inception-e1BOR6f19C7",
+      title: "Inception",
+      media_type: "movie",
+      poster_url: "https://cdn.test/inception.jpg",
+      backdrop_url: "https://cdn.test/inception-wide.jpg",
+      year: 2010,
+      vote_average: 8.8,
+      stream_url: "",
+    });
+    expect(result.stream.genres).toEqual(["Action", "Sci-Fi", "Thriller"]);
+  });
+
+  it("keeps the full series season manifest", async () => {
+    const { resolveStream } = await loadApi();
+    mockDetail({
+      data: {
+        subject: {
+          ...detailEnvelope.data.subject,
+          subjectId: "9028867555875774472",
+          subjectType: 2,
+          title: "Wednesday",
+          detailPath: "wednesday-urChTxajYKa",
+        },
+        stars: [],
+        resource: {
+          seasons: [
+            { se: 1, maxEp: 8 },
+            { se: 2, maxEp: 8 },
+          ],
+        },
+      },
+    });
+
+    const result = await resolveStream("wednesday-urChTxajYKa", null, {
+      mediaType: "tv",
+      season: 2,
+      episode: 3,
+    });
+
+    expect(result.stream.media_type).toBe("tv");
+    expect(result.stream.seasons).toBe(2);
+    expect(result.stream.episodes).toHaveLength(16);
+    expect(result.stream.episodes?.[15]).toMatchObject({
+      season: 2,
+      number: 8,
+    });
+    expect(result.stream.season).toBe(2);
+    expect(result.stream.episode).toBe(3);
+  });
+
+  it("reports an unknown handle as StreamNotFoundError", async () => {
+    const { resolveStream, StreamNotFoundError } = await loadApi();
+    mockDetail({ detail: "not found" }, 404);
+
+    await expect(
+      resolveStream("missing-handle", null, { mediaType: "movie" })
+    ).rejects.toBeInstanceOf(StreamNotFoundError);
   });
 });

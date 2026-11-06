@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Bookmark, Menu, X } from "lucide-react";
+import { Bookmark, Heart, Menu, X } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { BrandLockup } from "@/components/brand/Brand";
 import type { View } from "@/components/layout/navigation";
@@ -9,7 +9,7 @@ import { NotificationsBell } from "@/components/layout/NotificationsBell";
 import { savedListIds, subscribeList } from "@/services/lists";
 
 interface NavbarProps {
-  view: View;
+  view: View | "vyteenda";
   onNavigate: (view: View) => void;
 }
 
@@ -54,6 +54,29 @@ function MyListLink({ className }: { className: string }) {
           {count}
         </span>
       ) : null}
+    </Link>
+  );
+}
+
+/**
+ * Vyteenda is a route like My List, not a single-page view, so it uses the same
+ * real-link treatment: `onNavigate` would have produced `/?view=vyteenda` and
+ * rendered nothing. Placed next to My List because the deck's whole output is
+ * "matches land in My List".
+ */
+function VyteendaLink({ className }: { className: string }) {
+  const [location] = useLocation();
+  const active = location === "/vyteenda";
+  return (
+    <Link
+      href="/vyteenda"
+      className={`inline-flex items-center gap-1.5 transition ${className} ${
+        active ? "sv-nav-active text-white" : "text-white/60 hover:text-white"
+      }`}
+      aria-current={active ? "page" : undefined}
+    >
+      <Heart className="h-4 w-4" />
+      Vyteenda
     </Link>
   );
 }
@@ -117,6 +140,7 @@ export function Navbar({ view, onNavigate }: NavbarProps) {
               </button>
             );
           })}
+          <VyteendaLink className="text-sm font-medium" />
           <MyListLink className="text-sm font-medium" />
         </nav>
 
@@ -170,6 +194,7 @@ export function Navbar({ view, onNavigate }: NavbarProps) {
                 {link.label}
               </button>
             ))}
+            <VyteendaLink className="text-sm font-medium" />
             <MyListLink className="text-sm font-medium" />
           </nav>
         </div>

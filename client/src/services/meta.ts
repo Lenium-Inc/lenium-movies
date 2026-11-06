@@ -1,217 +1,257 @@
 /**
  * Metadata for a title, without resolving anything playable.
  *
- * `/api/movies/meta` answers one TMDB details call (recommendations and
- * credits appended) into the catalog's own `Movie` plus a compact shelf of
- * neighbours. The details sheet, the watch page's header and the title page
- * all read it; none of them ever needed the provider-chain walk that
- * `/api/movies/resolve` performs -- which is why this lives apart from the
- * player code: importing metadata from `pages/Watch` dragged hls.js and
- * dash.js into every consumer's bundle, for a director's name.
+ * The catalogue's `/detail/{slug}` record already carries everything the
+ * details sheet, the watch-page header and the title page draw: synopsis,
+ * artwork, genres, cast and the season/episode counts. What it does not carry
+ * is a neighbours wall, so `fetchMovieMeta` derives that from the home shelves
+ * -- the same curated feed -- rather than asking the backend for a second
+ * endpoint it does not have.
+ *
+ * This stays separate from `services/api.ts` for the original reason: the
+ * player imports the API module, and importing the player from every consumer
+ * of a director's name would drag hls.js and dash.js into bundles that never
+ * play anything.
  */
 
-import { apiUrl, MOVIE_RESOLVE_TIMEOUT_MS } from "@/services/api";
+import {
+  getDetail,
+  getHome,
+  type MovieBoxDetail,
+  type MovieBoxItem,
+  type MovieBoxSubject,
+} from "@/services/streamvy";
 import type {
   CastMember,
   Movie,
   SimilarItem,
 } from "@/components/movies/types";
 
-/** What `/api/movies/meta` answers: one title's full record plus the shelf
- *  of neighbours the window draws underneath it. */
+/** What the metadata call answers: one title's record plus its neighbours. */
 export interface MovieMeta {
   movie: Movie;
   similar: SimilarItem[];
 }
 
-/** Retry statuses worth asking again: timeouts, rate limits, and the
- *  transient end of the server. A 400 is a decision and repeating it only
- *  spends the same 1.2s to hear the same answer. */
-function isWorthRetrying(status: number): boolean {
-  return status === 404 || status === 408 || status === 429 || status >= 500;
+/**
+ * A stable numeric id for React keys and legacy list storage.
+ *
+ * MovieBox subject ids exceed `Number.MAX_SAFE_INTEGER`, so they cannot be used
+ * as numbers. The route handle (`providerId`) is the identity that matters;
+ * this is only the numeric slot the existing UI types still require, built from
+ * the low digits so it stays reasonably unique without pretending to be exact.
+ */
+function numericId(subjectId: string): number {
+  const digits = subjectId.replace(/\D/g, "");
+  const tail = digits.slice(-12);
+  const parsed = Number.parseInt(tail, 10);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
-const RETRY_DELAY_MS = 1200;
-
-/** The meta route answers untyped JSON, so every field is `unknown`. Coerce a
- *  value that is actually a string and treat anything else as absent, rather
- *  than letting a number or object flow into a `string | null` field. */
-function asString(value: unknown): string | null {
-  return typeof value === "string" && value ? value : null;
+function yearFromDate(date: string | undefined): number | null {
+  if (!date) return null;
+  const match = date.match(/\d{4}/);
+  if (!match) return null;
+  const year = Number.parseInt(match[0], 10);
+  return Number.isFinite(year) ? year : null;
 }
 
-type MetaMovie = {
-  id?: unknown;
-  title?: unknown;
-  year?: unknown;
-  runtime?: unknown;
-  rating?: unknown;
-  vote_average?: unknown;
-  genres?: unknown;
-  director?: unknown;
-  cast?: unknown;
-  country?: unknown;
-  language?: unknown;
-  release_date?: unknown;
-  media_type?: unknown;
-  poster_url?: unknown;
-  backdrop_url?: unknown;
-  overview?: unknown;
-  seasons?: unknown;
-  episodes_per_season?: unknown;
-  cast_members?: unknown;
-};
+function genresFromSubject(subject: MovieBoxSubject): string[] {
+  return (subject.genre ?? "")
+    .split(",")
+    .map(entry => entry.trim())
+    .filter(Boolean);
+}
 
-/** Coerce the meta route's cast rows into linkable people. The same identity
- *  rule the wall uses applies: no id, no row -- a person the viewer cannot
- *  follow anywhere might as well not be in the credits. */
-function mapCastMembers(value: unknown): CastMember[] {
-  if (!Array.isArray(value)) return [];
-  const members: CastMember[] = [];
-  for (const entry of value) {
-    if (entry == null || typeof entry !== "object") continue;
-    const raw = entry as {
-      id?: unknown;
-      name?: unknown;
-      character?: unknown;
-      profile_path?: unknown;
-    };
-    if (raw.id == null || typeof raw.name !== "string" || !raw.name) continue;
-    members.push({
-      id: String(raw.id),
-      name: raw.name,
-      character: typeof raw.character === "string" ? raw.character : "",
-      profilePath:
-        typeof raw.profile_path === "string" && raw.profile_path
-          ? raw.profile_path
-          : null,
-    });
+function isDirector(star: NonNullable<MovieBoxDetail["stars"]>[number]): boolean {
+  return star.staffType === 2 || /director/i.test(star.character ?? "");
+}
+
+function mapCastMembers(stars: MovieBoxDetail["stars"]): CastMember[] {
+  if (!Array.isArray(stars)) return [];
+  return stars
+    .filter(star => !isDirector(star))
+    .map(star =>
+      star.name?.trim()
+        ? {
+            id: star.staffId?.trim() || star.name.trim(),
+            name: star.name.trim(),
+            character: star.character?.trim() || "",
+            profilePath: star.avatarUrl?.trim() || null,
+          }
+        : null
+    )
+    .filter((member): member is CastMember => member !== null);
+}
+
+function runtimeMinutes(duration: unknown): number | null {
+  if (typeof duration !== "number" || !Number.isFinite(duration) || duration <= 0) {
+    return null;
   }
-  return members;
+  // MovieBox reports seconds for films. A value under 300 is already minutes
+  // (or an unknown short), so leave it alone rather than turning a 90-minute
+  // film into a 1.5-minute one.
+  return duration > 300 ? Math.round(duration / 60) : Math.round(duration);
 }
 
-/** Map the meta route's record (the resolve payload's movie half, minus the
- *  stream fields) onto the catalog's `Movie`. */
-function mapMetaMovie(m: MetaMovie): Movie {
-  const mediaType = m.media_type === "tv" ? "tv" : "movie";
-  const year = m.year ? parseInt(String(m.year), 10) : null;
-  const runtime = typeof m.runtime === "number" ? m.runtime : null;
-  const rating = asString(m.rating);
-  const score = typeof m.vote_average === "number" ? m.vote_average : null;
-  const genre = Array.isArray(m.genres) ? m.genres : [];
-  const director = asString(m.director);
-  const cast = Array.isArray(m.cast) ? m.cast : [];
-  const country = asString(m.country);
-  const language = asString(m.language);
-  const releaseDate = asString(m.release_date);
+function mapDetail(detail: MovieBoxDetail, kind: "movie" | "tv"): Movie {
+  const subject = detail.subject;
+  const mediaType = subject.subjectType === 2 ? "tv" : kind === "tv" ? "tv" : "movie";
+  const stars = Array.isArray(detail.stars) ? detail.stars : [];
+  const castMembers = mapCastMembers(stars);
+  const cast = stars
+    .filter(star => !isDirector(star))
+    .map(star => star.name?.trim())
+    .filter((name): name is string => Boolean(name));
+  const director =
+    stars.find(isDirector)?.name?.trim() || null;
+  const score = Number(subject.imdbRatingValue);
+  const stills =
+    typeof subject.stills === "string"
+      ? subject.stills
+      : subject.stills?.url;
 
   return {
-    id: parseInt(String(m.id), 10),
-    providerId: String(m.id),
-    title: String(m.title ?? ""),
-    year,
-    runtime,
-    rating,
-    score,
-    genre,
-    poster: asString(m.poster_url),
-    backdrop: asString(m.backdrop_url) || asString(m.poster_url),
-    synopsis: asString(m.overview) ?? "",
+    id: numericId(subject.subjectId),
+    providerId: subject.detailPath?.trim() || subject.subjectId,
+    title: subject.title?.trim() || detail.metadata?.title?.trim() || "Untitled",
+    year: yearFromDate(subject.releaseDate),
+    runtime: runtimeMinutes(subject.duration),
+    rating: null,
+    score: Number.isFinite(score) && score > 0 ? score : null,
+    genre: genresFromSubject(subject),
+    poster: subject.cover?.url?.trim() || null,
+    backdrop: stills?.trim() || subject.cover?.url?.trim() || null,
+    synopsis:
+      subject.description?.trim() || detail.metadata?.description?.trim() || "",
     director,
+    cast,
+    castMembers,
+    country: subject.countryName?.trim() || null,
+    language: null,
+    releaseDate: subject.releaseDate?.trim() || null,
     source: "tmdb",
     mediaType,
-    cast,
-    country,
-    language,
-    releaseDate,
-    castMembers: mapCastMembers(m.cast_members),
-    ...(typeof m.seasons === "number" ? { seasons: m.seasons } : {}),
-    ...(typeof m.episodes_per_season === "number"
-      ? { episodes_per_season: m.episodes_per_season }
+    ...(mediaType === "tv"
+      ? {
+          seasons:
+            detail.resource?.seasons?.reduce(
+              (max, block) => Math.max(max, block.se),
+              0
+            ) || 1,
+          episodes_per_season:
+            detail.resource?.seasons?.reduce(
+              (max, block) => Math.max(max, block.maxEp),
+              0
+            ) || 1,
+        }
       : {}),
   };
 }
 
-/** Map one wall entry. The poster stays a bare TMDB path: the surfaces that
- *  draw it own an image helper that re-splices any rendition into it. */
-function mapSimilarItem(raw: {
-  id?: unknown;
-  title?: unknown;
-  year?: unknown;
-  media_type?: unknown;
-  poster_path?: unknown;
-  vote_average?: unknown;
-  overview?: unknown;
-}): SimilarItem | null {
-  if (raw == null || raw.id == null || !raw.title) return null;
-  const year =
-    typeof raw.year === "number"
-      ? raw.year
-      : parseInt(String(raw.year ?? ""), 10) || null;
+function similarFromItem(
+  item: MovieBoxItem,
+  mediaType: "movie" | "tv"
+): SimilarItem | null {
+  const slug = item.slug?.trim();
+  if (!slug) return null;
   return {
-    providerId: String(raw.id),
-    mediaType: raw.media_type === "tv" ? "tv" : "movie",
-    title: String(raw.title),
-    year,
-    poster: typeof raw.poster_path === "string" && raw.poster_path
-      ? raw.poster_path
-      : null,
-    score: typeof raw.vote_average === "number" ? raw.vote_average : null,
-    synopsis: typeof raw.overview === "string" ? raw.overview : "",
+    providerId: slug,
+    mediaType,
+    title: item.name?.trim() || slug,
+    year:
+      typeof item.year === "number"
+        ? item.year
+        : yearFromDate(String(item.year ?? "")),
+    poster: item.poster_url?.trim() || null,
+    score:
+      typeof item.rating === "number"
+        ? item.rating
+        : Number(item.rating) || null,
+    synopsis: "",
   };
+}
+
+/**
+ * A neighbours wall from the curated home shelves.
+ *
+ * The section name is the only media-kind signal a card carries, so a series
+ * detail keeps its wall to series sections. Titles that share a genre with the
+ * open record are ranked first; the rest pad the wall rather than leaving a
+ * one-row gap for an obscure title.
+ */
+async function similarTitles(
+  detail: MovieBoxDetail,
+  mediaType: "movie" | "tv"
+): Promise<SimilarItem[]> {
+  try {
+    const home = await getHome();
+    const ownGenres = new Set(
+      genresFromSubject(detail.subject).map(genre => genre.toLowerCase())
+    );
+    const candidates: { item: SimilarItem; rank: number }[] = [];
+    const seen = new Set<string>([detail.subject.subjectId]);
+
+    for (const section of home.sections ?? []) {
+      const label = section.section.toLowerCase();
+      const sectionType: "movie" | "tv" =
+        label.includes("series") ||
+        label.includes("show") ||
+        label.includes("drama") ||
+        label.includes("anime") ||
+        label.includes("animation")
+          ? "tv"
+          : "movie";
+      if (sectionType !== mediaType) continue;
+
+      const sectionGenres = label.split(/[^a-z-]+/);
+      const sharesGenre = sectionGenres.some(genre => ownGenres.has(genre));
+
+      for (const item of section.items ?? []) {
+        const slug = item.slug?.trim();
+        const subjectId = item.subject_id?.trim();
+        if (!slug || (subjectId && seen.has(subjectId))) continue;
+        if (subjectId) seen.add(subjectId);
+        const similar = similarFromItem(item, mediaType);
+        if (similar) candidates.push({ item: similar, rank: sharesGenre ? 0 : 1 });
+      }
+    }
+
+    return candidates
+      .sort((a, b) => a.rank - b.rank)
+      .slice(0, 18)
+      .map(entry => entry.item);
+  } catch {
+    return [];
+  }
 }
 
 /**
  * Full metadata plus a similar-titles wall, without resolving a stream.
  *
- * This used to be `/api/movies/resolve` -- which walked every provider chain
- * behind a headless browser to answer a synopsis. The meta route answers the
- * same record (and the neighbours) from one cached TMDB call, so opening a
- * window or booting a page no longer queues a render that exists only to
- * decide *what* to play, not *whether* it can.
+ * `handle` is the detail slug (the route param); a subject id works only when
+ * it has already been seen on a card, because the live API answers
+ * `/detail/{subject_id}` with a 502.
  */
 export async function fetchMovieMeta(
-  tmdbId: string,
+  handle: string,
   kind: "movie" | "tv" = "movie"
 ): Promise<MovieMeta | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), MOVIE_RESOLVE_TIMEOUT_MS);
   try {
-    let response: Response | undefined;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      // GET with the fields on the query string: the route accepts both
-      // shapes, and without a JSON body there is no CORS preflight -- which on
-      // a watch-page open was a full extra round trip to the backend before
-      // the metadata call itself could start.
-      const query = new URLSearchParams({ id: tmdbId, media_type: kind });
-      response = await fetch(apiUrl(`/api/movies/meta?${query.toString()}`), {
-        method: "GET",
-        signal: controller.signal,
-      });
-      if (response.ok || !isWorthRetrying(response.status)) break;
-      if (attempt === 0) await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
-    }
-
-    if (!response?.ok) return null;
-    const data = await response.json();
-    if (!data.movie) return null;
-
-    const similar: SimilarItem[] = Array.isArray(data.similar)
-      ? data.similar.map(mapSimilarItem).filter((s: SimilarItem | null): s is SimilarItem => s !== null)
-      : [];
-    return { movie: mapMetaMovie(data.movie), similar };
+    const detail = await getDetail(handle);
+    const movie = mapDetail(detail, kind);
+    const similar = await similarTitles(detail, movie.mediaType);
+    return { movie, similar };
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
 /** Metadata only. Kept for callers that do not need the neighbours wall. */
 export async function fetchMovieDetails(
-  tmdbId: string,
+  handle: string,
   kind: "movie" | "tv" = "movie"
 ): Promise<Movie | null> {
-  const meta = await fetchMovieMeta(tmdbId, kind);
+  const meta = await fetchMovieMeta(handle, kind);
   return meta ? meta.movie : null;
 }

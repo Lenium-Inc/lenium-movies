@@ -136,6 +136,10 @@ export default function Home() {
   // replaces matched every backend value and so handed back the stored w1280,
   // upscaled to fill an 80vh wash across the full viewport width.
   const heroArtUrl = heroBackdrop ? tmdbImage(heroBackdrop, "original") : null;
+  // The ambient wash is blurred to the point where detail is wasted, so it
+  // asks for a 780px rendition. It used to reuse `original` -- the same
+  // multi-megabyte file the hero displays, downloaded a second time.
+  const heroWashUrl = heroBackdrop ? tmdbImage(heroBackdrop, "w780") : null;
 
   // The accent is emitted by whatever artwork the hero is showing, so the nav
   // rule, the carousel progress and the hero glow all change with the slide.
@@ -156,14 +160,16 @@ export default function Home() {
      */
     <div className="sv-accent-scope min-h-screen" style={accentStyle}>
       <TopProgressBar isLoading={loading || searchLoading || discoverLoading} />
-      {isHomeView && heroArtUrl ? (
+      {isHomeView && heroWashUrl ? (
         <div
           aria-hidden
           className="pointer-events-none fixed inset-x-0 top-0 z-0 h-[80vh] overflow-hidden"
         >
           <img
-            src={heroArtUrl}
+            src={heroWashUrl}
             alt=""
+            loading="lazy"
+            decoding="async"
             className="h-full w-full scale-110 object-cover opacity-30 blur-3xl"
           />
           {/* Fades the blurred art back into the base colour. `transparent`

@@ -7,6 +7,33 @@
  * base URL is configurable through `VITE_MOVIE_API_BASE_URL` and defaults to
  * the local development server.
  */
+import {
+  ApiError,
+  getDetail,
+  getHome,
+  getStreams,
+  isRateLimited,
+  isUsableSubjectId,
+  loadCaptionTracks,
+  peekDetailPath,
+  peekPoster,
+  peekSubjectId,
+  proxiedVideoTarget,
+  proxiedVideoUrl,
+  resolveDetailPath,
+  resolveSubjectId,
+  searchSubjects,
+  suggestSubjects,
+  STREAMVY_API_BASE_URL,
+  USING_FALLBACK_STREAMVY_ORIGIN,
+  type MovieBoxDetail,
+  type MovieBoxItem,
+  type MovieBoxResource,
+  type MovieBoxSeasonBlock,
+} from "@/services/streamvy";
+
+export { ApiError, isRateLimited, proxiedVideoTarget };
+
 export type StreamQuality = "8K" | "4K" | "1080p" | "720p" | "480p" | "320p";
 
 export interface StreamVariant {
@@ -109,7 +136,14 @@ export interface StreamEpisode {
 }
 
 export interface StreamMovie {
+  /**
+   * MovieBox subject id. A ~19-digit string, never a number: it exceeds
+   * `Number.MAX_SAFE_INTEGER`, so any numeric round-trip silently changes which
+   * title plays.
+   */
   id: string;
+  /** The API's public URL handle for this title (`/detail/{detail_path}`). */
+  detail_path?: string;
   title: string;
   poster_url: string;
   stream_url: string;
@@ -208,18 +242,17 @@ export function pickStreamVariant(
 }
 
 /**
- * Same-origin URL that saves an Archive.org file via the versioned download
- * alias. Both routes use the same Archive.org-only Flask relay.
+ * Save URL for a media file the API already knows how to relay.
  *
- * The backend, not this function, is what makes the save work: it relays the
- * bytes with a `Content-Disposition: attachment` header, and a browser ignores
- * an `<a download>` attribute on a cross-origin href. Pointing an anchor here
- * keeps the navigation same-origin, so the file lands in the downloads folder
- * instead of the tab navigating to the archive node.
+ * A browser ignores an `<a download>` attribute on a cross-origin href, so the
+ * anchor points at the API's `/proxy/download` route; that route streams the
+ * same bytes as `/proxy/stream` but adds `Content-Disposition: attachment`,
+ * which is what actually names and saves the file. The CDN Referer the upstream
+ * requires is added on the server, not here.
  */
 export function proxiedDownloadUrl(url: string, filename: string): string {
   const params = new URLSearchParams({ url, filename });
-  return `${MOVIE_API_BASE_URL}/api/v1/stream/download?${params.toString()}`;
+  return `${MOVIE_API_BASE_URL}/proxy/download?${params.toString()}`;
 }
 
 /**
@@ -239,48 +272,23 @@ export function subtitleTrackUrl(url: string): string {
 }
 
 /**
- * Base URL of the movie backend (the local Streamvy FastAPI service).
+ * The catalogue API's origin.
  *
- * Resolution order:
- *
- * 1. `VITE_API_BASE_URL` -- the canonical variable, inlined by Vite at build
- *    time. Set it to whatever origin serves the API.
- * 2. `VITE_MOVIE_API_BASE_URL` / `VITE_API_URL` -- legacy names, still
- *    honoured so an existing dashboard or .env keeps working unchanged.
- * 3. `http://127.0.0.1:8001` -- the Streamvy API's local address, which is
- *    what an unconfigured dev build (and a build that ships the variable
- *    blank, the shape .env.example used to carry) talks to.
- *
- * The old hardcoded Render origin is gone: that namespace is reclaimable, and
- * an unconfigured build silently shipping every viewer's bearer token to
- * whoever re-registers it is not a fallback, it is a leak. What replaces it is
- * the local FastAPI default, reported (never logged) through
- * `USING_FALLBACK_BACKEND_ORIGIN` so a diagnostic surface can tell "configured"
- * from "defaulting".
- *
- * Trailing slashes are stripped so `apiUrl("/feed")` never produces a
- * double-slash path.
+ * `MOVIE_API_BASE_URL` is kept as the name every existing caller and test uses,
+ * but it now resolves through the media API's own variable. The legacy
+ * `VITE_API_BASE_URL` is deliberately not consulted here: deployments still
+ * carry it pointing at the retired Flask/Render service, and inheriting it
+ * would silently send every catalogue call back to an origin the operator has
+ * moved off.
  */
-const CONFIGURED_BACKEND_ORIGIN = (
-  import.meta.env.VITE_API_BASE_URL ||
-  import.meta.env.VITE_MOVIE_API_BASE_URL ||
-  import.meta.env.VITE_API_URL ||
-  ""
-).trim();
-
-const DEFAULT_BACKEND_ORIGIN = "http://127.0.0.1:8001";
-
-export const MOVIE_API_BASE_URL = (
-  CONFIGURED_BACKEND_ORIGIN ||
-  DEFAULT_BACKEND_ORIGIN
-).replace(/\/+$/, "");
+export const MOVIE_API_BASE_URL = STREAMVY_API_BASE_URL;
 
 /**
- * True when this build carries no configured backend origin and is therefore
- * talking to the hardcoded local default above. The only signal it leaves
- * behind -- nothing is logged.
+ * True when this build carries no configured media origin and is therefore
+ * talking to the deployed default above. The only signal it leaves behind --
+ * nothing is logged.
  */
-export const USING_FALLBACK_BACKEND_ORIGIN = !CONFIGURED_BACKEND_ORIGIN;
+export const USING_FALLBACK_BACKEND_ORIGIN = USING_FALLBACK_STREAMVY_ORIGIN;
 
 /** Build a full API URL for the movie backend. */
 export function apiUrl(path: string): string {
@@ -327,32 +335,247 @@ function isStreamMovie(value: unknown): value is StreamMovie {
   );
 }
 
+
+
 /**
- * An HTTP-level failure from the movie backend, carrying the status code.
+ * The media kind a home section carries.
  *
- * Feed callers need to tell a TMDB rate limit (429) apart from a genuine
- * outage, and previously could only match on the message text.
+ * A `/home` card does not say whether it is a film or a series; only the
+ * section it sits in does. This is what fills that gap, and it is deliberately
+ * biased toward "movie": a film addressed as a series asks the stream endpoint
+ * for a season it does not have, which is a harder failure than a series opened
+ * as a film (the route is still the same slug, and the detail record corrects
+ * the kind the moment it loads).
  */
-export class ApiError extends Error {
-  readonly status: number;
-
-  constructor(status: number, context: string) {
-    super(`${context} failed with status ${status}`);
-    this.name = "ApiError";
-    this.status = status;
+function mediaTypeFromSection(section: string): "movie" | "tv" {
+  const label = section.toLowerCase();
+  if (
+    label.includes("series") ||
+    label.includes("show") ||
+    label.includes("drama") ||
+    label.includes("anime") ||
+    label.includes("animation")
+  ) {
+    return "tv";
   }
+  return "movie";
 }
 
-/** True when the backend refused because we exceeded TMDB's rate limit. */
-export function isRateLimited(err: unknown): boolean {
-  return err instanceof ApiError && err.status === 429;
+/** Genre labels the home sections use, matched case-insensitively. */
+const SECTION_GENRES: Record<string, string> = {
+  action: "Action",
+  adventure: "Adventure",
+  animation: "Animation",
+  anime: "Anime",
+  comedy: "Comedy",
+  crime: "Crime",
+  documentary: "Documentary",
+  drama: "Drama",
+  family: "Family",
+  fantasy: "Fantasy",
+  horror: "Horror",
+  music: "Music",
+  mystery: "Mystery",
+  romance: "Romance",
+  superhero: "Superhero",
+  thriller: "Thriller",
+  war: "War",
+  western: "Western",
+  nollywood: "Nollywood",
+  "k-drama": "K-Drama",
+  "c-drama": "C-Drama",
+  bl: "BL",
+};
+
+/**
+ * Derive display genres from a section's name.
+ *
+ * This is the only genre signal the home feed carries, so it is worth the small
+ * amount of normalisation: "Action & Thriller" has to yield two chips, not the
+ * literal string, and "Popular Series" must yield none rather than inventing a
+ * genre from the word "series".
+ */
+function genresFromSection(section: string): string[] {
+  const label = section.toLowerCase();
+  const genres = new Set<string>();
+  if (label.includes("sci-fi") || label.includes("sci fi")) {
+    genres.add("Sci-Fi");
+  }
+  for (const token of label.split(/[^a-z-]+/)) {
+    const genre = SECTION_GENRES[token];
+    if (genre) genres.add(genre);
+  }
+  return [...genres];
+}
+
+function posterFromItem(item: MovieBoxItem): string {
+  const direct = item.poster_url?.trim();
+  if (direct) return direct;
+  const slug = item.slug?.trim();
+  return (slug && peekPoster(slug)) || "";
 }
 
 /**
- * Live search against the movie backend's TMDB search endpoint (`/api/search`).
- * Returns TMDB results with baked `stream_url` (embeds for TV wire the
- * default S1E1) and — for TV entries — `seasons`/`episodes_per_season` that
- * drive the episode matrix in the details view.
+ * A home/search card as the app's `StreamMovie`.
+ *
+ * `stream_url` is empty on purpose. The catalogue never carries playable links
+ * -- those are minted per episode by `/api/stream` -- and an empty string is how
+ * every existing caller already represents "metadata only".
+ */
+function movieFromItem(
+  item: MovieBoxItem,
+  mediaType: "movie" | "tv"
+): StreamMovie {
+  const slug = item.slug?.trim() || "";
+  const subjectId = item.subject_id?.trim() || slug;
+  return {
+    id: subjectId,
+    detail_path: slug || undefined,
+    title: item.name?.trim() || slug || "Untitled",
+    poster_url: posterFromItem(item),
+    stream_url: "",
+    year: toStreamYear(item.year),
+    media_type: mediaType,
+    ...(typeof item.rating === "number"
+      ? { vote_average: item.rating }
+      : typeof item.rating === "string" && Number.isFinite(Number(item.rating))
+        ? { vote_average: Number(item.rating) }
+        : {}),
+  };
+}
+
+/** Split the API's comma-joined `genre` field. */
+function genresFromSubject(genre: string | undefined): string[] {
+  if (!genre) return [];
+  return genre
+    .split(",")
+    .map(entry => entry.trim())
+    .filter(Boolean);
+}
+
+function stillsUrl(stills: MovieBoxDetail["subject"]["stills"]): string {
+  if (!stills) return "";
+  if (typeof stills === "string") return stills;
+  return stills.url?.trim() || "";
+}
+
+/** Flatten the per-season episode counts into the app's flat episode list. */
+function episodesFromResource(resource?: MovieBoxResource): StreamEpisode[] {
+  const blocks = Array.isArray(resource?.seasons) ? resource.seasons : [];
+  const episodes: StreamEpisode[] = [];
+  for (const block of blocks) {
+    if (!Number.isFinite(block.se) || !Number.isFinite(block.maxEp)) continue;
+    for (let episode = 1; episode <= block.maxEp; episode++) {
+      episodes.push({
+        season: block.se,
+        number: episode,
+        title: `Episode ${episode}`,
+      });
+    }
+  }
+  return episodes;
+}
+
+function seasonCount(resource?: MovieBoxResource): number {
+  const blocks: MovieBoxSeasonBlock[] = Array.isArray(resource?.seasons)
+    ? resource.seasons
+    : [];
+  return blocks.reduce((max, block) => Math.max(max, block.se), 0) || 1;
+}
+
+function episodeCount(resource?: MovieBoxResource): number {
+  const blocks: MovieBoxSeasonBlock[] = Array.isArray(resource?.seasons)
+    ? resource.seasons
+    : [];
+  return blocks.reduce((max, block) => Math.max(max, block.maxEp), 0) || 1;
+}
+
+/**
+ * A `/detail/{slug}` record as the app's `StreamMovie`.
+ *
+ * This is the one place the catalogue's vocabulary (subject, cover, resource)
+ * becomes the app's (id, poster_url, seasons), so a new field only has to be
+ * mapped once.
+ */
+function movieFromDetail(detail: MovieBoxDetail): StreamMovie {
+  const subject = detail.subject;
+  const mediaType = subject.subjectType === 2 ? "tv" : "movie";
+  const rating = Number(subject.imdbRatingValue);
+  const slug = subject.detailPath?.trim() || "";
+  return {
+    id: subject.subjectId,
+    detail_path: slug || undefined,
+    title:
+      subject.title?.trim() || detail.metadata?.title?.trim() || "Untitled",
+    poster_url: subject.cover?.url?.trim() || "",
+    backdrop_url: stillsUrl(subject.stills),
+    stream_url: "",
+    year: toStreamYear(subject.releaseDate?.slice(0, 4)),
+    overview:
+      subject.description?.trim() || detail.metadata?.description?.trim() || "",
+    media_type: mediaType,
+    genres: genresFromSubject(subject.genre),
+    seasons: mediaType === "tv" ? seasonCount(detail.resource) : 1,
+    episodes_per_season:
+      mediaType === "tv" ? episodeCount(detail.resource) : 1,
+    ...(Number.isFinite(rating) && rating > 0 ? { vote_average: rating } : {}),
+    ...(mediaType === "tv"
+      ? { episodes: episodesFromResource(detail.resource) }
+      : {}),
+  };
+}
+
+/** One home section, wrapped so genre/media-kind travel with its cards. */
+interface HomeSectionView {
+  name: string;
+  mediaType: "movie" | "tv";
+  genres: string[];
+  movies: StreamMovie[];
+}
+
+async function homeSections(): Promise<HomeSectionView[]> {
+  const payload = await getHome();
+  const raw = Array.isArray(payload.sections) ? payload.sections : [];
+  return raw
+    .filter(section => !/music video/i.test(section.section))
+    .map(section => {
+      const mediaType = mediaTypeFromSection(section.section);
+      const items = Array.isArray(section.items) ? section.items : [];
+      return {
+        name: section.section,
+        mediaType,
+        genres: genresFromSection(section.section),
+        movies: items
+          .filter(item => Boolean(item.slug?.trim()))
+          .map(item => movieFromItem(item, mediaType)),
+      };
+    })
+    .filter(section => section.movies.length > 0);
+}
+
+/** Flatten sections, keeping the first occurrence of each subject. */
+function flattenSections(sections: HomeSectionView[]): StreamMovie[] {
+  const seen = new Set<string>();
+  const movies: StreamMovie[] = [];
+  for (const section of sections) {
+    for (const movie of section.movies) {
+      if (seen.has(movie.id)) continue;
+      seen.add(movie.id);
+      movies.push(movie);
+    }
+  }
+  return movies;
+}
+
+function sectionsMatching(
+  sections: HomeSectionView[],
+  predicate: (section: HomeSectionView) => boolean
+): HomeSectionView[] {
+  return sections.filter(predicate);
+}
+
+/**
+ * Live search against the media API (`/search?q=…`).
  *
  * Returns an empty array for an empty query and throws when the backend is
  * unreachable so callers can fall back to their metadata provider.
@@ -360,19 +583,16 @@ export function isRateLimited(err: unknown): boolean {
 export async function searchCatalog(query: string): Promise<StreamMovie[]> {
   const trimmed = query.trim();
   if (!trimmed) return [];
-  const response = await fetch(
-    `${MOVIE_API_BASE_URL}/api/search?q=${encodeURIComponent(trimmed)}`
-  );
-  if (!response.ok) {
-    throw new ApiError(response.status, "Search");
-  }
-  const data: unknown = await response.json();
-  if (!Array.isArray(data)) {
-    throw new Error(
-      "Movie backend returned an unexpected search payload shape"
+  const payload = await searchSubjects(trimmed);
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  return items
+    .filter(item => Boolean(item.slug?.trim()))
+    .map(item =>
+      movieFromItem(
+        item,
+        /\bseries\b/i.test(item.name ?? "") ? "tv" : "movie"
+      )
     );
-  }
-  return data.filter(isStreamMovie);
 }
 
 export interface ResolvedStream {
@@ -593,13 +813,9 @@ function isResolvePayload(value: unknown): value is {
 
 /** Optional media targeting for stream resolution (TV series playback). */
 export interface StreamResolveOptions {
-  /** TMDB ID for direct resolution (preferred over title/year search). */
-  tmdbId?: string;
-  /**
-   * Feature film or series. Omitted, the backend defaults to `"movie"`, so a
-   * series resolved without it is looked up in the wrong catalog and answers
-   * "not found" -- the title is right, the media kind is not.
-   */
+  /** The detail slug, when the caller already has it (avoids re-deriving it). */
+  detailPath?: string;
+  /** Feature film or series, when the caller already knows the kind. */
   mediaType?: "movie" | "tv";
   /** Season of a series to resolve (ignored for movies). */
   season?: number;
@@ -655,70 +871,34 @@ async function fetchWithTimeout(
  * when the backend is unreachable.
  */
 export async function resolveStream(
-  title: string,
-  year?: number | null,
+  handle: string,
+  _year?: number | null,
   options?: StreamResolveOptions
 ): Promise<ResolvedStream> {
-  // The backend keys the lookup on `title`, so it must never travel blank:
-  // `?title=` matches nothing and reads as a server-side bug rather than as a
-  // caller mistake. Trimmed, and rejected up front when there is neither a
-  // title nor a TMDB id to resolve by. URLSearchParams percent-encodes what it
-  // is given (space, `&`, `#`, non-ASCII) exactly like encodeURIComponent, so
-  // a title such as "Fish & Chips" survives the query string intact.
-  const trimmedTitle = title.trim();
-  if (!trimmedTitle && !options?.tmdbId) {
-    throw new StreamNotFoundError(title || "(untitled)");
-  }
-  const params = new URLSearchParams();
-  if (trimmedTitle) params.set("title", trimmedTitle);
-  if (year) params.set("year", String(year));
-  // Always send the media kind, even when it is the default. The backend falls
-  // back to `"movie"` on an absent field, and a series resolved as a film is a
-  // lookup in the wrong catalog -- the title matches, the answer is "not found".
-  params.set("media_type", options?.mediaType ?? "movie");
-  if (options?.tmdbId) params.set("id", options.tmdbId);
-  if (options?.season) params.set("season", String(options.season));
-  if (options?.episode) params.set("episode", String(options.episode));
-  // GET, not POST: a JSON body trips a CORS preflight, and the preflight is a
-  // full extra round trip to Render before the resolve even starts. The route
-  // reads the same fields off the query string (`_init_inputs`), and the
-  // response carries `no-store` because it is full of per-request handles.
-  const response = await fetchWithTimeout(
-    `${MOVIE_API_BASE_URL}/api/movies/resolve?${params.toString()}`,
-    { method: "GET" },
-    MOVIE_RESOLVE_TIMEOUT_MS
-  );
-  if (response.status === 404) throw new StreamNotFoundError(title);
-  if (!response.ok) {
-    throw new Error(`Movie backend responded with status ${response.status}`);
-  }
-  // A backend that fails outside its own handlers answers with an HTML error
-  // page. Parsing that as JSON throws "Unexpected token '<'", which no error
-  // classifier can reason about. Read the text first and fail with the status
-  // attached, so the caller sees a classifiable error instead of a parse error.
-  const rawBody = await response.text();
-  let payload: unknown;
+  // The handle is the slug from the card (`/detail/{slug}`). The `_year` remains
+  // in the signature because the details page still passes it, but it has no
+  // meaning against this catalogue: the handle is the lookup key, and matching a
+  // second time by year would only reject an otherwise exact title.
+  const target = options?.detailPath?.trim() || handle.trim();
+  if (!target) throw new StreamNotFoundError(handle || "(untitled)");
+
+  let detail: MovieBoxDetail;
   try {
-    payload = JSON.parse(rawBody);
-  } catch {
-    throw new Error(
-      `Movie backend responded with status ${response.status} and a non-JSON body`
-    );
+    detail = await getDetail(target);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) {
+      throw new StreamNotFoundError(handle);
+    }
+    throw err;
   }
-  if (!isResolvePayload(payload)) {
-    throw new Error("Movie backend returned an unexpected payload shape");
+
+  const stream = movieFromDetail(detail);
+  if (options?.mediaType) stream.media_type = options.mediaType;
+  if (stream.media_type === "tv") {
+    stream.season = options?.season ?? 1;
+    stream.episode = options?.episode ?? 1;
   }
-  const movie = normalizeResolvedMovie(
-    (payload as { movie: unknown }).movie
-  ) as StreamMovie;
-  return {
-    stream: movie,
-    exact: payload.exact,
-    language:
-      typeof payload.language === "string" && payload.language
-        ? payload.language
-        : null,
-  };
+  return { stream, exact: true, language: null };
 }
 
 /**
@@ -727,10 +907,12 @@ export async function resolveStream(
  * (`/api/v1/playback/...?token=...`), never raw upstream links.
  */
 export interface StreamSource {
-  /** Primary embed/web URL (`movie.stream_url`). */
+  /** Primary playable URL, already routed through the media proxy. */
   url: string;
   /** Ordered list of candidate source URLs (primary first) for auto-cycling. */
   sources?: string[];
+  /** Every quality rendition the stream endpoint reported, best first. */
+  streams?: StreamVariant[];
   /** Alternate servers the player can switch between. */
   mirrors: StreamMirror[];
   /**
@@ -756,8 +938,13 @@ export interface StreamSource {
 }
 
 export interface GetStreamRequest {
-  /** TMDB id (also accepts the backend's numeric `id` parameter). */
+  /**
+   * MovieBox subject id. Kept under the historical name so call sites do not
+   * churn, but it is no longer a TMDB id -- the catalogue has none.
+   */
   tmdbId: string;
+  /** The detail slug; playback can only be resolved with both this and the id. */
+  detailPath?: string;
   mediaType: "movie" | "tv";
   /** Season to target (TV only; defaults to 1 on the backend). */
   season?: number;
@@ -887,96 +1074,118 @@ async function readProviderExhaustion(response: Response): Promise<unknown[] | n
  * and none could serve the title. @throws `Error` when the backend is
  * unreachable or returns an unexpected shape.
  */
+/** Map a stream source's `resolution` label onto a real pixel height. */
+function heightFromResolution(resolution: unknown): number {
+  if (typeof resolution === "number" && Number.isFinite(resolution)) {
+    return resolution;
+  }
+  const label = String(resolution ?? "").toLowerCase();
+  if (label.includes("8k") || label.includes("4320")) return 4320;
+  if (label.includes("4k") || label.includes("2160")) return 2160;
+  const match = label.match(/(\d{3,4})/);
+  if (match) {
+    const height = Number(match[1]);
+    if (Number.isFinite(height)) return height;
+  }
+  if (label.includes("hd")) return 720;
+  return 0;
+}
+
+/**
+ * Resolve a playable source for a title, then route every media leg through the
+ * API's proxy.
+ *
+ * Three things make this endpoint different from the catalogue calls:
+ *
+ * 1. It needs *both* the subject id and the detail slug. The slug keys the
+ *    detail lookup; the id keys the stream lookup. A caller holding only one can
+ *    still recover the other from the caches `api.ts` filled while rendering the
+ *    page.
+ * 2. Movies must send `se=0&ep=0`, not the endpoint's `1/1` default. A film has
+ *    no season, and the default asks for one that does not exist.
+ * 3. Every returned URL is a raw CDN link that the browser cannot fetch (the CDN
+ *    requires the MovieBox `Referer`, which a media element cannot set), so it is
+ *    wrapped in the proxy here rather than at the player.
+ *
+ * @throws `StreamTimeoutError` if the API does not answer within
+ * `STREAM_RESOLVE_TIMEOUT_MS`. @throws `StreamExhaustedError` when the title has
+ * no sources for the requested episode. @throws `Error` when the backend is
+ * unreachable or returns an unexpected shape.
+ */
 export async function getStreamSource(
   input: GetStreamRequest
 ): Promise<StreamSource> {
-  const body: Record<string, unknown> = {
-    tmdb_id: input.tmdbId,
-    media_type: input.mediaType,
-  };
-  if (input.mediaType === "tv") {
-    body.season = input.season ?? 1;
-    body.episode = input.episode ?? 1;
-  }
-  if (input.refresh) body.refresh = true;
-  const response = await fetchWithTimeout(
-    `${MOVIE_API_BASE_URL}/api/v1/playback/init`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    },
-    STREAM_RESOLVE_TIMEOUT_MS
-  );
-  if (!response.ok) {
-    const attempts = await readProviderExhaustion(response);
-    if (attempts !== null) {
-      throw new StreamExhaustedError(attempts);
-    }
-    throw new Error(`Movie backend responded with status ${response.status}`);
-  }
-  const payload: unknown = await response.json();
-  if (!isGetStreamPayload(payload)) {
-    throw new Error("Movie backend returned an unexpected playback-init shape");
-  }
-  if (payload.available === false || payload.movie.stream_url === "") {
+  const handle = (input.tmdbId ?? "").trim();
+  if (!handle) throw new StreamExhaustedError();
+
+  const detailPath =
+    input.detailPath?.trim() ||
+    peekDetailPath(handle) ||
+    (isUsableSubjectId(handle) ? await resolveDetailPath(handle) : handle);
+
+  const subjectId = isUsableSubjectId(handle)
+    ? handle
+    : peekSubjectId(detailPath) || (await resolveSubjectId(detailPath));
+
+  // Films are addressed as season 0, episode 0; the endpoint's own default is
+  // 1/1, which is a season a film does not have.
+  const season = input.mediaType === "tv" ? input.season ?? 1 : 0;
+  const episode = input.mediaType === "tv" ? input.episode ?? 1 : 0;
+
+  const payload = await getStreams(subjectId, detailPath, {
+    season,
+    episode,
+    force: input.refresh === true,
+  });
+
+  const variants: StreamVariant[] = (Array.isArray(payload.sources)
+    ? payload.sources
+    : []
+  )
+    .filter(
+      (source): source is typeof source & { url: string } =>
+        typeof source.url === "string" && source.url.trim().length > 0
+    )
+    .map(source => {
+      const height = heightFromResolution(source.resolution);
+      const size =
+        typeof source.size === "number"
+          ? source.size
+          : Number(source.size) || 0;
+      return {
+        url: proxiedVideoUrl(source.url),
+        quality: qualityFromHeight(height),
+        width: 0,
+        height,
+        size,
+      };
+    })
+    .sort((a, b) => b.height - a.height);
+
+  if (variants.length === 0) {
     throw new StreamExhaustedError();
   }
-  const movie = payload.movie;
-  // Absolutise the tokenised legs here too: this path returns the raw init
-  // payload rather than going through `normalizeResolvedMovie`, so a relative
-  // `/api/v1/playback/...` handle would otherwise reach the player unresolved
-  // and be fetched from the SPA origin in production. See
-  // `resolvePlaybackHandle`.
-  const primaryUrl = resolvePlaybackHandle(movie.stream_url);
-  const mirrors = (Array.isArray(movie.mirrors) ? movie.mirrors : []).map(
-    mirror => ({
-      ...mirror,
-      url: resolvePlaybackHandle(mirror.url),
-    })
-  );
-  const rawSources =
-    Array.isArray(movie.sources) && movie.sources.length > 0
-      ? movie.sources.map(resolvePlaybackHandle)
-      : [primaryUrl, ...mirrors.map(m => m.url)];
-  const sources = Array.from(
-    new Set(
-      rawSources.filter(
-        (url): url is string => typeof url === "string" && url.length > 0
-      )
-    )
-  );
-  const subtitles = sanitizeSubtitles(movie.subtitles);
+
+  const sources = Array.from(new Set(variants.map(variant => variant.url)));
+
+  // Captions are fail-soft by construction: a title that has none, or whose
+  // caption CDN is unreachable, still plays.
+  const subtitles = await loadCaptionTracks(subjectId, detailPath, {
+    season,
+    episode,
+  });
+
   return {
-    url: primaryUrl,
+    url: sources[0],
     sources,
-    mirrors,
-    /**
-     * True when the backend's provider chain settled on a third-party iframe
-     * rather than a directly playable file. The backend walks the chain
-     * server-side, so the client no longer has to infer this from the host --
-     * it just renders whatever the resolver picked, embed or not.
-     */
-    isEmbed: movie.is_embed === true,
-    /** Id of the provider that served this source, for diagnostics. */
-    provider:
-      typeof payload.provider === "string"
-        ? payload.provider
-        : typeof movie.provider === "string"
-          ? movie.provider
-          : undefined,
-    /**
-     * Base language code the backend detected for this viewer. The v1 init
-     * payload reports it at the top level; the player opens on a track
-     * matching it so a viewer who speaks something other than English does
-     * not have to hunt for their language on every title.
-     */
-    language:
-      typeof payload.language === "string" && payload.language
-        ? payload.language
-        : null,
-    // Only meaningful for a direct source; an embed payload carries none.
-    ...(subtitles.length > 0 ? { subtitles } : {}),
+    streams: variants,
+    mirrors: [],
+    isEmbed: false,
+    provider: "MovieBox",
+    language: null,
+    ...(subtitles.length > 0
+      ? { subtitles: sanitizeSubtitles(subtitles) }
+      : {}),
   };
 }
 
@@ -1002,15 +1211,27 @@ function isFeedsPayload(value: unknown): value is MovieFeeds {
  * stream immediately on click.
  */
 export async function fetchFeeds(): Promise<MovieFeeds> {
-  const response = await fetch(`${MOVIE_API_BASE_URL}/api/movies/feeds`);
-  if (!response.ok) {
-    throw new Error(`Movie backend responded with status ${response.status}`);
-  }
-  const payload: unknown = await response.json();
-  if (!isFeedsPayload(payload)) {
-    throw new Error("Movie backend returned an unexpected feeds shape");
-  }
-  return payload;
+  const sections = await homeSections();
+
+  const featuredSections = sectionsMatching(sections, section =>
+    /banner|featured/i.test(section.name)
+  );
+  const popularSections = sectionsMatching(sections, section =>
+    /popular|trending|hot/i.test(section.name)
+  );
+  const recentSections = sectionsMatching(sections, section =>
+    /new|recent|latest|release/i.test(section.name)
+  );
+
+  return {
+    featured: flattenSections(
+      featuredSections.length > 0 ? featuredSections : popularSections
+    ).slice(0, 12),
+    recent: flattenSections(
+      recentSections.length > 0 ? recentSections : popularSections
+    ).slice(0, 24),
+    popular: flattenSections(popularSections).slice(0, 24),
+  };
 }
 
 /** A preview trailer embed pointer returned by the movie backend. */
@@ -1049,24 +1270,14 @@ function isTrailerPayload(value: unknown): value is { trailer?: TrailerInfo } {
  * falls back to backdrop artwork on hover.
  */
 export async function fetchTrailer(
-  title: string,
-  year?: number | null
+  _title: string,
+  _year?: number | null
 ): Promise<TrailerInfo | null> {
-  const params = new URLSearchParams();
-  params.set("title", title);
-  if (year) params.set("year", String(year));
-  const response = await fetch(
-    `${MOVIE_API_BASE_URL}/api/movies/trailer?${params.toString()}`
-  );
-  if (response.status === 404) return null;
-  if (!response.ok) {
-    throw new Error(`Movie backend responded with status ${response.status}`);
-  }
-  const payload: unknown = await response.json();
-  if (!isTrailerPayload(payload)) {
-    throw new Error("Movie backend returned an unexpected trailer shape");
-  }
-  return payload.trailer ?? null;
+  // The catalogue's trailers are direct MP4 addresses on the MovieBox CDN, but
+  // `resolveTrailer` only knows how to frame YouTube/Dailymotion/Vimeo embeds.
+  // Returning null keeps the hero on its backdrop art instead of mounting an
+  // iframe around a file URL it cannot play.
+  return null;
 }
 
 /**
@@ -1080,25 +1291,10 @@ export async function fetchTrailer(
  * artwork fallback.
  */
 async function fetchRankedTrailer(
-  tmdbId: string | number,
-  mediaType: "movie" | "tv"
+  _tmdbId: string | number,
+  _mediaType: "movie" | "tv"
 ): Promise<TrailerInfo | null> {
-  const params = new URLSearchParams({
-    id: String(tmdbId),
-    media_type: mediaType,
-    limit: "5",
-  });
-  const response = await fetch(
-    `${MOVIE_API_BASE_URL}/api/v1/media/trailer?${params.toString()}`
-  );
-  if (!response.ok) {
-    throw new Error(`Movie backend responded with status ${response.status}`);
-  }
-  const payload: unknown = await response.json();
-  if (!isTrailerPayload(payload)) {
-    throw new Error("Movie backend returned an unexpected trailer shape");
-  }
-  return payload.trailer ?? null;
+  return null;
 }
 
 /**
@@ -1114,34 +1310,10 @@ async function fetchRankedTrailer(
  * should go unnoticed rather than taking a hover preview down with it.
  */
 export async function fetchTrailerByTmdbId(
-  tmdbId: string | number,
-  mediaType: "movie" | "tv" = "movie"
+  _tmdbId: string | number,
+  _mediaType: "movie" | "tv" = "movie"
 ): Promise<TrailerInfo | null> {
-  try {
-    return await fetchRankedTrailer(tmdbId, mediaType);
-  } catch (error) {
-    console.warn("[Trailer] Ranked endpoint failed, falling back:", error);
-  }
-
-  const params = new URLSearchParams({
-    id: String(tmdbId),
-    media_type: mediaType,
-  });
-  const response = await fetch(
-    `${MOVIE_API_BASE_URL}/api/catalog/movieTrailer?${params.toString()}`
-  );
-  if (response.status === 404) return null;
-  if (!response.ok) {
-    throw new Error(`Movie backend responded with status ${response.status}`);
-  }
-  const payload: unknown = await response.json();
-  if (!isTrailerPayload(payload)) {
-    throw new Error("Movie backend returned an unexpected trailer shape");
-  }
-  // The backend answers `{"trailer": {"provider", "id"}}`, not a bare string.
-  // This used to accept only a bare string and returned null for the documented
-  // object, so the hero stayed on backdrop art even with the route restored.
-  return payload.trailer ?? null;
+  return null;
 }
 
 /**
@@ -1149,24 +1321,14 @@ export async function fetchTrailerByTmdbId(
  * The backend queries TMDB for the specific episode details.
  */
 export async function fetchEpisodeDetails(
-  tmdbId: string,
-  season: number,
-  episode: number
+  _handle: string,
+  _season: number,
+  _episode: number
 ): Promise<StreamEpisode | null> {
-  const params = new URLSearchParams();
-  params.set("tmdb_id", tmdbId);
-  params.set("season", String(season));
-  params.set("episode", String(episode));
-  const response = await fetchWithRetry(
-    `${MOVIE_API_BASE_URL}/api/episodes?${params.toString()}`
-  );
-  if (response.status === 404) return null;
-  if (!response.ok) {
-    throw new Error(`Movie backend responded with status ${response.status}`);
-  }
-  const payload: unknown = await response.json();
-  if (!isEpisodeDetailPayload(payload)) return null;
-  return payload.episode;
+  // The catalogue carries episode counts, not per-episode synopses. A null here
+  // is the documented "no extra metadata" answer; the player keeps the episode
+  // number and still stubs/titles the row from the detail resource.
+  return null;
 }
 
 function isEpisodeDetailPayload(
@@ -1223,7 +1385,12 @@ export async function fetchWithRetry(
 }
 
 export interface SearchSuggestion {
+  /** Route handle (the detail slug). Never a numeric id. */
   id: string;
+  /** The detail slug, when it differs from `id`. */
+  detail_path?: string;
+  /** MovieBox subject id, kept for playback resolution. */
+  subject_id?: string;
   title: string;
   poster_url: string;
   year?: string;
@@ -1238,19 +1405,27 @@ export async function searchSuggest(
 ): Promise<SearchSuggestion[]> {
   const trimmed = query.trim();
   if (!trimmed || trimmed.length < 2) return [];
-  const response = await fetch(
-    `${MOVIE_API_BASE_URL}/api/search/suggest?q=${encodeURIComponent(trimmed)}`
-  );
-  if (!response.ok) {
-    throw new Error(`Movie backend responded with status ${response.status}`);
-  }
-  const data: unknown = await response.json();
-  if (!Array.isArray(data)) {
-    throw new Error(
-      "Movie backend returned an unexpected suggest payload shape"
-    );
-  }
-  return data.filter(isSuggestion);
+  const suggestions = await suggestSubjects(trimmed);
+  return suggestions
+    .map((suggestion): SearchSuggestion | null => {
+      const slug = suggestion.slug?.trim() || "";
+      const subjectId = suggestion.subject_id?.trim() || "";
+      const handle = slug || subjectId;
+      const title = suggestion.title?.trim() || slug;
+      if (!handle || !title) return null;
+      return {
+        id: handle,
+        ...(slug ? { detail_path: slug } : {}),
+        ...(subjectId ? { subject_id: subjectId } : {}),
+        title,
+        poster_url:
+          (slug && peekPoster(slug)) ||
+          suggestion.poster_url?.trim() ||
+          "",
+        media_type: "movie",
+      };
+    })
+    .filter((suggestion): suggestion is SearchSuggestion => suggestion !== null);
 }
 
 function isSuggestion(value: unknown): value is SearchSuggestion {
@@ -1302,7 +1477,8 @@ export interface SeasonEpisode {
 
 export interface SeasonPayload {
   show: {
-    id: number;
+    /** Subject id: a ~19-digit string, kept as text to avoid precision loss. */
+    id: string | number;
     name: string;
     overview: string;
     poster_url: string;
@@ -1360,35 +1536,68 @@ function isSeasonPayload(value: unknown): value is {
  * someone who was only scrolling.
  */
 export async function fetchSeasonDetails(
-  tmdbId: number | string,
+  handle: number | string,
   season?: number
 ): Promise<SeasonPayload | null> {
-  const cacheKey = `season:${tmdbId}:${season ?? "latest"}`;
+  const cacheKey = `season:${handle}:${season ?? "latest"}`;
   const cached = getCached<SeasonPayload>(cacheKey);
   if (cached) return cached;
 
-  const query = new URLSearchParams({ tmdb_id: String(tmdbId) });
-  if (season != null) query.set("season", String(season));
-
-  let response: Response;
+  let detail: MovieBoxDetail;
   try {
-    response = await fetch(
-      `${MOVIE_API_BASE_URL}/api/season?${query.toString()}`
-    );
+    detail = await getDetail(String(handle));
   } catch {
-    // Offline or an aborted request. Not an error worth surfacing.
+    // Offline, unknown title, or a non-JSON proxy answer. A season shelf that
+    // cannot be loaded should stay empty, not put an error in front of someone
+    // who was only scrolling.
     return null;
   }
-  if (response.status === 404) return null;
-  if (!response.ok) throw new ApiError(response.status, "Season");
 
-  const data: unknown = await response.json();
-  if (!isSeasonPayload(data)) return null;
+  const subject = detail.subject;
+  const blocks = Array.isArray(detail.resource?.seasons)
+    ? detail.resource.seasons
+    : [];
+  if (blocks.length === 0) return null;
+
+  const targetSeason =
+    season ?? blocks.reduce((max, block) => Math.max(max, block.se), 1);
+  const block = blocks.find(entry => entry.se === targetSeason);
+  if (!block) return null;
+
+  const episodes: SeasonEpisode[] = Array.from(
+    { length: Math.max(0, block.maxEp) },
+    (_, index) => {
+      const number = index + 1;
+      return {
+        season: targetSeason,
+        number,
+        title: `Episode ${number}`,
+        overview: "",
+        still_path: "",
+        still_url: "",
+        air_date: "",
+        runtime: null,
+        vote_average: null,
+      };
+    }
+  );
 
   const payload: SeasonPayload = {
-    show: data.show,
-    season: data.season,
-    episodes: data.episodes,
+    show: {
+      id: subject.subjectId,
+      name: subject.title || detail.metadata?.title || "Untitled",
+      overview:
+        subject.description || detail.metadata?.description || "",
+      poster_url: subject.cover?.url || "",
+      backdrop_url: stillsUrl(subject.stills),
+    },
+    season: {
+      number: targetSeason,
+      name: `Season ${targetSeason}`,
+      episode_count: block.maxEp,
+      poster_url: subject.cover?.url || "",
+    },
+    episodes,
   };
   setCache(cacheKey, payload);
   return payload;
@@ -1410,22 +1619,25 @@ export async function fetchTrending(
   const cached = getCached<StreamMovie[]>(cacheKey);
   if (cached) return cached;
 
-  const query = new URLSearchParams();
-  if (params.time_window) query.set("time_window", params.time_window);
-  if (params.media_type) query.set("media_type", params.media_type);
-  const response = await fetch(
-    `${MOVIE_API_BASE_URL}/api/movies/trending?${query.toString()}`
+  const sections = await homeSections();
+  const wanted = params.media_type ?? "all";
+  let selected = sectionsMatching(
+    sections,
+    section =>
+      /popular|trending|hot|banner/i.test(section.name) &&
+      (wanted === "all" || section.mediaType === wanted)
   );
-  if (!response.ok) {
-    throw new ApiError(response.status, "Trending");
-  }
-  const data: unknown = await response.json();
-  if (!Array.isArray(data)) {
-    throw new Error(
-      "Movie backend returned an unexpected trending payload shape"
+  // A filtered home page can easily have no "Popular Series" section at all.
+  // Falling back to every series section is closer to what "trending series"
+  // means than an empty shelf.
+  if (selected.length === 0 && wanted !== "all") {
+    selected = sectionsMatching(
+      sections,
+      section => section.mediaType === wanted && !/banner/i.test(section.name)
     );
   }
-  const result = data.filter(isStreamMovie);
+
+  const result = flattenSections(selected).slice(0, 40);
   setCache(cacheKey, result);
   return result;
 }
@@ -1442,26 +1654,29 @@ export interface PopularParams {
 export async function fetchPopular(
   params: PopularParams = {}
 ): Promise<StreamMovie[]> {
-  const cacheKey = `popular:${params.media_type || "movie"}:${params.page || 1}`;
+  const mediaType = params.media_type || "movie";
+  const page = params.page || 1;
+  const cacheKey = `popular:${mediaType}:${page}`;
   const cached = getCached<StreamMovie[]>(cacheKey);
   if (cached) return cached;
 
-  const query = new URLSearchParams();
-  if (params.media_type) query.set("media_type", params.media_type);
-  if (params.page) query.set("page", String(params.page));
-  const response = await fetch(
-    `${MOVIE_API_BASE_URL}/api/movies/popular?${query.toString()}`
+  const sections = await homeSections();
+  const selected = sectionsMatching(
+    sections,
+    section =>
+      section.mediaType === mediaType && /popular/i.test(section.name)
   );
-  if (!response.ok) {
-    throw new ApiError(response.status, "Popular");
-  }
-  const data: unknown = await response.json();
-  if (!Array.isArray(data)) {
-    throw new Error(
-      "Movie backend returned an unexpected popular payload shape"
-    );
-  }
-  const result = data.filter(isStreamMovie);
+  const all = flattenSections(
+    selected.length > 0
+      ? selected
+      : sectionsMatching(sections, section => section.mediaType === mediaType)
+  );
+
+  // Home sections are fixed-size shelves, not a paginated catalogue. Slicing
+  // them keeps page 2 honest (an empty array) instead of silently replaying
+  // page 1 forever.
+  const perPage = 24;
+  const result = all.slice((page - 1) * perPage, page * perPage);
   setCache(cacheKey, result);
   return result;
 }
@@ -1477,34 +1692,31 @@ export interface NowPlayingParams {
 export async function fetchNowPlaying(
   params: NowPlayingParams = {}
 ): Promise<StreamMovie[]> {
-  const cacheKey = `now_playing:${params.page || 1}`;
+  const page = params.page || 1;
+  const cacheKey = `now_playing:${page}`;
   const cached = getCached<StreamMovie[]>(cacheKey);
   if (cached) return cached;
 
-  const query = new URLSearchParams();
-  if (params.page) query.set("page", String(params.page));
-  const response = await fetch(
-    `${MOVIE_API_BASE_URL}/api/movies/now_playing?${query.toString()}`
+  const sections = await homeSections();
+  const selected = sectionsMatching(sections, section =>
+    /new|recent|latest|release|banner/i.test(section.name)
   );
-  if (!response.ok) {
-    throw new Error(`Movie backend responded with status ${response.status}`);
-  }
-  const data: unknown = await response.json();
-  if (!Array.isArray(data)) {
-    throw new Error(
-      "Movie backend returned an unexpected now_playing payload shape"
-    );
-  }
-  const result = data.filter(isStreamMovie);
+  const all = flattenSections(
+    selected.length > 0 ? selected : sections
+  ).filter(movie => movie.media_type !== "tv");
+
+  const result = all.slice((page - 1) * 24, page * 24);
   setCache(cacheKey, result);
   return result;
 }
 
 /** A unified catalog card returned by `/api/catalog/discover`. */
 export interface CatalogItem {
-  /** Namespaced provider id (e.g. `tmdb-123`, `omdb-tt…`). */
+  /** MovieBox subject id, or the slug when an id is missing. */
   id: string;
-  /** TMDB id when the title has one (drives `/watch/:id`). */
+  /** The detail slug: the route handle and the only reliable lookup key. */
+  detail_path?: string;
+  /** Subject id, kept under the historical name for existing call sites. */
   tmdb_id?: string | number | null;
   imdb_id?: string;
   title: string;
@@ -1559,37 +1771,117 @@ function isDiscoverResult(value: unknown): value is DiscoverResult {
 }
 
 /**
+ * In-flight discover requests, keyed the same way as the result cache.
+ *
+ * Navigating Home -> Explore -> Vyteenda while a page is still loading used to
+ * fire the same request three times: the TTL cache cannot help before the
+ * first answer lands, and every component owns its own effect. Collapsing them
+ * here means one walk of the catalogue is shared by every consumer.
+ */
+const discoverInFlight = new Map<string, Promise<DiscoverResult>>();
+
+/**
  * Fetch a paginated, aggregated catalog page from the backend's DB-first
  * discover endpoint. The backend serves its seeded database and falls back to
  * a live multi-source aggregation (persisted) when a page isn't cached yet.
+ *
+ * Pages are public catalogue data, so the result is memoised for the same five
+ * minutes as the TMDB shelves and concurrent callers share one request.
  */
+function catalogItemFromMovie(
+  movie: StreamMovie,
+  section: HomeSectionView
+): CatalogItem {
+  return {
+    id: movie.id || movie.detail_path || movie.title,
+    detail_path: movie.detail_path,
+    tmdb_id: movie.id,
+    title: movie.title,
+    media_type: movie.media_type,
+    year: movie.year,
+    poster_url: movie.poster_url,
+    overview: movie.overview,
+    vote_average: movie.vote_average,
+    genres:
+      movie.genres && movie.genres.length > 0
+        ? movie.genres
+        : section.genres,
+    source: "moviebox",
+  };
+}
+
 export async function fetchDiscover(
   params: DiscoverParams = {}
 ): Promise<DiscoverResult> {
-  const query = new URLSearchParams();
-  query.set("media_type", params.media_type || "movie");
-  query.set("page", String(params.page || 1));
-  if (params.per_page && params.per_page !== 24) {
-    query.set("per_page", String(params.per_page));
-  }
-  if (params.genre) query.set("genre", params.genre);
-  if (params.affinity_genres)
-    query.set("affinity_genres", params.affinity_genres);
-  if (params.affinity_people)
-    query.set("affinity_people", params.affinity_people);
-  const response = await fetch(
-    `${MOVIE_API_BASE_URL}/api/catalog/discover?${query.toString()}`
-  );
-  if (!response.ok) {
-    throw new ApiError(response.status, "Discover");
-  }
-  const data: unknown = await response.json();
-  if (!isDiscoverResult(data)) {
-    throw new Error(
-      "Movie backend returned an unexpected discover payload shape"
+  const page = params.page || 1;
+  const perPage = params.per_page || 24;
+  const mediaType = params.media_type || "movie";
+
+  const cacheKey = [
+    "discover",
+    mediaType,
+    page,
+    perPage,
+    params.genre || "",
+    params.affinity_genres || "",
+    params.affinity_people || "",
+  ].join(":");
+  const cached = getCached<DiscoverResult>(cacheKey);
+  if (cached) return cached;
+
+  const inFlight = discoverInFlight.get(cacheKey);
+  if (inFlight) return inFlight;
+
+  const request = (async (): Promise<DiscoverResult> => {
+    const sections = await homeSections();
+
+    let selected = sectionsMatching(
+      sections,
+      section => mediaType === "all" || section.mediaType === mediaType
     );
+
+    // The home feed is the curated catalogue. `/movies` and `/tv-series` are
+    // the raw MovieBox listing and are polluted with music videos, so genre
+    // filtering happens against the section names that carry it rather than
+    // against a catalog endpoint.
+    if (params.genre) {
+      const wanted = params.genre.trim().toLowerCase();
+      const byGenre = sectionsMatching(selected, section =>
+        section.genres.some(genre => genre.toLowerCase() === wanted)
+      );
+      if (byGenre.length > 0) selected = byGenre;
+    }
+
+    const seen = new Set<string>();
+    const all: CatalogItem[] = [];
+    for (const section of selected) {
+      for (const movie of section.movies) {
+        if (seen.has(movie.id)) continue;
+        seen.add(movie.id);
+        all.push(catalogItemFromMovie(movie, section));
+      }
+    }
+
+    const start = (page - 1) * perPage;
+    const items = all.slice(start, start + perPage);
+    const result: DiscoverResult = {
+      items,
+      page,
+      per_page: perPage,
+      total: all.length,
+      has_more: start + items.length < all.length,
+      source: "cache",
+    };
+    setCache(cacheKey, result);
+    return result;
+  })();
+
+  discoverInFlight.set(cacheKey, request);
+  try {
+    return await request;
+  } finally {
+    discoverInFlight.delete(cacheKey);
   }
-  return data;
 }
 
 /**
@@ -1603,25 +1895,25 @@ export interface OnTheAirParams {
 export async function fetchOnTheAir(
   params: OnTheAirParams = {}
 ): Promise<StreamMovie[]> {
-  const cacheKey = `on_the_air:${params.page || 1}`;
+  const page = params.page || 1;
+  const cacheKey = `on_the_air:${page}`;
   const cached = getCached<StreamMovie[]>(cacheKey);
   if (cached) return cached;
 
-  const query = new URLSearchParams();
-  if (params.page) query.set("page", String(params.page));
-  const response = await fetch(
-    `${MOVIE_API_BASE_URL}/api/movies/on_the_air?${query.toString()}`
+  const sections = await homeSections();
+  const selected = sectionsMatching(
+    sections,
+    section =>
+      section.mediaType === "tv" &&
+      /popular|series|drama|anime|airing|on air/i.test(section.name)
   );
-  if (!response.ok) {
-    throw new Error(`Movie backend responded with status ${response.status}`);
-  }
-  const data: unknown = await response.json();
-  if (!Array.isArray(data)) {
-    throw new Error(
-      "Movie backend returned an unexpected on_the_air payload shape"
-    );
-  }
-  const result = data.filter(isStreamMovie);
+  const all = flattenSections(
+    selected.length > 0
+      ? selected
+      : sectionsMatching(sections, section => section.mediaType === "tv")
+  );
+
+  const result = all.slice((page - 1) * 24, page * 24);
   setCache(cacheKey, result);
   return result;
 }

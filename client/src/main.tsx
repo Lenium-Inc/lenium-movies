@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import { applyTheme } from "./services/settings";
+import { initNative } from "./lib/native";
 import { AuthProvider } from "./context/AuthContext";
 import { LocalSessionProvider } from "./context/LocalSessionContext";
 import { ActiveProfileProvider } from "./context/ActiveProfileContext";
@@ -8,6 +9,7 @@ import { AppSettingsProvider } from "./contexts/AppSettingsContext";
 import "./index.css";
 
 applyTheme();
+void initNative();
 
 /*
  * No tRPC provider and no react-query cache.

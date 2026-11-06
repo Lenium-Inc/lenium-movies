@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const API_ORIGIN = "https://backend.example.com";
-const LOCAL = "http://127.0.0.1:8001";
+const DEFAULT = "https://movie-api.streamvy.me";
 
 /**
  * The backend mints playback legs as *relative* handles
@@ -22,9 +22,7 @@ async function resolveWithBase(
 ): Promise<(url: string) => string> {
   vi.resetModules();
   vi.stubEnv("PROD", prod);
-  vi.stubEnv("VITE_API_BASE_URL", base as unknown as string);
-  vi.stubEnv("VITE_MOVIE_API_BASE_URL", undefined as unknown as string);
-  vi.stubEnv("VITE_API_URL", undefined as unknown as string);
+  vi.stubEnv("VITE_STREAMVY_API_BASE_URL", base as unknown as string);
   const mod = await import("./api");
   return mod.resolvePlaybackHandle;
 }
@@ -68,10 +66,10 @@ describe("resolvePlaybackHandle", () => {
     expect(resolve(once)).toBe(once);
   });
 
-  it("absolutises against the local FastAPI default when nothing is configured", async () => {
+  it("absolutises against the deployed media origin when nothing is configured", async () => {
     const resolve = await resolveWithBase(undefined, false);
     expect(resolve("/api/v1/playback/media?token=abc")).toBe(
-      `${LOCAL}/api/v1/playback/media?token=abc`
+      `${DEFAULT}/api/v1/playback/media?token=abc`
     );
   });
 

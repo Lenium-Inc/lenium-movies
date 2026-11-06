@@ -196,7 +196,8 @@ export function NavbarSearch() {
         if (cancelled) return;
         setTopPicks(
           results.slice(0, 6).map(r => ({
-            id: r.id,
+            // The route needs the detail slug; `r.id` is the subject id.
+            id: r.detail_path || r.id,
             title: r.title,
             year: r.year != null ? String(r.year) : undefined,
             posterUrl: r.poster_url ?? "",

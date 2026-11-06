@@ -1,9 +1,50 @@
 import { useEffect, useState } from "react";
 import { MOVIE_API_BASE_URL } from "@/services/api";
+import { tmdbImage } from "@/lib/tmdbImages";
 
 /** Emitted when nothing can be sampled -- a missing backdrop, a tainted canvas,
  *  or a frame with no saturated colour in it. */
 export const FALLBACK_ACCENT = "#c23b2e";
+
+/**
+ * Accents are per-backdrop and never change, so a viewer who has seen a hero
+ * once should never pay to sample it again. The memo is deliberately both in
+ * memory (instant within a session) and in localStorage (across visits), and
+ * bounded so a catalogue that rotates through thousands of backdrops cannot
+ * grow an unbounded record in a viewer's storage.
+ */
+const ACCENT_CACHE_KEY = "freestream-accents-v1";
+const ACCENT_CACHE_MAX = 120;
+const accentMemo = new Map<string, string>();
+
+function readAccentCache(): void {
+  if (typeof window === "undefined" || accentMemo.size > 0) return;
+  try {
+    const raw = window.localStorage.getItem(ACCENT_CACHE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value)) {
+        accentMemo.set(key, value);
+      }
+    }
+  } catch {
+    // A corrupt or unavailable cache is simply an empty one.
+  }
+}
+
+function writeAccentCache(): void {
+  if (typeof window === "undefined") return;
+  try {
+    const entries = Array.from(accentMemo.entries()).slice(-ACCENT_CACHE_MAX);
+    window.localStorage.setItem(
+      ACCENT_CACHE_KEY,
+      JSON.stringify(Object.fromEntries(entries))
+    );
+  } catch {
+    // Storage full or disabled: the in-memory memo still works for this visit.
+  }
+}
 
 interface Hsl {
   h: number;
@@ -119,21 +160,45 @@ function sampleAccent(image: HTMLImageElement): string | null {
  * pixels -- lands on `FALLBACK_ACCENT`, so the accent is always a real colour.
  */
 export function useHeroAccent(url: string | null | undefined): string {
-  const [accent, setAccent] = useState(FALLBACK_ACCENT);
+  const [accent, setAccent] = useState(() => {
+    readAccentCache();
+    return (url && accentMemo.get(url)) || FALLBACK_ACCENT;
+  });
 
   useEffect(() => {
     if (!url) {
       setAccent(FALLBACK_ACCENT);
       return;
     }
+
+    readAccentCache();
+    const cached = accentMemo.get(url);
+    if (cached) {
+      setAccent(cached);
+      return;
+    }
+
     let cancelled = false;
     const image = new Image();
     image.crossOrigin = "anonymous";
     image.decoding = "async";
+    /*
+     * Sample a thumbnail, not the hero rendition itself.
+     *
+     * The canvas is 64x36, so a w185 JPEG carries every pixel the sampler can
+     * read. Fetching the `original` artwork through the relay meant each hero
+     * rotation pulled a multi-megabyte file through the API process purely to
+     * average it down to 2304 pixels -- by far the most expensive thing on the
+     * home page, and the one nobody could see.
+     */
+    const sampleUrl = tmdbImage(url, "w185") || url;
     image.onload = () => {
       if (cancelled) return;
       try {
-        setAccent(sampleAccent(image) ?? FALLBACK_ACCENT);
+        const sampled = sampleAccent(image) ?? FALLBACK_ACCENT;
+        accentMemo.set(url, sampled);
+        writeAccentCache();
+        setAccent(sampled);
       } catch {
         setAccent(FALLBACK_ACCENT);
       }
@@ -141,7 +206,7 @@ export function useHeroAccent(url: string | null | undefined): string {
     image.onerror = () => {
       if (!cancelled) setAccent(FALLBACK_ACCENT);
     };
-    image.src = `${MOVIE_API_BASE_URL}/api/image?url=${encodeURIComponent(url)}`;
+    image.src = `${MOVIE_API_BASE_URL}/api/image?url=${encodeURIComponent(sampleUrl)}`;
     return () => {
       cancelled = true;
     };

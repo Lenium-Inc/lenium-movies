@@ -193,7 +193,7 @@
          the first metadata call of a visit spends ~200-300ms on TCP+TLS before
          a byte of it can move. `crossorigin` so the connection lands in the
          CORS pool that the page's fetches actually reuse. -->
-    <link rel="preconnect" href="https://api.vy.streamvy.me" crossorigin />
+    <link rel="preconnect" href="__API_ORIGIN__" crossorigin />
 
     <!--
       Fonts, as <link> tags instead of a CSS @import.

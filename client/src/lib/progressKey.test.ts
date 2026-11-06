@@ -56,10 +56,21 @@ describe("parseProgressKey", () => {
     });
   });
 
+  it("reads a MovieBox slug, including an episode suffix", () => {
+    expect(parseProgressKey("inception-e1BOR6f19C7")).toEqual({
+      id: "inception-e1BOR6f19C7",
+    });
+    expect(parseProgressKey("wednesday-urChTxajYKa:s1e2")).toEqual({
+      id: "wednesday-urChTxajYKa",
+      season: 1,
+      episode: 2,
+    });
+  });
+
   it("rejects a key that carries no addressable id", () => {
     expect(parseProgressKey("")).toBeNull();
     expect(parseProgressKey("   ")).toBeNull();
-    expect(parseProgressKey("movie-603")).toBeNull();
+    expect(parseProgressKey(":s1e2")).toBeNull();
     expect(parseProgressKey("1396:s1")).toBeNull();
     expect(parseProgressKey("1396:s0e1")).toEqual({ id: "1396" });
   });

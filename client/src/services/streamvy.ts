@@ -1,18 +1,20 @@
 /**
- * Transport, wire shapes and the video proxy for the headless Streamvy API.
+ * Transport and wire shapes for the deployed Streamvy catalogue API
+ * (`https://movie-api.streamvy.me`, the FastAPI app in the Streamvy_API repo).
  *
  * Why this file exists
  * --------------------
  * The app used to talk to one Flask service that answered search, metadata,
- * feeds, playback and image proxying from a single origin. The service that
- * serves the catalogue now is a different, headless one: ten read-only
- * endpoints, no auth, no image relay, and every media leg handed back as a raw
- * third-party URL. Keeping that inside `services/api.ts` would have meant a
- * 1600-line file with two base URLs and two error vocabularies in it, so the
- * raw half lives here and `api.ts` keeps the app's own types and mappers.
+ * feeds, playback and image proxying from a single origin. The catalogue now
+ * comes from MovieBox through a small headless FastAPI layer with a different
+ * vocabulary: slugs are the public handle, subject ids are 19-digit strings, and
+ * every media leg is a signed third-party URL that only works when the request
+ * carries the MovieBox referer. Keeping that inside `services/api.ts` would have
+ * meant a 1600-line file with two error vocabularies in it, so the raw half
+ * lives here and `api.ts` keeps the app's own types and mappers.
  *
- * The rule this module holds: **one place knows where the media API is, and
- * one place knows how a media URL becomes playable.**
+ * The rule this module holds: **one place knows where the media API is, how a
+ * slug becomes a detail record, and how a media URL becomes playable.**
  */
 
 import { parseSubtitleFile } from "@/lib/subtitleFile";
@@ -40,17 +42,13 @@ export function isRateLimited(err: unknown): boolean {
 }
 
 /**
- * True when `value` is a Streamvy subject id the rest of the app can use.
+ * True when `value` is a MovieBox subject id the stream endpoint can use.
  *
  * Subject ids are ~19-digit integers, so they land well above `2**53` and lose
  * precision the moment they pass through `Number`. Anything that treats one as
- * a number -- a route param, a dedupe key, a provider id -- therefore has to
- * keep it as a string, and the first defence is refusing the shapes that are
- * obviously not one.
- *
- * The digit floor also does useful work for `/search/suggest`, which returns
- * the literal string `"None"` in this field: it is dropped rather than woven
- * into a link that resolves to nothing.
+ * a number -- a route param, a dedupe key -- therefore has to keep it as a
+ * string, and the first defence is refusing the shapes that are obviously not
+ * one.
  */
 export function isUsableSubjectId(value: unknown): value is string {
   return typeof value === "string" && /^\d{12,}$/.test(value.trim());
@@ -59,19 +57,13 @@ export function isUsableSubjectId(value: unknown): value is string {
 /**
  * The media API's origin.
  *
- * Resolution order:
- *
- * 1. `VITE_STREAMVY_API_BASE_URL` -- the media API's own variable, so the
- *    catalogue and the account service can be pointed at different hosts.
- * 2. `https://streamvy-api.onrender.com` -- the deployed headless API. It is a
- *    hardcoded *product* origin rather than someone's token, so shipping it by
- *    default is safe; a build that never configures the variable still has a
- *    catalogue rather than a blank page.
- *
- * Trailing slashes are stripped so `streamvyUrl("/search")` never produces a
- * double-slash path.
+ * `VITE_STREAMVY_API_BASE_URL` is deliberately its own variable. The old
+ * `VITE_API_BASE_URL` still exists in some deployments pointing at the retired
+ * Flask/Render service, and inheriting it here is exactly how the app would keep
+ * calling a backend the operator has moved off. A build that configures nothing
+ * still gets the deployed product origin rather than a blank page.
  */
-const DEFAULT_STREAMVY_ORIGIN = "https://streamvy-api.onrender.com";
+const DEFAULT_STREAMVY_ORIGIN = "https://movie-api.streamvy.me";
 
 const CONFIGURED_STREAMVY_ORIGIN = (
   import.meta.env.VITE_STREAMVY_API_BASE_URL || ""
@@ -93,15 +85,11 @@ export function streamvyUrl(path: string): string {
   return `${STREAMVY_API_BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
-/**
- * How long a single media-API call may take before it is aborted.
- *
- * The catalog endpoints answer in well under a second on a warm instance, but
- * this is a Render free-tier service that scales to zero: a cold start eats
- * 15-20s before the request reaches the app at all. 25s clears boot with room
- * to spare while still bounding a genuinely hung request.
- */
+/** How long a single catalogue/metadata call may take before it is aborted. */
 export const STREAMVY_TIMEOUT_MS = 25_000;
+
+/** How long a stream resolve may take. MovieBox answers this one in <2s warm. */
+export const STREAMVY_STREAM_TIMEOUT_MS = 30_000;
 
 /** Attempts after the first for a call the server throttled. */
 const RATE_LIMIT_RETRIES = 2;
@@ -127,9 +115,7 @@ interface StreamvyGetOptions {
   context?: string;
 }
 
-function buildQuery(
-  params: StreamvyGetOptions["params"]
-): string {
+function buildQuery(params: StreamvyGetOptions["params"]): string {
   if (!params) return "";
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -143,12 +129,9 @@ function buildQuery(
 /**
  * One GET against the media API.
  *
- * Retries a 429 with the server's own `Retry-After` when it sent one: the
- * service rate-limits per IP, and a fixed backoff that lands inside a single
- * empty window re-429s every attempt while accruing the abuse score the limiter
- * exists to protect. The body is read as text before it is parsed so a proxy's
- * HTML error page surfaces as a status error rather than as a JSON parse
- * failure that no classifier can reason about.
+ * Retries a 429 with the server's own `Retry-After` when it sent one. The body
+ * is read as text before it is parsed so a proxy's HTML error page surfaces as
+ * a status error rather than as a JSON parse failure.
  */
 async function streamvyGet<T>(
   path: string,
@@ -166,7 +149,7 @@ async function streamvyGet<T>(
       response = await fetch(url, { method: "GET", signal: controller.signal });
     } catch (err) {
       if (controller.signal.aborted) {
-        throw new Error(`${context} did not respond within ${timeoutMs / 1000}s`);
+        throw new Error(`${context} timed out after ${timeoutMs / 1000}s`);
       }
       throw err;
     } finally {
@@ -183,7 +166,9 @@ async function streamvyGet<T>(
     try {
       return JSON.parse(raw) as T;
     } catch {
-      throw new Error(`${context} responded with status ${response.status} and a non-JSON body`);
+      throw new Error(
+        `${context} responded with status ${response.status} and a non-JSON body`
+      );
     }
   }
 }
@@ -194,282 +179,443 @@ async function streamvyGet<T>(
 // than throw on a title that simply has no rating.
 // ---------------------------------------------------------------------------
 
-export interface StreamvySearchResult {
-  subject_id: string;
-  title: string;
-  /** `Movie` | `Series` | ... */
-  type?: string;
-  /** 1 = film, 2 = series. */
-  subject_type?: number;
-  release_date?: string;
-  imdb_rating?: string;
-  /** Comma-joined genre labels, e.g. `"Action,Crime,Thriller"`. */
-  genre?: string;
-  /** Absolute poster URL (portrait). */
-  cover?: string;
-  detail_path?: string | null;
-  language?: string;
+/** One card as `/home`, `/search` and the catalog routes answer it. */
+export interface MovieBoxItem {
+  name?: string | null;
+  poster_url?: string | null;
+  slug?: string | null;
+  subject_id?: string | null;
+  badge?: string | null;
+  rating?: string | number | null;
+  year?: string | number | null;
 }
 
-export interface StreamvySearchPage {
-  query?: string;
-  page?: number;
-  results: StreamvySearchResult[];
-}
-
-export interface StreamvyDetail {
-  subject_id: string;
-  title: string;
-  subject_type?: number;
-  type?: string;
-  description?: string;
-  release_date?: string;
-  /** Human runtime, e.g. `"2h 6m"`. */
-  duration?: string;
-  imdb_rating?: string;
-  genre?: string;
-  country?: string;
-  language?: string;
-  cover?: string;
-  detail_path?: string;
-  dubs?: { subject_id?: string; lang_name?: string; language?: string }[];
-}
-
-export interface StreamvySeasonBlock {
-  season: number;
-  episode_count: number;
-  resolutions?: { resolution?: string; epNum?: number }[];
-}
-
-export interface StreamvyEpisodes {
-  subject_id: string;
-  seasons: StreamvySeasonBlock[];
-}
-
-export interface StreamvyStream {
-  source?: string;
-  /** `"MP4"` | `"DASH"` | ... */
-  format?: string;
-  quality?: string;
-  quality_value?: number;
-  resolution_tag?: string;
-  url: string;
-  size_mb?: number;
-  codec?: string;
-  duration_sec?: number | null;
-  cookie?: string;
-  headers?: Record<string, string>;
-}
-
-export interface StreamvyStreamPayload {
-  subject_id: string;
-  season?: number;
-  episode?: number;
+export interface MovieBoxHomeSection {
+  section: string;
   count?: number;
-  streams: StreamvyStream[];
+  items: MovieBoxItem[];
 }
 
-export interface StreamvyCaption {
-  id?: string;
-  language?: string;
-  code?: string;
-  url: string;
-  size?: number;
+export interface MovieBoxHome {
+  status?: string;
+  sections: MovieBoxHomeSection[];
 }
 
-export interface StreamvyCaptionPayload {
-  subject_id: string;
-  season?: number;
-  episode?: number;
-  count?: number;
-  captions: StreamvyCaption[];
+export interface MovieBoxCover {
+  url?: string | null;
+  width?: number;
+  height?: number;
 }
 
-/** A catalogue item as `/movies` and `/tv-series` answer it. */
-export interface StreamvyCatalogItem {
-  title: string;
-  subject_id: string;
-  detail_path?: string;
-  cover?: string;
-  rating?: number | string;
-  year?: number | string;
+export interface MovieBoxTrailer {
+  videoAddress?: {
+    url?: string | null;
+    duration?: number;
+    width?: number;
+    height?: number;
+  } | null;
+  cover?: MovieBoxCover | null;
 }
 
-export interface StreamvyCatalogPage {
-  page: number;
-  per_page: number;
-  total: number;
-  items: StreamvyCatalogItem[];
+export interface MovieBoxDub {
+  subjectId?: string;
+  lanName?: string;
+  lanCode?: string;
+  original?: boolean;
+  type?: number;
+  detailPath?: string;
 }
 
-/**
- * One artwork-bearing subject as `/home` hands it over.
- *
- * `/home` is the only endpoint that carries landscape art (the banner images
- * and trailer posters) and a real synopsis, which is why the home feed maps
- * from this rather than from the flatter `/search` row.
- */
-export interface StreamvyHomeSubject {
-  /**
-   * `/home` is the one payload the API answers in camelCase -- every other
-   * endpoint is snake_case. That asymmetry is the API's, not a typo here.
-   */
+export interface MovieBoxSubject {
   subjectId: string;
   /** 1 = film, 2 = series. */
   subjectType?: number;
-  title: string;
+  title?: string;
   description?: string;
-  /** ISO date, e.g. `"2017-10-03"`. */
   releaseDate?: string;
   /** Seconds; 0 when the API does not know. */
   duration?: number;
-  /** Comma-joined labels, e.g. `"Anime,Action,Adventure"`. */
+  /** Comma-joined labels, e.g. `"Action,Crime,Thriller"`. */
   genre?: string;
-  cover?: { url?: string; width?: number; height?: number } | string;
-  /** Landscape stills. Present in the schema but empty in every response. */
-  stills?: { url?: string } | string | null;
+  cover?: MovieBoxCover | null;
+  /** Landscape artwork. */
+  stills?: MovieBoxCover | string | null;
   countryName?: string;
-  /** Stringly-typed, e.g. `"7.1"`. */
   imdbRatingValue?: string | number;
-  /** Drives the popularity proxy used by the Top-10 shelves. */
   imdbRatingCount?: number;
   detailPath?: string;
   hasResource?: boolean;
-  /**
-   * A native MP4 trailer, hosted on `macdn.aoneroom.com` -- the one CDN the
-   * API's proxy can actually relay. This is the trailer path the app prefers,
-   * because a `<video>` element needs no embed origin, no iframe handshake and
-   * no CSP allowance the way a YouTube link would.
-   */
-  trailer?: {
-    videoAddress?: { url?: string; duration?: number; width?: number; height?: number };
-    cover?: { url?: string };
-  } | null;
+  season?: number;
+  corner?: string | null;
+  trailer?: MovieBoxTrailer | null;
+  dubs?: MovieBoxDub[];
+  subtitles?: string;
 }
 
-export interface StreamvyBannerItem {
+export interface MovieBoxStar {
+  staffId?: string;
+  /** 1 = cast, 2 = crew (a director carries `character: "Director"`). */
+  staffType?: number;
+  name?: string;
+  character?: string;
+  avatarUrl?: string;
+  detailPath?: string;
+}
+
+export interface MovieBoxSeasonBlock {
+  se: number;
+  maxEp: number;
+  allEp?: string;
+  resolutions?: { resolution?: string | number; epNum?: number }[];
+}
+
+export interface MovieBoxResource {
+  seasons?: MovieBoxSeasonBlock[];
+  source?: string;
+  uploadBy?: string;
+}
+
+export interface MovieBoxDetail {
+  subject: MovieBoxSubject;
+  stars?: MovieBoxStar[];
+  resource?: MovieBoxResource;
+  metadata?: {
+    title?: string;
+    description?: string;
+    image?: string | MovieBoxCover | null;
+    keyWords?: string;
+  };
+  isForbid?: boolean;
+  watchTimeLimit?: number;
+  postList?: unknown;
+  accessStrategy?: unknown;
+}
+
+export interface MovieBoxDetailEnvelope {
+  code?: number;
+  message?: string;
+  data?: MovieBoxDetail;
+}
+
+export interface MovieBoxStreamSource {
+  resolution?: string;
+  format?: string;
+  url?: string;
+  size?: number | string;
+  duration?: number | string;
+  codec?: string;
+}
+
+export interface MovieBoxStreamPayload {
+  subject_id: string;
+  se?: number;
+  ep?: number;
+  has_resource?: boolean;
+  sources?: MovieBoxStreamSource[];
+  hls?: unknown[];
+  dash?: unknown[];
+  free_episodes?: number;
+  limited?: boolean;
+  note?: string | null;
+}
+
+export interface MovieBoxCaption {
   id?: string;
-  title?: string;
-  /** Landscape hero artwork. */
-  image?: string;
-  subjectId?: string;
-  subjectType?: number;
-  subject?: StreamvyHomeSubject;
+  /** Language code, e.g. `"en"`. */
+  lan?: string;
+  /** Display name, e.g. `"English"`. */
+  lanName?: string;
+  url?: string;
+  size?: number;
 }
 
-export interface StreamvyHomeBlock {
-  type?: string;
-  position?: number;
-  title?: string;
-  subjects?: StreamvyHomeSubject[];
-  banner?: { items?: StreamvyBannerItem[] };
+export interface MovieBoxCaptionPayload {
+  subject_id?: string;
+  se?: number;
+  ep?: number;
+  count?: number;
+  captions?: MovieBoxCaption[];
 }
 
-export interface StreamvyHomePayload {
-  data?: { operatingList?: StreamvyHomeBlock[] };
+export interface MovieBoxCatalogPage {
+  page?: number;
+  per_page?: number;
+  total?: number;
+  items?: MovieBoxItem[];
+}
+
+export interface MovieBoxSearchPayload {
+  query?: string;
+  page?: number;
+  total?: number;
+  items?: MovieBoxItem[];
+}
+
+export interface MovieBoxSuggestion {
+  title?: string | null;
+  slug?: string | null;
+  subject_id?: string | null;
+  poster_url?: string | null;
+}
+
+export interface MovieBoxSuggestPayload {
+  suggestions?: MovieBoxSuggestion[];
+}
+
+// ---------------------------------------------------------------------------
+// Caches and subject-handle bookkeeping.
+//
+// The catalogue speaks slugs; playback speaks subject ids. Every item that
+// passes through here records both directions, so a route carrying one can be
+// resolved without forcing a detail request the UI already made.
+// ---------------------------------------------------------------------------
+
+const CATALOG_CACHE_TTL_MS = 5 * 60 * 1000;
+
+interface CacheEntry<T> {
+  at: number;
+  promise: Promise<T>;
+}
+
+const detailCache = new Map<string, CacheEntry<MovieBoxDetail>>();
+const homeCache: { entry: CacheEntry<MovieBoxHome> | null } = { entry: null };
+
+const detailPathBySubject = new Map<string, string>();
+const subjectIdByPath = new Map<string, string>();
+const posterBySlug = new Map<string, string>();
+
+function rememberSubject(item: MovieBoxItem): void {
+  const slug = item.slug?.trim();
+  const subjectId = item.subject_id?.trim();
+  if (slug && subjectId) {
+    detailPathBySubject.set(subjectId, slug);
+    subjectIdByPath.set(slug, subjectId);
+  }
+  if (slug && item.poster_url) posterBySlug.set(slug, item.poster_url);
+}
+
+/** The subject id already known for a handle, or null. */
+export function peekSubjectId(handle: string): string | null {
+  const clean = (handle ?? "").trim();
+  if (!clean) return null;
+  if (isUsableSubjectId(clean)) return clean;
+  return subjectIdByPath.get(clean) ?? null;
+}
+
+/** The slug already known for a handle, or null. */
+export function peekDetailPath(handle: string): string | null {
+  const clean = (handle ?? "").trim();
+  if (!clean) return null;
+  if (!isUsableSubjectId(clean)) return clean;
+  return detailPathBySubject.get(clean) ?? null;
+}
+
+/** The poster already seen for a slug, or null. */
+export function peekPoster(slug: string): string | null {
+  return posterBySlug.get(slug) ?? null;
+}
+
+function rememberDetail(detail: MovieBoxDetail): void {
+  const slug = detail.subject?.detailPath?.trim();
+  const subjectId = detail.subject?.subjectId?.trim();
+  if (slug && subjectId) {
+    detailPathBySubject.set(subjectId, slug);
+    subjectIdByPath.set(slug, subjectId);
+  }
+  if (slug && detail.subject?.cover?.url) {
+    posterBySlug.set(slug, detail.subject.cover.url);
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Raw endpoint calls.
 // ---------------------------------------------------------------------------
 
-/** `GET /search`. */
-export function streamvySearch(
+/** `GET /home`. */
+export function getHome(force = false): Promise<MovieBoxHome> {
+  const now = Date.now();
+  const cached = homeCache.entry;
+  if (!force && cached && now - cached.at < CATALOG_CACHE_TTL_MS) {
+    return cached.promise;
+  }
+  const promise = streamvyGet<MovieBoxHome>("/home", { context: "Home" }).then(
+    payload => {
+      for (const section of payload.sections ?? []) {
+        for (const item of section.items ?? []) rememberSubject(item);
+      }
+      return payload;
+    }
+  );
+  homeCache.entry = { at: now, promise };
+  promise.catch(() => {
+    if (homeCache.entry?.promise === promise) homeCache.entry = null;
+  });
+  return promise;
+}
+
+/** `GET /search?q=`. */
+export function searchSubjects(
   query: string,
-  opts: { page?: number; perPage?: number } = {}
-): Promise<StreamvySearchPage> {
-  return streamvyGet<StreamvySearchPage>("/search", {
-    params: {
-      q: query,
-      page: opts.page ?? 1,
-      per_page: opts.perPage ?? 24,
-    },
+  page = 1
+): Promise<MovieBoxSearchPayload> {
+  return streamvyGet<MovieBoxSearchPayload>("/search", {
+    params: { q: query, page },
     context: "Search",
+  }).then(payload => {
+    for (const item of payload.items ?? []) rememberSubject(item);
+    return payload;
   });
 }
 
-/** `GET /detail/{subject_id}`. */
-export function streamvyDetail(subjectId: string): Promise<StreamvyDetail> {
-  return streamvyGet<StreamvyDetail>(`/detail/${encodeURIComponent(subjectId)}`, {
-    context: "Detail",
+/** `GET /search/suggest?q=`. */
+export function suggestSubjects(query: string): Promise<MovieBoxSuggestion[]> {
+  // The deployed `/search/suggest` answers titles only -- `slug` and
+  // `subject_id` are null -- which leaves a suggestion with no route to open.
+  // `/search` is one request and carries both handles plus the poster, so the
+  // palette is built from its first page instead. `/search/suggest` stays
+  // documented above for the day the upstream enriches it.
+  return searchSubjects(query).then(payload => {
+    return (payload.items ?? []).slice(0, 8).map(item => ({
+      title: item.name ?? null,
+      slug: item.slug ?? null,
+      subject_id: item.subject_id ?? null,
+      poster_url: item.poster_url ?? null,
+    }));
   });
 }
 
-/** `GET /episodes/{subject_id}` -- season and episode *counts*, not records. */
-export function streamvyEpisodes(subjectId: string): Promise<StreamvyEpisodes> {
-  return streamvyGet<StreamvyEpisodes>(`/episodes/${encodeURIComponent(subjectId)}`, {
-    context: "Episodes",
+/** `GET /movies`, `/tv-series` or `/animation`. */
+export function getCatalog(
+  kind: "movies" | "tv-series" | "animation",
+  opts: { page?: number; sort?: string } = {}
+): Promise<MovieBoxCatalogPage> {
+  return streamvyGet<MovieBoxCatalogPage>(`/${kind}`, {
+    params: { page: opts.page ?? 1, sort: opts.sort },
+    context: kind === "movies" ? "Movies" : kind === "tv-series" ? "TV series" : "Animation",
+  }).then(payload => {
+    for (const item of payload.items ?? []) rememberSubject(item);
+    return payload;
   });
 }
 
 /**
- * How long a resolved `/api/stream` answer is reused.
+ * `GET /detail/{slug}`.
  *
- * The player asks for this endpoint more than once per playback: a stall
- * handler retries, a quality switch re-resolves, and the download menu re-reads
- * the ladder. The URL set for a given (subject, season, episode) is not
- * volatile, so re-answering those calls spends rate limit to learn nothing.
+ * Accepts a subject id too, but only when that id has already been seen on a
+ * card or suggestion. The live deployment answers `/detail/{subject_id}` with
+ * 502 (it forwards the id into the slug query), so a cold direct link keyed on a
+ * numeric id cannot be recovered -- routes in this app are built from slugs for
+ * exactly that reason.
  */
-const STREAM_CACHE_TTL_MS = 60_000;
+export function getDetail(handle: string): Promise<MovieBoxDetail> {
+  const clean = (handle ?? "").trim();
+  if (!clean) return Promise.reject(new Error("A title handle is required"));
 
-const streamCache = new Map<string, { at: number; promise: Promise<StreamvyStreamPayload> }>();
+  const knownSlug = subjectIdByPath.get(clean) ?? null;
+  const slug = knownSlug ?? clean;
+
+  const now = Date.now();
+  const cached = detailCache.get(slug);
+  if (cached && now - cached.at < CATALOG_CACHE_TTL_MS) return cached.promise;
+
+  const promise = streamvyGet<MovieBoxDetailEnvelope>(
+    `/detail/${encodeURIComponent(slug)}`,
+    { context: "Title details", timeoutMs: STREAMVY_STREAM_TIMEOUT_MS }
+  ).then(envelope => {
+    if (!envelope?.data?.subject) {
+      throw new Error("The media API answered a detail payload with no subject");
+    }
+    rememberDetail(envelope.data);
+    return envelope.data;
+  });
+
+  detailCache.set(slug, { at: now, promise });
+  promise.catch(() => detailCache.delete(slug));
+  return promise;
+}
+
+/** Resolve a handle to the subject id playback needs. */
+export async function resolveSubjectId(handle: string): Promise<string> {
+  const clean = (handle ?? "").trim();
+  if (!clean) throw new Error("A title handle is required");
+  if (isUsableSubjectId(clean)) {
+    const known = detailPathBySubject.get(clean);
+    if (known) return clean;
+  }
+  const detail = await getDetail(clean);
+  return detail.subject.subjectId;
+}
+
+/** Resolve a handle to the detail slug the API accepts. */
+export async function resolveDetailPath(handle: string): Promise<string> {
+  const clean = (handle ?? "").trim();
+  if (!clean) throw new Error("A title handle is required");
+  if (!isUsableSubjectId(clean)) return clean;
+  const known = detailPathBySubject.get(clean);
+  if (known) return known;
+  const detail = await getDetail(clean);
+  return detail.subject.detailPath?.trim() || clean;
+}
 
 /**
  * `GET /api/stream/{subject_id}`.
  *
  * Movies address the endpoint with `se=0&ep=0`; a series carries the real
- * season and episode. Omitting both is what the API treats as the default, so
- * an untargeted resolve still answers rather than 422-ing.
+ * season and episode. Both are always sent explicitly: the route's own default
+ * is `se=1&ep=1`, which is the one combination a film never has a source for.
  *
- * Cached for {@link STREAM_CACHE_TTL_MS} per (subject, season, episode), and
- * shared across concurrent callers -- the stall watcher and a user-initiated
- * retry routinely land in the same tick.
+ * Cached per (subject, detail path, season, episode) for a minute. The signed
+ * CDN URL is short-lived, so a longer cache would hand the player an expired URL
+ * on a retry.
  */
-export function streamvyStreams(
+const STREAM_CACHE_TTL_MS = 60_000;
+
+const streamCache = new Map<string, CacheEntry<MovieBoxStreamPayload>>();
+
+export function getStreams(
   subjectId: string,
+  detailPath: string,
   opts: { season?: number; episode?: number; force?: boolean } = {}
-): Promise<StreamvyStreamPayload> {
-  const key = `${subjectId}|${opts.season ?? ""}|${opts.episode ?? ""}`;
+): Promise<MovieBoxStreamPayload> {
+  const season = opts.season ?? 0;
+  const episode = opts.episode ?? 0;
+  const key = `${subjectId}|${detailPath}|${season}|${episode}`;
   const cached = streamCache.get(key);
   const now = Date.now();
   if (!opts.force && cached && now - cached.at < STREAM_CACHE_TTL_MS) {
     return cached.promise;
   }
 
-  const params: Record<string, string | number | undefined> = {};
-  if (opts.season != null) params.se = opts.season;
-  if (opts.episode != null) params.ep = opts.episode;
-  const promise = streamvyGet<StreamvyStreamPayload>(
+  const promise = streamvyGet<MovieBoxStreamPayload>(
     `/api/stream/${encodeURIComponent(subjectId)}`,
-    { params, context: "Stream" }
-  ).then(payload => ({ ...payload, streams: [...(payload.streams ?? [])] }));
+    {
+      params: { detail_path: detailPath, se: season, ep: episode },
+      context: "Stream",
+      timeoutMs: STREAMVY_STREAM_TIMEOUT_MS,
+    }
+  );
 
   streamCache.set(key, { at: now, promise });
-  // A failure must not be replayed from cache: the caller may be retrying
-  // because the instance just woke up, and pinning the rejection for a minute
-  // would turn a transient outage into a one-minute one.
   promise.catch(() => streamCache.delete(key));
   return promise;
 }
 
-/** `GET /home`. */
-export function streamvyHome(): Promise<StreamvyHomePayload> {
-  return streamvyGet<StreamvyHomePayload>("/home", { context: "Home" });
-}
-
-/** `GET /movies` or `GET /tv-series`. */
-export function streamvyCatalog(
-  kind: "movies" | "tv-series",
-  opts: { page?: number; perPage?: number; sort?: string } = {}
-): Promise<StreamvyCatalogPage> {
-  return streamvyGet<StreamvyCatalogPage>(`/${kind}`, {
-    params: {
-      page: opts.page ?? 1,
-      per_page: opts.perPage ?? 24,
-      sort: opts.sort,
-    },
-    context: kind === "movies" ? "Movies" : "TV series",
-  });
+/** `GET /api/stream/{subject_id}/captions`. */
+export function getCaptions(
+  subjectId: string,
+  detailPath: string,
+  opts: { season?: number; episode?: number } = {}
+): Promise<MovieBoxCaptionPayload> {
+  const season = opts.season ?? 0;
+  const episode = opts.episode ?? 0;
+  return streamvyGet<MovieBoxCaptionPayload>(
+    `/api/stream/${encodeURIComponent(subjectId)}/captions`,
+    {
+      params: { detail_path: detailPath, se: season, ep: episode },
+      context: "Captions",
+      timeoutMs: 15_000,
+    }
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -477,7 +623,7 @@ export function streamvyCatalog(
 // ---------------------------------------------------------------------------
 
 /** The proxy route that relays a media URL back through the API origin. */
-export const VIDEO_PROXY_PATH = "/api/proxy/video";
+export const VIDEO_PROXY_PATH = "/proxy/stream";
 
 /** Schemes that must never be wrapped: a blob is ours, `data:` is inline. */
 const PASSTHROUGH_SCHEME = /^(blob|data):/i;
@@ -486,13 +632,12 @@ const PASSTHROUGH_SCHEME = /^(blob|data):/i;
  * True when `url` is already one of our video-proxy handles.
  *
  * Checked by *path*, not by prefix, so it stays true however the origin was
- * configured -- and it is what makes wrapping idempotent. Without it a source
- * that round-trips through this function twice would be nested inside the proxy
- * twice, and the proxy would then be asked to relay itself.
+ * configured -- and it is what makes wrapping idempotent.
  */
 export function isProxiedVideoUrl(url: string): boolean {
   try {
-    return new URL(url, "https://url.invalid").pathname === VIDEO_PROXY_PATH;
+    const path = new URL(url, "https://url.invalid").pathname;
+    return path === VIDEO_PROXY_PATH || path === "/api/proxy/video";
   } catch {
     return false;
   }
@@ -502,9 +647,7 @@ export function isProxiedVideoUrl(url: string): boolean {
  * The upstream URL a proxy handle carries, or null when there is none.
  *
  * Format sniffing has to run against *this*, not against the handle: every
- * proxied URL ends in `/api/proxy/video` and so looks like an unrecognised
- * path, which would rank every rendition as a last-resort unknown and feed
- * `.mpd` playlists to `<video src>`.
+ * proxied URL ends in `/proxy/stream` and so looks like an unrecognised path.
  */
 export function proxiedVideoTarget(url: string): string | null {
   if (!isProxiedVideoUrl(url)) return null;
@@ -517,19 +660,13 @@ export function proxiedVideoTarget(url: string): string | null {
 }
 
 /**
- * The same-origin URL a `<video>`, `<audio>` or `<track>` should load.
+ * The URL a `<video>`, `<audio>` or `<track>` should load.
  *
- * Raw CDN URLs are refused by the browser before a byte is read: the media
- * hosts send no `Access-Control-Allow-Origin`, and several of them refuse a
- * request whose `Referer` is not their own -- which a cross-origin media
- * element cannot set, because the browser owns that header. The API's proxy
- * exists for exactly this: it fetches upstream with the referer the title
- * needs and answers with CORS headers the browser accepts.
- *
- * Everything is proxied rather than host-matched. An allowlist would be a
- * second, drifting source of truth about which origins behave, and a host
- * added to the catalogue tomorrow would silently play (or silently not) based
- * on whether someone remembered to edit a list here.
+ * Raw CDN URLs are refused by the browser before a byte is read: the media hosts
+ * require a MovieBox `Referer`, which a cross-origin media element cannot set
+ * because the browser owns that header. The API's proxy exists for exactly
+ * this: it fetches upstream with the referer the title needs and answers with
+ * CORS headers the browser accepts.
  *
  * Idempotent, and a no-op for handles the app already owns: a relative path
  * stays relative, and `blob:`/`data:` URLs are this document's own bytes.
@@ -543,8 +680,6 @@ export function proxiedVideoUrl(url: string, referer?: string | null): string {
 
   let absolute = trimmed;
   if (!/^https?:\/\//i.test(trimmed)) {
-    // Not a scheme we recognise and not a handle -- leave it alone rather than
-    // hand the proxy a string it cannot parse.
     try {
       absolute = new URL(trimmed, "https://url.invalid").toString();
     } catch {
@@ -562,82 +697,69 @@ export function proxiedVideoUrl(url: string, referer?: string | null): string {
 // Captions.
 // ---------------------------------------------------------------------------
 
-/**
- * How many caption tracks are converted per playback.
- *
- * A title can ship a dozen languages. Converting all of them means a dozen
- * extra round trips against a rate-limited host on behalf of a menu that
- * realistically gets one selection, so the list is ordered by how likely the
- * language is to be chosen and cut. The caption *list* is still one request;
- * only the conversion is capped.
- */
-const MAX_CAPTION_TRACKS = 5;
+/** How many caption tracks are converted per playback. */
+const MAX_CAPTION_TRACKS = 4;
 
-/** Languages first, then the rest in the order the API returned them. */
-function prioritizeCaptions(captions: StreamvyCaption[]): StreamvyCaption[] {
-  const rank = (caption: StreamvyCaption): number => {
-    const code = (caption.code || caption.language || "").toLowerCase();
-    if (code === "en" || code.startsWith("en-")) return 0;
-    if (code === "") return 2;
-    return 1;
-  };
-  return captions
-    .map((caption, index) => ({ caption, index }))
-    .sort((a, b) => rank(a.caption) - rank(b.caption) || a.index - b.index)
-    .map(entry => entry.caption);
-}
-
-function captionLang(caption: StreamvyCaption): string {
-  return (caption.code || caption.language || "").trim();
+function captionLang(caption: MovieBoxCaption): string {
+  return (
+    caption.lan?.trim() ||
+    caption.lanName?.trim() ||
+    ""
+  );
 }
 
 /**
  * Load this playback's caption tracks as WebVTT the browser will actually
  * parse.
  *
- * The API serves `.srt`. A `<track>` element accepts WebVTT only -- an SRT
- * src is a silent failure, not an error, so the viewer watches believing
- * subtitles were offered. Each file is therefore pulled through the same video
- * proxy (which carries the CORS header the CDN does not) and converted here.
+ * The API serves `.srt`. A `<track>` element accepts WebVTT only -- an SRT src
+ * is a silent failure, not an error. Each file is pulled through the same video
+ * proxy (which carries the referer the CDN requires) and converted here.
  *
  * Entirely fail-soft: a caption is decoration, and one that cannot be fetched
  * or read is dropped rather than failing the playback it rode in on.
  */
 export async function loadCaptionTracks(
   subjectId: string,
+  detailPath: string,
   opts: { season?: number; episode?: number } = {}
 ): Promise<{ label: string; lang: string; url: string }[]> {
-  let payload: StreamvyCaptionPayload;
+  let payload: MovieBoxCaptionPayload;
   try {
-    const params: Record<string, string | number | undefined> = {};
-    if (opts.season != null) params.se = opts.season;
-    if (opts.episode != null) params.ep = opts.episode;
-    payload = await streamvyGet<StreamvyCaptionPayload>(
-      `/api/stream/${encodeURIComponent(subjectId)}/captions`,
-      { params, context: "Captions", timeoutMs: 15_000 }
-    );
+    payload = await getCaptions(subjectId, detailPath, opts);
   } catch {
     return [];
   }
-  if (!Array.isArray(payload?.captions)) return [];
+  const captions = Array.isArray(payload?.captions) ? payload.captions : [];
 
-  const chosen = prioritizeCaptions(payload.captions)
-    .filter(caption => typeof caption?.url === "string" && caption.url.trim())
+  const ranked = captions
+    .map((caption, index) => ({ caption, index }))
+    .sort((a, b) => {
+      const rank = (caption: MovieBoxCaption): number => {
+        const code = captionLang(caption).toLowerCase();
+        if (code === "en" || code.startsWith("en-")) return 0;
+        if (code === "") return 2;
+        return 1;
+      };
+      return rank(a.caption) - rank(b.caption) || a.index - b.index;
+    })
+    .map(entry => entry.caption)
+    .filter(caption => typeof caption.url === "string" && caption.url.trim())
     .slice(0, MAX_CAPTION_TRACKS);
 
   const tracks = await Promise.all(
-    chosen.map(async caption => {
+    ranked.map(async caption => {
       const lang = captionLang(caption);
       if (!lang) return null;
       try {
-        const response = await fetch(proxiedVideoUrl(caption.url));
+        const response = await fetch(proxiedVideoUrl(caption.url as string));
         if (!response.ok) return null;
         const text = await response.text();
         const parsed = parseSubtitleFile(`${lang}.srt`, text);
         if (!parsed.ok) return null;
         const blob = new Blob([parsed.vtt], { type: "text/vtt" });
         return {
-          label: caption.language?.trim() || lang,
+          label: caption.lanName?.trim() || lang,
           lang,
           url: URL.createObjectURL(blob),
         };
@@ -648,6 +770,7 @@ export async function loadCaptionTracks(
   );
 
   return tracks.filter(
-    (track): track is { label: string; lang: string; url: string } => track !== null
+    (track): track is { label: string; lang: string; url: string } =>
+      track !== null
   );
 }

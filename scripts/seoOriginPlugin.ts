@@ -57,6 +57,43 @@ import {
 export const SITE_ORIGIN_TOKEN = "__SITE_ORIGIN__";
 
 /**
+ * The API origin token in `index.html`.
+ *
+ * The head used to hardcode `https://api.vy.streamvy.me` as a preconnect hint.
+ * That host does not resolve, so every visit spent a doomed DNS lookup, and
+ * the app then opened a *second* connection to the real API host without a
+ * warm handshake. The token is filled from the same build-time variable the
+ * client's API module reads, so the hint and the first fetch always name the
+ * same origin.
+ */
+export const API_ORIGIN_TOKEN = "__API_ORIGIN__";
+
+/** Where the media API lives when the build has no explicit configuration. */
+export const DEFAULT_API_ORIGIN = "https://movie-api.streamvy.me";
+
+/**
+ * Resolve the build's API origin with the same precedence as
+ * `client/src/services/streamvy.ts`: only `VITE_STREAMVY_API_BASE_URL`, then
+ * the deployed MovieBox service.
+ *
+ * The legacy `VITE_API_BASE_URL` / `VITE_MOVIE_API_BASE_URL` / `VITE_API_URL`
+ * names are deliberately ignored. Deployments still carry them pointing at the
+ * retired Render service, and inheriting one would put a dead host back in the
+ * document's preconnect hint.
+ */
+export function resolveApiOrigin(
+  fromFile: Record<string, string | undefined>,
+  fromProcess: Record<string, string | undefined> = process.env
+): string {
+  const value = (
+    fromFile.VITE_STREAMVY_API_BASE_URL ||
+    fromProcess.VITE_STREAMVY_API_BASE_URL ||
+    DEFAULT_API_ORIGIN
+  ).trim();
+  return normalizeOrigin(value) || DEFAULT_API_ORIGIN;
+}
+
+/**
  * Normalise a configured origin: trimmed, without a trailing slash.
  *
  * Exported separately from the plugin so it can be tested without constructing a
@@ -175,6 +212,7 @@ ${entries}
  */
 export const SITEMAP_SOURCES: Record<string, string> = {
   "/": "client/src/pages/Home.tsx",
+  "/vyteenda": "client/src/pages/Vyteenda.tsx",
   "/terms": "client/src/pages/Terms.tsx",
   "/privacy": "client/src/pages/Privacy.tsx",
   "/dmca": "client/src/pages/Dmca.tsx",
@@ -266,6 +304,7 @@ export const ROUTE_CRAWL_HINTS: Record<
   { changefreq: "daily" | "weekly" | "monthly" | "yearly"; priority: number }
 > = {
   "/": { changefreq: "daily", priority: 1 },
+  "/vyteenda": { changefreq: "weekly", priority: 0.7 },
   "/terms": { changefreq: "yearly", priority: 0.3 },
   "/privacy": { changefreq: "yearly", priority: 0.3 },
   "/dmca": { changefreq: "yearly", priority: 0.3 },
@@ -493,6 +532,51 @@ export async function fetchCatalogue(
   return items.slice(0, MAX_SITEMAP_URLS);
 }
 
+/**
+ * Read the catalogue from the MovieBox home feed.
+ *
+ * The retired Flask service paginated `/api/catalog/discover`; the MovieBox API
+ * has no equivalent, and its `/movies` list is polluted with music videos. The
+ * `/home` sections are the curated catalogue the app itself renders, and every
+ * item already carries the detail slug the title route uses. There is no year
+ * or synopsis in this payload, so those stay empty rather than being invented.
+ */
+export async function fetchHomeCatalogue(
+  apiBase: string,
+  fetcher: Fetcher = defaultFetcher
+): Promise<CatalogueEntry[]> {
+  const base = apiBase.replace(/\/+$/, "");
+  type HomeItem = {
+    slug?: unknown;
+    name?: unknown;
+    poster_url?: unknown;
+  };
+  type HomeSection = { items?: HomeItem[] };
+  type HomeResponse = { sections?: HomeSection[]; data?: { sections?: HomeSection[] } };
+
+  const payload = (await fetcher(`${base}/home`)) as HomeResponse | null;
+  const sections = payload?.sections ?? payload?.data?.sections ?? [];
+  const entries: CatalogueEntry[] = [];
+  const seen = new Set<string>();
+  for (const section of Array.isArray(sections) ? sections : []) {
+    for (const item of Array.isArray(section?.items) ? section.items : []) {
+      const id = typeof item?.slug === "string" ? item.slug.trim() : "";
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      entries.push({
+        id,
+        title: typeof item?.name === "string" ? item.name.trim() : "",
+        year: null,
+        overview: "",
+        posterUrl:
+          typeof item?.poster_url === "string" ? item.poster_url.trim() : "",
+      });
+      if (entries.length >= MAX_SITEMAP_URLS) return entries;
+    }
+  }
+  return entries;
+}
+
 /** The static routes plus one entry per film. */
 export function renderCatalogueSitemap(
   entries: readonly CatalogueEntry[],
@@ -610,24 +694,23 @@ export function prerenderTitlePages(
  * incomplete. What it must not do is fail silently -- a catalogue that quietly
  * emptied out would drop every film from the index with nothing in the log.
  */
-async function loadCatalogue(plugin: {
-  warn: (message: string) => void;
-  info: (message: string) => void;
-}): Promise<CatalogueEntry[]> {
-  const apiBase = (
-    process.env.VITE_MOVIE_API_BASE_URL ??
-    process.env.MOVIE_API_BASE_URL ??
-    ""
-  ).trim();
+async function loadCatalogue(
+  plugin: {
+    warn: (message: string) => void;
+    info: (message: string) => void;
+  },
+  resolvedApiOrigin: string
+): Promise<CatalogueEntry[]> {
+  const apiBase = (resolvedApiOrigin || "").trim();
   if (!apiBase || apiBase === "/") {
     plugin.warn(
-      "No absolute VITE_MOVIE_API_BASE_URL set, so film pages are neither in " +
+      "No absolute VITE_STREAMVY_API_BASE_URL set, so film pages are neither in " +
         "sitemap.xml nor prerendered. The static routes are still listed."
     );
     return [];
   }
   try {
-    const catalogue = await fetchCatalogue(apiBase);
+    const catalogue = await fetchHomeCatalogue(apiBase);
     plugin.info(
       `Sitemap: ${catalogue.length} title pages from the catalogue.`
     );
@@ -644,6 +727,7 @@ async function loadCatalogue(plugin: {
 
 export function seoOriginPlugin(): Plugin {
   let origin = "";
+  let apiOrigin = DEFAULT_API_ORIGIN;
   let catalogue: CatalogueEntry[] = [];
 
   return {
@@ -656,7 +740,7 @@ export function seoOriginPlugin(): Plugin {
      */
     enforce: "post",
     async buildStart() {
-      catalogue = await loadCatalogue(this);
+      catalogue = await loadCatalogue(this, apiOrigin);
     },
     /*
      * `configResolved` rather than reading `process.env` inline: Vite does *not*
@@ -677,10 +761,13 @@ export function seoOriginPlugin(): Plugin {
       origin =
         normalizeOrigin(fromFile.VITE_SITE_URL ?? process.env.VITE_SITE_URL) ||
         vercelProductionOrigin();
+
+      const apiFile = loadEnv(config.mode, config.envDir, "VITE_");
+      apiOrigin = resolveApiOrigin(apiFile, process.env);
     },
 
     transformIndexHtml(html: string) {
-      return injectOrigin(html, origin);
+      return injectOrigin(html, origin).split(API_ORIGIN_TOKEN).join(apiOrigin);
     },
 
     /*

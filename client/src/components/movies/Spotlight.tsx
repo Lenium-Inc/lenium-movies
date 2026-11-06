@@ -13,7 +13,7 @@ import { toast } from "sonner";
 import type { Movie } from "./types";
 import { RemindMeButton } from "./RemindMeButton";
 import { formatRuntime } from "@/lib/format";
-import { tmdbImage } from "@/lib/tmdbImages";
+import { tmdbImage, tmdbSrcSet } from "@/lib/tmdbImages";
 import { genreColor, withAlpha } from "@/lib/genreColors";
 import { absoluteUrl } from "@/lib/siteUrl";
 import { buildTitlePath } from "@/lib/watchRoute";
@@ -22,6 +22,7 @@ import { TrailerBrandingMask } from "@/components/stream/TrailerBrandingMask";
 import { useTrailerPlayback } from "@/hooks/useTrailerPlayback";
 import { fetchTrailerByTmdbId, type TrailerInfo } from "@/services/api";
 import { isUpcoming, releaseCountdownLabel } from "@/services/notifications";
+import { nativeShare } from "@/lib/native";
 
 export interface SpotlightProps {
   items: readonly Movie[];
@@ -43,12 +44,19 @@ export interface SpotlightProps {
 const EASE = [0.32, 0.72, 0, 1] as const;
 
 /**
- * A TMDB backdrop at `original` is a real ~1920px file, which is what covers a
- * 70vh card at 2x without the browser upscaling the 780px rendition.
+ * The hero card tops out at 1280 CSS px, so w1280 covers it at 1x and is only
+ * mildly soft at 2x. The previous `original` rendition was frequently a
+ * 3840px JPEG -- several megabytes per rotation for detail the card's scrims
+ * and copy obscure anyway. The browser is offered a 780 candidate too, so a
+ * phone does not download the full 1280.
  */
+const HERO_SRCSET_SIZES = ["w780", "w1280"] as const;
+const HERO_SIZES_ATTRIBUTE =
+  "(min-width: 1280px) 1280px, (min-width: 768px) 100vw, 100vw";
+
 function backdropUrl(backdrop: string | null | undefined): string | null {
   if (!backdrop) return null;
-  return tmdbImage(backdrop, "original") || null;
+  return tmdbImage(backdrop, "w1280") || null;
 }
 
 /**
@@ -136,6 +144,37 @@ export function Spotlight({
 
   const current: Movie | undefined = count > 0 ? items[index] : undefined;
   const art = backdropUrl(current?.backdrop ?? current?.backdrop_url);
+
+  /*
+   * Warm the next slide's artwork while the current one is on screen.
+   *
+   * The carousel used to begin the network request at the moment it rotated,
+   * so every eighth second the hero crossfaded into an empty card until TMDB
+   * answered. Preloading is deliberately idle-time and low priority: it must
+   * never compete with the artwork the viewer is looking at now.
+   */
+  useEffect(() => {
+    if (count < 2) return;
+    const next = items[(index + 1) % count];
+    const nextArt = backdropUrl(next?.backdrop ?? next?.backdrop_url);
+    if (!nextArt) return;
+    let cancelled = false;
+    const warm = () => {
+      if (cancelled) return;
+      const image = new Image();
+      image.decoding = "async";
+      image.src = nextArt;
+    };
+    const idle = window.requestIdleCallback
+      ? window.requestIdleCallback(warm, { timeout: 2500 })
+      : null;
+    const timer = idle === null ? window.setTimeout(warm, 1200) : null;
+    return () => {
+      cancelled = true;
+      if (idle !== null) window.cancelIdleCallback?.(idle);
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [count, index, items]);
 
   /*
    * Trailer, on click only.
@@ -244,9 +283,11 @@ export function Spotlight({
   }, [count, step]);
 
   const handlePlay = (movie: Movie) => {
-    const tmdbId = parseInt(movie.providerId, 10);
-    if (isNaN(tmdbId)) {
-      console.warn("[Spotlight] No TMDB id for title:", movie.title);
+    // `providerId` is the detail slug, not a numeric id. Parsing it was the
+    // reason a hero click could silently do nothing on the new catalogue.
+    const handle = movie.providerId || String(movie.id);
+    if (!handle) {
+      console.warn("[Spotlight] No title handle for:", movie.title);
       return;
     }
     // The details page first, like every other click path. Landing straight on
@@ -254,7 +295,7 @@ export function Spotlight({
     // dropped the viewer into stream resolution while a shelf card opened the
     // title window, so the same site answered the same action two ways.
     navigate(
-      buildTitlePath(tmdbId, movie.mediaType === "tv" ? "tv" : "movie", {
+      buildTitlePath(handle, movie.mediaType === "tv" ? "tv" : "movie", {
         season: movie.resumeSeason,
         episode: movie.resumeEpisode,
       })
@@ -264,6 +305,7 @@ export function Spotlight({
   const handleShare = async (movie: Movie) => {
     const url = watchLink(movie);
     try {
+      if (await nativeShare({ title: movie.title, url })) return;
       if (navigator.share) {
         await navigator.share({ title: movie.title, url });
         return;
@@ -311,10 +353,16 @@ export function Spotlight({
                 {art ? (
                   <img
                     src={art}
+                    srcSet={
+                      tmdbSrcSet(current.backdrop ?? current.backdrop_url, HERO_SRCSET_SIZES) ||
+                      undefined
+                    }
+                    sizes={HERO_SIZES_ATTRIBUTE}
                     alt=""
                     aria-hidden
                     loading="eager"
                     fetchPriority="high"
+                    decoding="async"
                     className="hero-drift h-full w-full object-cover object-center"
                   />
                 ) : (

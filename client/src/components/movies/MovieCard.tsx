@@ -66,7 +66,10 @@ export const MovieCard: React.FC<MovieCardProps> = ({
   const voteValue = movie.vote_average ?? movie.score;
   const hasVote = typeof voteValue === "number" && voteValue > 0;
   const mediaType = movie.mediaType || "movie";
-  const tmdbId = movie.providerId ? parseInt(movie.providerId, 10) : null;
+  // The provider id is the MovieBox detail slug. It is never parsed as a
+  // number: subject ids exceed Number's safe range, and a slug was never
+  // numeric in the first place.
+  const handle = movie.providerId || String(movie.id);
   const hasPoster = Boolean(movie.poster) && !posterFailed;
 
   // The browser picks the smallest rendition that still covers the painted
@@ -79,8 +82,8 @@ export const MovieCard: React.FC<MovieCardProps> = ({
       onPlay(movie);
       return;
     }
-    if (!tmdbId || isNaN(tmdbId)) {
-      console.warn("[MovieCard] Invalid TMDB ID:", movie.providerId);
+    if (!handle) {
+      console.warn("[MovieCard] Missing title handle:", movie.title);
       return;
     }
     // `buildTitlePath` is the single place that knows a series needs `type=tv`
@@ -91,7 +94,7 @@ export const MovieCard: React.FC<MovieCardProps> = ({
     // `/title/:id` so the same action never answers two different ways. The
     // resume season/episode ride along for the Continue Watching case.
     navigate(
-      buildTitlePath(tmdbId, mediaType, {
+      buildTitlePath(handle, mediaType, {
         season: movie.resumeSeason,
         episode: movie.resumeEpisode,
       })

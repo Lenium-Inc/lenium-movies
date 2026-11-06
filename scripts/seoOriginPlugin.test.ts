@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   SITE_ORIGIN_TOKEN,
   fetchCatalogue,
+  fetchHomeCatalogue,
   injectOrigin,
   normalizeOrigin,
   prerenderFileName,
@@ -127,6 +128,78 @@ describe("fetchCatalogue", () => {
   });
 });
 
+describe("fetchHomeCatalogue", () => {
+  it("reads the MovieBox home sections and dedupes across them", async () => {
+    const fetcher: Fetcher = async url => {
+      expect(url).toBe("https://api.example/home");
+      return {
+        status: "success",
+        sections: [
+          {
+            section: "Banner",
+            items: [
+              {
+                name: "Film One",
+                slug: "film-one-abc123",
+                poster_url: "https://cdn.example/one.webp",
+              },
+              { name: "Blank", slug: "   ", poster_url: null },
+            ],
+          },
+          {
+            section: "Popular Movie",
+            items: [
+              {
+                name: "Film One again",
+                slug: "film-one-abc123",
+                poster_url: "https://cdn.example/one.webp",
+              },
+              {
+                name: "Film Two",
+                slug: "film-two-def456",
+                poster_url: "https://cdn.example/two.webp",
+              },
+            ],
+          },
+        ],
+      };
+    };
+
+    const catalogue = await fetchHomeCatalogue("https://api.example", fetcher);
+
+    expect(catalogue).toEqual([
+      {
+        id: "film-one-abc123",
+        title: "Film One",
+        year: null,
+        overview: "",
+        posterUrl: "https://cdn.example/one.webp",
+      },
+      {
+        id: "film-two-def456",
+        title: "Film Two",
+        year: null,
+        overview: "",
+        posterUrl: "https://cdn.example/two.webp",
+      },
+    ]);
+  });
+
+  it("accepts the wrapped data shape and treats a missing feed as empty", async () => {
+    const wrapped: Fetcher = async () => ({
+      data: { sections: [{ items: [{ name: "Wrapped", slug: "wrapped-xyz" }] }] },
+    });
+    const missing: Fetcher = async () => ({ status: "success" });
+
+    const first = await fetchHomeCatalogue("https://api.example/", wrapped);
+    const second = await fetchHomeCatalogue("https://api.example", missing);
+
+    expect(first.map(entry => entry.id)).toEqual(["wrapped-xyz"]);
+    expect(first[0]?.posterUrl).toBe("");
+    expect(second).toEqual([]);
+  });
+});
+
 describe("normalizeOrigin", () => {
   it("trims whitespace and trailing slashes", () => {
     // A trailing slash would compose into `https://host//watch/1`, which is a
@@ -238,6 +311,7 @@ describe("renderSitemap", () => {
     const xml = renderSitemap(INDEXABLE_PATHS, "https://vy.example");
     expect(locations(xml)).toEqual([
       "https://vy.example/",
+      "https://vy.example/vyteenda",
       "https://vy.example/terms",
       "https://vy.example/privacy",
       "https://vy.example/dmca",
@@ -358,6 +432,7 @@ describe("prerenderRoutes", () => {
     const pages = prerenderRoutes(template, "https://vy.example");
     expect(pages.map(p => p.fileName)).toEqual([
       "index.html",
+      "vyteenda.html",
       "terms.html",
       "privacy.html",
       "dmca.html",
@@ -448,6 +523,7 @@ describe("renderCatalogueSitemap", () => {
     ).map(match => match[1]);
     expect(locations.slice(0, INDEXABLE_PATHS.length)).toEqual([
       "https://vy.example/",
+      "https://vy.example/vyteenda",
       "https://vy.example/terms",
       "https://vy.example/privacy",
       "https://vy.example/dmca",

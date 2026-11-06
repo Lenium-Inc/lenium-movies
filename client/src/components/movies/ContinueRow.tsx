@@ -41,12 +41,12 @@ export function ContinueRow({ title, items }: ContinueRowProps) {
   if (!items.length) return null;
 
   const play = (movie: Movie) => {
-    const tmdbId = parseInt(movie.providerId || String(movie.id), 10);
-    if (!tmdbId || Number.isNaN(tmdbId)) return;
+    const handle = movie.providerId || String(movie.id);
+    if (!handle) return;
     // Route through the details page like every other click path; the resume
     // season/episode ride along so Play can pick up where the viewer stopped.
     navigate(
-      buildTitlePath(tmdbId, movie.mediaType || "movie", {
+      buildTitlePath(handle, movie.mediaType || "movie", {
         season: movie.resumeSeason,
         episode: movie.resumeEpisode,
       })

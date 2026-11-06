@@ -82,7 +82,7 @@ export default function TitlePage() {
 
   useEffect(() => {
     let active = true;
-    if (!/^\d+$/.test(id)) {
+    if (!id) {
       setMeta(null);
       setStatus("missing");
       return;
@@ -104,7 +104,7 @@ export default function TitlePage() {
   }, [id, kind]);
 
   useEffect(() => {
-    if (!/^\d+$/.test(id)) return;
+    if (!id) return;
     let active = true;
     setTrailer(null);
     void fetchTrailerByTmdbId(id, kind)

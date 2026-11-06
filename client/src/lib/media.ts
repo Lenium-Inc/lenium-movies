@@ -29,6 +29,12 @@ import type { Movie } from "@/components/movies/types";
 /** The subset every backend card shape satisfies. */
 export interface MediaSource {
   id?: string | number | null;
+  /**
+   * The media API's detail slug. It is the only public route handle and the
+   * only reliable key for `/detail`; `id` is the subject id, which exceeds
+   * Number's safe range and is rejected by the live detail endpoint.
+   */
+  detail_path?: string | null;
   tmdb_id?: string | number | null;
   media_type?: string | null;
   title?: string | null;
@@ -98,13 +104,17 @@ function genreList(item: MediaSource): string[] {
 }
 
 /**
- * The id playback is resolved against.
+ * The handle routes and playback are resolved against.
  *
- * A TMDB id is preferred and kept verbatim; anything else falls back to the
- * provider's own id, which may or may not resolve downstream but is the only
- * handle there is.
+ * The detail slug wins when present. It is what the media API accepts --
+ * `/detail/{slug}` is the only reliable lookup, and the route pages carry it --
+ * while a TMDB id is a legacy key from the retired service. Falling back to
+ * `tmdb_id` then `id` keeps every non-MovieBox card working unchanged.
  */
 export function playbackId(item: MediaSource): string {
+  const detailPath =
+    item.detail_path != null ? String(item.detail_path).trim() : "";
+  if (detailPath) return detailPath;
   if (item.tmdb_id != null && String(item.tmdb_id).trim() !== "") {
     return String(item.tmdb_id).trim();
   }

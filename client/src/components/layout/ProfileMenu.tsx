@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { LogOut, Lock, Plus, Settings, ShieldCheck, Users } from "lucide-react";
+import { Download, LogOut, Lock, Plus, Settings, ShieldCheck, Users } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/context/AuthContext";
 import { useActiveProfile } from "@/context/ActiveProfileContext";
 import { ProfileAvatar } from "@/components/profile/ProfileAvatar";
+import { ANDROID_APP_URL } from "@/lib/androidApp";
 
 /**
  * Top-right profile entry point: renders the active profile avatar and opens a
@@ -195,6 +196,16 @@ export function ProfileMenu() {
               <Users className="h-4 w-4" />
               Manage Profiles
             </Link>
+            <a
+              href={ANDROID_APP_URL}
+              target="_blank"
+              rel="noreferrer"
+              onClick={() => setOpen(false)}
+              className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-zinc-800 hover:text-white"
+            >
+              <Download className="h-4 w-4" />
+              Get the Android app
+            </a>
             <Link
               href="/profile"
               onClick={() => setOpen(false)}

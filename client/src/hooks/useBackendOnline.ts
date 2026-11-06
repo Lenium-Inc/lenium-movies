@@ -7,7 +7,10 @@ const PROBE_TIMEOUT_MS = 8_000;
 
 async function probe(): Promise<boolean> {
   try {
-    const response = await fetch(apiUrl("/"), {
+    // `/` is not part of the media API's route table, so a healthy deployment
+    // answered 404 there and the app gated itself behind "backend offline".
+    // `/home` is the cheapest real route and is cached at the edge.
+    const response = await fetch(apiUrl("/home"), {
       cache: "no-store",
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });

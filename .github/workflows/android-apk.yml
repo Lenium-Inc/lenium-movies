@@ -1,5 +1,12 @@
 name: Android APK
 
+permissions:
+  contents: write
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     branches: [main]
@@ -15,7 +22,11 @@ on:
   workflow_dispatch: {}
 
 env:
-  VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL || 'https://api.vy.streamvy.me' }}
+  # The API actually serving production. The old default,
+  # https://api.vy.streamvy.me, does not resolve, so every APK built from it
+  # could never reach the backend. Override with a repository variable when the
+  # API moves.
+  VITE_STREAMVY_API_BASE_URL: ${{ vars.VITE_STREAMVY_API_BASE_URL || 'https://movie-api.streamvy.me' }}
 
 jobs:
   apk:
@@ -59,6 +70,10 @@ jobs:
           mkdir -p artifact
           cp android/app/build/outputs/apk/debug/app-debug.apk \
             "artifact/streamvy-${{ github.run_number }}-debug.apk"
+          # A stable name for the rolling release below, so the site can link
+          # to one URL instead of a run-number that changes every build.
+          cp android/app/build/outputs/apk/debug/app-debug.apk \
+            "artifact/streamvy-android.apk"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -66,3 +81,17 @@ jobs:
           path: artifact/*.apk
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish rolling APK release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view android-latest > /dev/null 2>&1; then
+            gh release upload android-latest artifact/streamvy-android.apk --clobber
+          else
+            gh release create android-latest artifact/streamvy-android.apk \
+              --title "Stream Vy for Android" \
+              --notes "Latest debug build from main. Download streamvy-android.apk below." \
+              --latest
+          fi

@@ -79,6 +79,23 @@ describe("buildDownloadTiers", () => {
     expect(tiers[0]?.label).toBe("360p (Data Saver)");
   });
 
+  it("unwraps MovieBox proxy handles before classifying them", () => {
+    const tiers = buildDownloadTiers([
+      {
+        ...variant("720p", 720, "unused.mp4"),
+        url: "https://movie-api.streamvy.me/proxy/stream?url=https%3A%2F%2Fcdn.example%2Fhd.mp4",
+      },
+      {
+        ...variant("1080p", 1080, "unused.mp4"),
+        url: "https://movie-api.streamvy.me/proxy/stream?url=https%3A%2F%2Fcdn.example%2Fmaster.m3u8",
+      },
+    ]);
+
+    expect(tiers).toHaveLength(1);
+    expect(tiers[0]?.label).toBe("720p (HD)");
+    expect(tiers[0]?.candidate.url).toBe("https://cdn.example/hd.mp4");
+  });
+
   it("builds tiers from backend-minted download handles", () => {
     // The resolver ships play URLs as opaque tokenised handles that can never
     // pass a client-side container sniff; the per-stream `downloadUrl` is the

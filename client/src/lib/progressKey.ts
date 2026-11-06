@@ -1,7 +1,8 @@
 /**
  * The key a watch-progress record is stored under.
  *
- * A film is keyed by its TMDB id. A series is keyed by the episode, because
+ * A film is keyed by its playback handle (a MovieBox slug, or a legacy numeric
+ * TMDB id). A series is keyed by the episode, because
  * "where was I" is a question about an episode: one record per show means
  * starting S01E02 overwrites S01E01, the resume bar on the shelf describes a
  * title the viewer is not watching, and finishing one episode marks the whole
@@ -15,13 +16,14 @@
  *
  * Encoding, not parsing, is the asymmetry worth noting: `progressKey` is the only
  * thing allowed to invent a key, and `parseProgressKey` has to accept every key
- * ever written, including bare ids from before this existed.
+ * ever written -- both the legacy numeric TMDB ids and the MovieBox detail
+ * slugs the current catalogue uses.
  */
 
 export type ProgressMediaType = "movie" | "tv";
 
 export interface ProgressKeyParts {
-  /** TMDB id as a string. Numeric ids are the only addressable kind. */
+  /** The playback handle (detail slug or legacy numeric id) as a string. */
   id: string;
   season?: number;
   episode?: number;
@@ -32,7 +34,7 @@ function positive(value: number | undefined): number | null {
   return value >= 1 ? value : null;
 }
 
-/** `1396` for a film, `1396:s1e2` for an episode. */
+/** `inception-e1BOR6f19C7` for a film, `wednesday-…:s1e2` for an episode. */
 export function progressKey(
   tmdbId: string | number,
   mediaType: ProgressMediaType,
@@ -61,7 +63,7 @@ export function parseProgressKey(key: string): ProgressKeyParts | null {
   const value = (key ?? "").trim();
   if (!value) return null;
 
-  const match = /^(\d+)(?::s(\d+)e(\d+))?$/i.exec(value);
+  const match = /^([^:]+)(?::s(\d+)e(\d+))?$/i.exec(value);
   if (!match) return null;
 
   const [, id, season, episode] = match;

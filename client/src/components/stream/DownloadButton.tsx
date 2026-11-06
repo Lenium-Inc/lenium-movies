@@ -1,6 +1,7 @@
 import { ChevronDown, Download } from "lucide-react";
 import {
   proxiedDownloadUrl,
+  proxiedVideoTarget,
   type StreamVariant,
 } from "@/services/api";
 import {
@@ -48,17 +49,9 @@ function heightOf(variant: StreamVariant): number {
   return match ? Number(match[1]) : 0;
 }
 
-function isArchiveFile(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return (
-      parsed.protocol === "https:" &&
-      (parsed.hostname === "archive.org" ||
-        parsed.hostname.endsWith(".archive.org"))
-    );
-  } catch {
-    return false;
-  }
+/** The real file URL behind a rendition, unwrapping our video proxy. */
+function fileTargetOf(url: string): string {
+  return proxiedVideoTarget(url) ?? url;
 }
 
 /**
@@ -72,17 +65,19 @@ function isArchiveFile(url: string): boolean {
  * the client-side container sniffing that could never classify a tokenised
  * URL.
  *
- * The absolute-archive-URL path remains as a fallback for payloads that still
- * carry raw Archive.org links.
+ * The MovieBox backend ships every rendition as a `/proxy/stream?url=…` handle
+ * whose pathname is not a container, so the target URL is unwrapped before it
+ * is classified. The render layer then wraps that target in `/proxy/download`,
+ * which is what supplies the attachment filename.
  */
 export function buildDownloadTiers(variants: StreamVariant[]): DownloadTier[] {
   const directFiles: { height: number; candidate: DownloadCandidate }[] = [];
   for (const variant of variants) {
+    const height = heightOf(variant);
+    if (height <= 0) continue;
     const downloadUrl =
       typeof variant.downloadUrl === "string" ? variant.downloadUrl.trim() : "";
     if (downloadUrl) {
-      const height = heightOf(variant);
-      if (height <= 0) continue;
       // The handle *is* the download URL, so it is carried as the candidate
       // url; the render layer navigates to it directly.
       directFiles.push({
@@ -91,11 +86,9 @@ export function buildDownloadTiers(variants: StreamVariant[]): DownloadTier[] {
       });
       continue;
     }
-    if (!variant.url || !isArchiveFile(variant.url)) continue;
-    const candidate = classifyDownloadUrl(variant.url);
+    if (!variant.url) continue;
+    const candidate = classifyDownloadUrl(fileTargetOf(variant.url));
     if (candidate.kind !== "progressive") continue;
-    const height = heightOf(variant);
-    if (height <= 0) continue;
     directFiles.push({ height, candidate });
   }
   directFiles.sort((a, b) => a.height - b.height);

@@ -168,7 +168,13 @@ export const ROBOTS_DISALLOW_PATHS = [
  * the same pages as real HTML. Only the routes that exist regardless of what
  * the catalogue holds belong here.
  */
-export const INDEXABLE_PATHS = ["/", "/terms", "/privacy", "/dmca"] as const;
+export const INDEXABLE_PATHS = [
+  "/",
+  "/vyteenda",
+  "/terms",
+  "/privacy",
+  "/dmca",
+] as const;
 
 /**
  * `robots.txt` and this list have to agree.
@@ -328,6 +334,11 @@ export function pageSeo(
   switch (path) {
     case "/":
       return originless(SITE_TITLE, SITE_DESCRIPTION);
+    case "/vyteenda":
+      return originless(
+        `Vyteenda - Find Your Next Watch - ${SITE_NAME}`,
+        `Swipe through hand-picked films on Vyteenda. Tap the heart to save a match to My List, or pass and keep looking. Free movies, no account needed to start.`
+      );
     case "/terms":
       return originless(
         `Terms of Service - ${SITE_NAME}`,

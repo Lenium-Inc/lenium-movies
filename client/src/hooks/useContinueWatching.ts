@@ -5,6 +5,7 @@ import { apiHistory, type RemoteHistoryItem } from "@/services/auth";
 import { useAuth } from "@/context/AuthContext";
 import { useActiveProfile } from "@/context/ActiveProfileContext";
 import { parseProgressKey } from "@/lib/progressKey";
+import { stableId } from "@/lib/media";
 import type { Movie } from "@/components/movies/types";
 
 /**
@@ -39,14 +40,16 @@ function toResumeMovie(entry: {
   fraction: number;
   at: number;
 }): Movie {
-  // The card resolves `providerId` with `parseInt` and builds the watch route
-  // from it, so the episode-qualified key must not be handed over as the id --
-  // it would parse to the show and silently reopen S01E01. The episode travels in
-  // `resumeSeason`/`resumeEpisode` instead.
+  // The route is built from `providerId`, which may be a MovieBox slug or a
+  // legacy numeric id. The episode-qualified key must not be handed over as the
+  // id -- it would parse to the show and silently reopen S01E01. The episode
+  // travels in `resumeSeason`/`resumeEpisode` instead. `Movie.id` is numeric, so
+  // a slug is hashed into a stable React key rather than coerced to 0.
   const parts = parseProgressKey(entry.key);
+  const providerId = parts?.id ?? entry.key;
   return {
-    id: Number(parts?.id ?? entry.key) || 0,
-    providerId: parts?.id ?? entry.key,
+    id: stableId(providerId),
+    providerId,
     title: entry.title,
     year: entry.year,
     runtime: null,

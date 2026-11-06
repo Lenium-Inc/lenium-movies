@@ -94,6 +94,13 @@ describe("pageSeo", () => {
     expect(seo.indexable).toBe(true);
   });
 
+  it("gives Vyteenda its own title and description", () => {
+    const seo = pageSeo("/vyteenda");
+    expect(seo.title).toBe("Vyteenda - Find Your Next Watch - Stream Vy");
+    expect(seo.indexable).toBe(true);
+    expect(seo.description).toBeTruthy();
+  });
+
   it("gives each legal page its own title", () => {
     for (const [route, expected] of [
       ["/terms", "Terms of Service - Stream Vy"],
@@ -255,7 +262,7 @@ describe("buildHeadTags", () => {
   });
 
   it("gives every indexable page one canonical URL and a matching og:url", () => {
-    for (const route of ["/", "/terms", "/privacy", "/dmca"]) {
+    for (const route of ["/", "/vyteenda", "/terms", "/privacy", "/dmca"]) {
       const tags = buildHeadTags(pageSeo(route), "https://vy.example");
       const canonical = tags.find(
         tag => tag.kind === "link" && tag.rel === "canonical"
@@ -286,7 +293,7 @@ describe("buildHeadTags", () => {
   it("does not emit an empty description for an indexable page", () => {
     // `content=""` is a different claim from omitting the tag: a search engine
     // indexes it as "this page has an empty description".
-    for (const route of ["/", "/terms", "/privacy", "/dmca"]) {
+    for (const route of ["/", "/vyteenda", "/terms", "/privacy", "/dmca"]) {
       const description = metaContent(headFor(route), "description");
       expect(description, route).toBeTruthy();
     }

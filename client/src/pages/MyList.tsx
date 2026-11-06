@@ -1,5 +1,5 @@
 import { Link } from "wouter";
-import { Bookmark, Film, Plus, Share2, Users } from "lucide-react";
+import { Bookmark, Download, Film, Plus, Share2, Users } from "lucide-react";
 import { useLocalSession } from "@/context/LocalSessionContext";
 import { useAuth } from "@/context/AuthContext";
 import { useEffect, useState } from "react";
@@ -11,6 +11,7 @@ import {
 } from "@/services/lists";
 import { apiShares, type SharedProfile } from "@/services/auth";
 import { buildTitlePath } from "@/lib/watchRoute";
+import { ANDROID_APP_URL } from "@/lib/androidApp";
 
 export default function MyList() {
   const {
@@ -33,7 +34,12 @@ export default function MyList() {
   // "Continue as Viewer" wall -- and pressing it created a *local* session that
   // sets no API token, leaving the share and sync controls permanently hidden.
   // The two systems were disjoint, and this gate is where it showed.
-  const signedIn = Boolean(authUser) || localAuthenticated;
+  // A non-empty local list is enough to show the page even when the viewer has
+  // not signed in. Vyteenda writes matches to that same local store, so
+  // requiring an account here would send a viewer who just matched a film to a
+  // sign-in wall instead of their list.
+  const hasLocalEntries = getMyList().length > 0;
+  const signedIn = Boolean(authUser) || localAuthenticated || hasLocalEntries;
 
   // Lists other people have shared with this account. The local demo profile
   // has no server user, so this stays empty unless there is a real session.
@@ -118,6 +124,15 @@ export default function MyList() {
                 <Film className="h-4 w-4" />
                 Browse Catalog
               </Link>
+              <a
+                href={ANDROID_APP_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-6 py-3 text-sm font-semibold text-white/80 transition hover:border-white/30 hover:bg-white/5"
+              >
+                <Download className="h-4 w-4" />
+                Android app
+              </a>
             </div>
             <p className="mt-6 text-sm text-white/40">
               Viewer profiles are local to this browser and are not synced.
@@ -283,9 +298,10 @@ export default function MyList() {
                       type="button"
                       onClick={() => {
                         removeFromMyList(entry.id);
-                        void pushRemoveToRemote(
-                          Number(entry.id ?? entry.providerId ?? 0)
-                        );
+                        const remoteId = Number(entry.id ?? entry.providerId ?? 0);
+                        if (Number.isFinite(remoteId) && remoteId > 0) {
+                          void pushRemoveToRemote(remoteId);
+                        }
                       }}
                       aria-label={`Remove ${entry.title} from My List`}
                       className="grid h-7 w-7 place-items-center rounded-full text-zinc-500 transition hover:bg-white/10 hover:text-zinc-200"

@@ -7,10 +7,9 @@ import {
   type CSSProperties,
 } from "react";
 import { useLocation, useParams, useSearch } from "wouter";
-import { Check, Star, ArrowLeft, Play, Share2, Plus } from "lucide-react";
+import { Check, Star, ArrowLeft, Play, Share2, Plus, SkipForward } from "lucide-react";
 import { getRating, setRating, subscribeRatings } from "@/services/ratings";
 import {
-  apiUrl,
   fetchDiscover,
   fetchTrailer,
   getStreamSource,
@@ -312,36 +311,22 @@ export function WatchPage() {
     };
   }, [movie?.title, movie?.year]);
 
-  const resolvedStreamId = resolved?.stream?.id;
-  const fetchEpisodeInfo = useCallback(
-    async (s: number, e: number) => {
-      if (!resolvedStreamId || !/^\d+$/.test(resolvedStreamId)) return;
-      try {
-        const details = await fetch(
-          apiUrl(`/api/episodes?tmdb_id=${resolvedStreamId}&season=${s}&episode=${e}`)
-        );
-        if (details.ok) {
-          const data = await details.json();
-          if (data.success) {
-            setEpisodeDetails(data.episode);
-            setCurrentEpisodeTitle(data.episode.title || `S${s} E${e}`);
-          }
-        }
-      } catch (err) {
-        console.warn("Failed to fetch episode details:", err);
-      }
-    },
-    [resolvedStreamId]
-  );
+  const fetchEpisodeInfo = useCallback(async (s: number, e: number) => {
+    // The catalogue knows how many episodes exist, not what each one is about.
+    // A stable "S1 E2" title is the honest fallback; the season row already
+    // has the real numbering.
+    setEpisodeDetails(null);
+    setCurrentEpisodeTitle(`S${s} E${e}`);
+  }, []);
 
   useEffect(() => {
-    if (movie?.mediaType === "tv" && resolvedStreamId) {
+    if (movie?.mediaType === "tv") {
       void fetchEpisodeInfo(season, episode);
     } else {
       setEpisodeDetails(null);
       setCurrentEpisodeTitle(movie?.title || "");
     }
-  }, [season, episode, movie?.mediaType, resolvedStreamId, fetchEpisodeInfo]);
+  }, [season, episode, movie?.mediaType, fetchEpisodeInfo]);
 
   const resolveWithRetry = useCallback(
     async (
@@ -350,14 +335,14 @@ export function WatchPage() {
       options?: {
         season?: number;
         episode?: number;
-        tmdbId?: string;
+        detailPath?: string;
         mediaType?: "movie" | "tv";
       }
     ): Promise<ResolvedStream> => {
-      // The kind belongs in the key. A movie and a series can share a TMDB id
-      // namespace, and caching on the id alone lets a film's entry satisfy a
-      // series' lookup -- the id matches, the content does not.
-      const cacheKey = `${options?.mediaType ?? "movie"}:${options?.tmdbId ?? title}`;
+      // The kind belongs in the key. A film and a series can carry the same
+      // display title, and caching on the title alone lets one satisfy the
+      // other's lookup.
+      const cacheKey = `${options?.mediaType ?? "movie"}:${options?.detailPath ?? title}`;
       const cached = resolveCacheRef.current.get(cacheKey);
       if (cached) return cached;
       const inflight = resolveInflightRef.current.get(cacheKey);
@@ -371,7 +356,11 @@ export function WatchPage() {
       const pending = (async () => {
         for (let attempt = 1; ; attempt++) {
           try {
-            const stream = await resolveStream(title, year, options);
+            const stream = await resolveStream(
+              options?.detailPath ?? title,
+              year,
+              options
+            );
             resolveCacheRef.current.set(cacheKey, stream);
             return stream;
           } catch (error) {
@@ -404,7 +393,7 @@ export function WatchPage() {
   useEffect(() => {
     if (!tmdbId || !movie) return;
     void resolveWithRetry(movie.title, movie.year, {
-      tmdbId,
+      detailPath: tmdbId,
       mediaType: urlType === "tv" ? "tv" : "movie",
     }).catch(() => {
       /* the auto-resolve reports this if the viewer actually plays */
@@ -430,7 +419,7 @@ export function WatchPage() {
         let base = resolved?.stream ?? null;
         if (!base) {
           const stream = await resolveWithRetry(movie.title, movie.year, {
-            tmdbId: movie.providerId,
+            detailPath: movie.providerId || tmdbId,
             mediaType,
           });
           setResolved(stream);
@@ -443,10 +432,11 @@ export function WatchPage() {
 
         let playable: StreamMovie = base;
 
-        if (mediaType && /^\d+$/.test(base.id)) {
+        if (mediaType && base.id) {
           try {
             const source = await getStreamSource({
               tmdbId: base.id,
+              detailPath: base.detail_path || movie.providerId || tmdbId,
               mediaType,
               season: mediaType === "tv" ? targetSeason : undefined,
               episode: mediaType === "tv" ? targetEpisode : undefined,
@@ -457,6 +447,7 @@ export function WatchPage() {
               ...base,
               stream_url: source.url,
               sources: source.sources,
+              streams: source.streams,
               mirrors: source.mirrors,
               // Carried explicitly in both directions so a later direct resolve
               // cannot inherit a stale `true` from a previous embed.
@@ -759,7 +750,7 @@ export function WatchPage() {
     if (!stream || reconnecting) return;
     const mediaType: "movie" | "tv" = isSeries ? "tv" : "movie";
     if (!mediaType) return;
-    if (!/^\d+$/.test(stream.id)) {
+    if (!stream.id) {
       setStreamUnavailable(true);
       return;
     }
@@ -777,6 +768,7 @@ export function WatchPage() {
       }
       const source = await getStreamSource({
         tmdbId: stream.id,
+        detailPath: stream.detail_path || movie?.providerId || tmdbId,
         mediaType,
         season: mediaType === "tv" ? season : undefined,
         episode: mediaType === "tv" ? episode : undefined,
@@ -798,6 +790,7 @@ export function WatchPage() {
                   ...prev.stream,
                   stream_url: source.url,
                   sources: source.sources,
+                  streams: source.streams,
                   mirrors: source.mirrors,
                   is_embed: false,
                   ...(source.subtitles ? { subtitles: source.subtitles } : {}),
@@ -823,7 +816,7 @@ export function WatchPage() {
     } finally {
       setReconnecting(false);
     }
-  }, [resolved, reconnecting, isSeries, season, episode]);
+  }, [resolved, reconnecting, isSeries, season, episode, movie?.providerId, tmdbId]);
 
   useEffect(() => {
     if (
@@ -888,6 +881,31 @@ export function WatchPage() {
     return [];
   }, [resolved, movie]);
 
+  /**
+   * The next episode the catalogue can actually serve: the following number in
+   * this season, or episode 1 of the next season at a season boundary. Null on
+   * a film and on the final episode, so the control never offers a dead end.
+   */
+  const nextEpisodeTarget = useMemo<{ season: number; episode: number } | null>(
+    () => {
+      if (!isSeries) return null;
+      const current = tvSeasons.find(entry => entry.season_number === season);
+      if (!current) return null;
+      if (episode < current.episode_count) {
+        return { season, episode: episode + 1 };
+      }
+      const index = tvSeasons.findIndex(
+        entry => entry.season_number === season
+      );
+      const nextSeason = index >= 0 ? tvSeasons[index + 1] : undefined;
+      if (nextSeason) {
+        return { season: nextSeason.season_number, episode: 1 };
+      }
+      return null;
+    },
+    [isSeries, tvSeasons, season, episode]
+  );
+
   const currentSeasonEpisodes = useMemo<StreamEpisode[]>(() => {
     const manifest = resolved?.stream?.episodes ?? [];
     const fromManifest = manifest
@@ -915,7 +933,7 @@ export function WatchPage() {
 
   useEffect(() => {
     if (movie?.mediaType !== "tv") return;
-    if (!/^\d+$/.test(String(tmdbId))) return;
+    if (!tmdbId) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -1084,7 +1102,7 @@ export function WatchPage() {
         for (const result of results) {
           if (result.status !== "fulfilled") continue;
           for (const item of result.value.items) {
-            const key = String(item.tmdb_id ?? item.id);
+            const key = String(item.detail_path ?? item.tmdb_id ?? item.id);
             if (key === currentKey || seen.has(key)) continue;
             seen.add(key);
             merged.push(item);
@@ -1209,6 +1227,28 @@ export function WatchPage() {
                       <ArrowLeft className="h-[18px] w-[18px]" />
                     </button>
                   </div>
+
+                  {nextEpisodeTarget && !playingTrailer && !streamUnavailable ? (
+                    <div className="absolute top-[18px] right-[18px] z-30">
+                      <button
+                        onClick={() =>
+                          handleSelectEpisode(
+                            nextEpisodeTarget.season,
+                            nextEpisodeTarget.episode
+                          )
+                        }
+                        aria-label={`Play next episode: season ${nextEpisodeTarget.season} episode ${nextEpisodeTarget.episode}`}
+                        className="flex items-center gap-2 rounded-full border border-white/[0.18] bg-[rgba(8,11,20,0.55)] px-4 py-2 text-[13px] font-medium text-[#f1f3f8] backdrop-blur-md transition hover:bg-white/15"
+                      >
+                        <SkipForward className="h-4 w-4" />
+                        <span className="hidden sm:inline">Next episode</span>
+                        <span className="sm:hidden">
+                          S{nextEpisodeTarget.season} E
+                          {nextEpisodeTarget.episode}
+                        </span>
+                      </button>
+                    </div>
+                  ) : null}
 
                   {upcoming && !resolved ? (
                     <>
@@ -1379,17 +1419,24 @@ export function WatchPage() {
                       const wasInList = isInMyList(movie.id);
                       toggleMyList(movie);
                       toast.success(wasInList ? "Removed from your list" : "Added to your list!");
+                      // The account row is keyed on a numeric id from the
+                      // retired catalogue. A MovieBox slug is not a number, so
+                      // there is nothing to sync -- the local list still works.
+                      const remoteId = Number(movie.providerId ?? movie.id);
+                      const canSync = Number.isFinite(remoteId) && remoteId > 0;
                       if (wasInList) {
-                        void pushRemoveToRemote(Number(movie.providerId ?? movie.id ?? 0));
+                        if (canSync) void pushRemoveToRemote(remoteId);
                         recordTaste("save", movie, { weight: -0.5 });
                       } else {
                         recordTaste("save", movie, { weight: 1 });
-                        void pushToggleToRemote({
-                          id: Number(movie.providerId ?? movie.id),
-                          mediaType: movie.mediaType,
-                          title: movie.title,
-                          poster: movie.poster,
-                        });
+                        if (canSync) {
+                          void pushToggleToRemote({
+                            id: remoteId,
+                            mediaType: movie.mediaType,
+                            title: movie.title,
+                            poster: movie.poster,
+                          });
+                        }
                       }
                     }}
                   >
@@ -1508,14 +1555,20 @@ export function WatchPage() {
                 ) : similar.length ? (
                   <div className="space-y-1">
                     {similar.map(item => {
-                      const similarId = Number(item.tmdb_id ?? 0);
+                      // The route handle is the detail slug. `tmdb_id` on this
+                      // catalogue is the 19-digit subject id, which must never
+                      // pass through Number.
+                      const similarId =
+                        item.detail_path ||
+                        (item.tmdb_id != null ? String(item.tmdb_id) : "") ||
+                        item.id;
                       return (
                         <button
-                          key={String(item.tmdb_id ?? item.id)}
+                          key={similarId}
                           type="button"
-                          disabled={isNaN(similarId) || similarId <= 0}
+                          disabled={!similarId}
                           onClick={() => {
-                            if (isNaN(similarId) || similarId <= 0) return;
+                            if (!similarId) return;
                             navigate(
                               buildWatchPath(similarId, {
                                 mediaType: item.media_type === "tv" ? "tv" : "movie",
