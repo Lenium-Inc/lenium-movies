@@ -24,5 +24,11 @@
         }
       ]
     }
-  ]
+  ],
+  "functions": {
+    "api/image.ts": {
+      "memory": 1024,
+      "maxDuration": 30
+    }
+  }
 }

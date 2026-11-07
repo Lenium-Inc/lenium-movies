@@ -27,11 +27,19 @@ env:
   # could never reach the backend. Override with a repository variable when the
   # API moves.
   VITE_STREAMVY_API_BASE_URL: ${{ vars.VITE_STREAMVY_API_BASE_URL || 'https://movie-api.streamvy.me' }}
+  # A monotonic versionCode is what lets a new APK install *over* the old one.
+  # GitHub's run number only ever increases, so it is the natural source.
+  CAP_VERSION_CODE: ${{ github.run_number }}
+  CAP_VERSION_NAME: 1.${{ github.run_number }}
 
 jobs:
   apk:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      # Referenced through `env` in the signing step because GitHub does not
+      # allow the `secrets` context directly inside an `if:` expression.
+      SIGNING_MATERIAL_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
     steps:
       - uses: actions/checkout@v7
 
@@ -61,6 +69,22 @@ jobs:
       - name: Sync Capacitor
         run: npx cap sync android
 
+      # A stable signing key is what makes "install over the top" possible. If
+      # the repository has no keystore secret yet, the build still succeeds with
+      # the ephemeral debug key -- it just cannot update an existing install.
+      - name: Configure update signing
+        if: env.SIGNING_MATERIAL_B64 != ''
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          echo "$SIGNING_MATERIAL_B64" | base64 --decode > android/app/streamvy-release.keystore
+          echo "ANDROID_KEYSTORE_PATH=$PWD/android/app/streamvy-release.keystore" >> "$GITHUB_ENV"
+          echo "ANDROID_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "ANDROID_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "ANDROID_KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
+
       - name: Assemble debug APK
         working-directory: android
         run: ./gradlew assembleDebug --no-daemon
@@ -75,10 +99,25 @@ jobs:
           cp android/app/build/outputs/apk/debug/app-debug.apk \
             "artifact/streamvy-android.apk"
 
+      # Read by the app's update check (`/api/android-version`) before it offers
+      # the download. Published next to the APK so the two can never disagree.
+      - name: Write update manifest
+        run: |
+          cat > artifact/android-version.json <<EOF
+          {
+            "versionCode": ${{ github.run_number }},
+            "versionName": "1.${{ github.run_number }}",
+            "url": "https://github.com/Lenium-Inc/lenium-movies/releases/download/android-latest/streamvy-android.apk",
+            "notes": "Build ${{ github.run_number }} (${GITHUB_SHA::7})."
+          }
+          EOF
+
       - uses: actions/upload-artifact@v7
         with:
           name: streamvy-android-debug
-          path: artifact/*.apk
+          path: |
+            artifact/*.apk
+            artifact/android-version.json
           if-no-files-found: error
           retention-days: 30
 
@@ -88,9 +127,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view android-latest > /dev/null 2>&1; then
-            gh release upload android-latest artifact/streamvy-android.apk --clobber
+            gh release upload android-latest \
+              artifact/streamvy-android.apk \
+              artifact/android-version.json --clobber
           else
-            gh release create android-latest artifact/streamvy-android.apk \
+            gh release create android-latest \
+              artifact/streamvy-android.apk \
+              artifact/android-version.json \
               --title "Stream Vy for Android" \
               --notes "Latest debug build from main. Download streamvy-android.apk below." \
               --latest

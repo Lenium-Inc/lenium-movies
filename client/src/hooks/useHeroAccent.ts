@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
-import { MOVIE_API_BASE_URL } from "@/services/api";
-import { tmdbImage } from "@/lib/tmdbImages";
+import { optimizedImage } from "@/lib/imageOptimize";
 
 /** Emitted when nothing can be sampled -- a missing backdrop, a tainted canvas,
  *  or a frame with no saturated colour in it. */
@@ -191,7 +190,9 @@ export function useHeroAccent(url: string | null | undefined): string {
      * average it down to 2304 pixels -- by far the most expensive thing on the
      * home page, and the one nobody could see.
      */
-    const sampleUrl = tmdbImage(url, "w185") || url;
+    // `optimizedImage` leaves an already-built proxy url untouched, so this
+    // works whether the caller hands us raw artwork or `/api/image?...`.
+    const sampleUrl = optimizedImage(url, 185);
     image.onload = () => {
       if (cancelled) return;
       try {
@@ -206,7 +207,7 @@ export function useHeroAccent(url: string | null | undefined): string {
     image.onerror = () => {
       if (!cancelled) setAccent(FALLBACK_ACCENT);
     };
-    image.src = `${MOVIE_API_BASE_URL}/api/image?url=${encodeURIComponent(sampleUrl)}`;
+    image.src = sampleUrl;
     return () => {
       cancelled = true;
     };

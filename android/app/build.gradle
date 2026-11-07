@@ -1,5 +1,35 @@
 apply plugin: 'com.android.application'
 
+// ---------------------------------------------------------------------------
+// Version + signing.
+//
+// The APK is distributed outside the Play Store and updates itself by
+// installing a newer build over the old one. That only works when the
+// versionCode increases and both builds share a signing key; a fresh debug
+// keystore per CI runner changes the key, so Android refuses the update and the
+// user is forced to uninstall. Both values therefore come from the environment:
+//
+//   CAP_VERSION_CODE / CAP_VERSION_NAME   supplied by the release workflow
+//   ANDROID_KEYSTORE_PATH / _PASSWORD / ANDROID_KEY_ALIAS / _PASSWORD
+//                                         a stable keystore from CI secrets
+//
+// Without the keystore the debug build still works; it just cannot update an
+// existing install.
+// ---------------------------------------------------------------------------
+def capVersionCode = (System.getenv("CAP_VERSION_CODE") ?: project.findProperty("versionCode") ?: "2").toString().toInteger()
+def capVersionName = (System.getenv("CAP_VERSION_NAME") ?: project.findProperty("versionName") ?: "1.1").toString()
+
+def stableKeystorePath = System.getenv("ANDROID_KEYSTORE_PATH")?.trim()
+def stableKeystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+def stableKeyAlias = System.getenv("ANDROID_KEY_ALIAS")
+def stableKeyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+def hasStableSigning = stableKeystorePath
+if (hasStableSigning && !file(stableKeystorePath).exists()) {
+    // A silently debug-signed APK would install over nothing: Android rejects
+    // it because the signature changed. Fail before publishing that build.
+    throw new GradleException("ANDROID_KEYSTORE_PATH is set but not found: ${stableKeystorePath}")
+}
+
 android {
     namespace = "me.streamvy.movies"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +37,8 @@ android {
         applicationId "me.streamvy.movies"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode capVersionCode
+        versionName capVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,8 +46,22 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        if (hasStableSigning) {
+            stable {
+                storeFile file(stableKeystorePath)
+                storePassword stableKeystorePassword
+                keyAlias stableKeyAlias
+                keyPassword stableKeyPassword
+            }
+        }
+    }
     buildTypes {
+        debug {
+            if (hasStableSigning) signingConfig signingConfigs.stable
+        }
         release {
+            if (hasStableSigning) signingConfig signingConfigs.stable
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }

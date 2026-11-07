@@ -13,7 +13,7 @@ import {
   SELECT_TITLE_EVENT,
   type PaletteItem,
 } from "@/components/layout/NavbarSearch";
-import { tmdbImage } from "@/lib/tmdbImages";
+import { optimizedImage } from "@/lib/imageOptimize";
 import { buildTitlePath } from "@/lib/watchRoute";
 import { CatalogEmptyState, SearchStatusBar } from "@/components/movies/CatalogEmptyState";
 import { Spotlight } from "@/components/movies/Spotlight";
@@ -131,19 +131,17 @@ export default function Home() {
   // only rendered when the home view actually has titles to feature.
   const showHero = isHomeView && heroItems.length > 0 && !loading;
 
-  const heroBackdrop = heroActive?.backdrop;
-  // `tmdbImage` rewrites the size segment. The `startsWith("http")` branch this
-  // replaces matched every backend value and so handed back the stored w1280,
-  // upscaled to fill an 80vh wash across the full viewport width.
-  const heroArtUrl = heroBackdrop ? tmdbImage(heroBackdrop, "original") : null;
-  // The ambient wash is blurred to the point where detail is wasted, so it
-  // asks for a 780px rendition. It used to reuse `original` -- the same
-  // multi-megabyte file the hero displays, downloaded a second time.
-  const heroWashUrl = heroBackdrop ? tmdbImage(heroBackdrop, "w780") : null;
+  // The catalogue's landscape stills are often empty, so the hero falls back
+  // to the portrait poster it does have. Both go through `optimizedImage`: a
+  // 3840px original behind an 80vh blurred wash was the single heaviest image
+  // on first paint.
+  const heroArtwork = heroActive?.backdrop || heroActive?.poster || null;
+  const heroArtUrl = heroArtwork ? optimizedImage(heroArtwork, 640) : null;
+  const heroWashUrl = heroArtwork ? optimizedImage(heroArtwork, 640) : null;
 
   // The accent is emitted by whatever artwork the hero is showing, so the nav
   // rule, the carousel progress and the hero glow all change with the slide.
-  const accent = useHeroAccent(heroArtUrl);
+  const accent = useHeroAccent(heroArtwork);
   const accentStyle = {
     background: "linear-gradient(180deg, var(--bg) 0%, var(--bg-raised) 100%)",
     color: "var(--text)",
@@ -194,6 +192,18 @@ export default function Home() {
               onActiveChange={setHeroActive}
               onMoreInfo={openTitle}
             />
+          </div>
+        ) : isHomeView && loading ? (
+          /* Reserve the hero's exact box while `/home` is in flight. Rendering
+             nothing and then inserting a 540-660px block was the single largest
+             layout shift on the page. */
+          <div className="relative">
+            <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+              <div
+                aria-hidden
+                className="h-[min(660px,72vh)] min-h-[540px] w-full animate-pulse rounded-3xl border border-white/[0.07] bg-neutral-900/70"
+              />
+            </div>
           </div>
         ) : null}
 

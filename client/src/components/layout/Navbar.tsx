@@ -6,6 +6,7 @@ import type { View } from "@/components/layout/navigation";
 import { ProfileMenu } from "@/components/layout/ProfileMenu";
 import { NavbarSearch } from "@/components/layout/NavbarSearch";
 import { NotificationsBell } from "@/components/layout/NotificationsBell";
+import { AndroidDownloadLink } from "@/components/layout/AndroidDownloadLink";
 import { savedListIds, subscribeList } from "@/services/lists";
 
 interface NavbarProps {
@@ -145,6 +146,10 @@ export function Navbar({ view, onNavigate }: NavbarProps) {
         </nav>
 
         <div className="ml-auto flex min-w-0 items-center gap-2.5">
+          {/* The web is the storefront for the sideloaded APK, so the download
+              lives in the persistent chrome rather than only behind a profile
+              dropdown the viewer may never open. */}
+          <AndroidDownloadLink className="hidden lg:inline-flex" />
           {/*
             A real input, not a button that opens one. It used to be two
             separate controls -- a wide pill on desktop and an icon on mobile --
@@ -197,6 +202,9 @@ export function Navbar({ view, onNavigate }: NavbarProps) {
             <VyteendaLink className="text-sm font-medium" />
             <MyListLink className="text-sm font-medium" />
           </nav>
+          <div className="px-4 pb-3">
+            <AndroidDownloadLink className="w-full justify-center" />
+          </div>
         </div>
       )}
     </header>

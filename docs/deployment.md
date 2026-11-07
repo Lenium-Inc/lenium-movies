@@ -99,3 +99,53 @@ of the app: see [security](security.md).
    deployed build, not just locally.
 6. Decide whether rate limiting at the app layer is acceptable to defer. It is the
    one gap here that a hostile caller can exploit directly.
+
+## Artwork downscaling (`/api/image`)
+
+The catalogue CDN (`pbcdn*.aoneroom.com`) serves one rendition per asset --
+usually 3840px and several megabytes -- even for a poster painted into a 200px
+card. `api/image.ts` is a Node-runtime Vercel function that fetches the source,
+downscales it with `sharp` to the requested width, and returns WebP. Responses
+are `immutable` and cached at the edge by URL + width, so the encode cost is
+paid once per variant.
+
+- `sharp` is a normal dependency, not a dev dependency; Vercel traces the
+  Linux binary during the build. The function is configured in `vercel.json`
+  with 1 GB of memory and a 30 s ceiling.
+- Only `*.aoneroom.com` hosts are fetched server-side. TMDB URLs take a 307
+  redirect to the matching `image.tmdb.org` rendition instead. Do not widen the
+  allowlist -- the URL is caller-supplied, so the allowlist is the SSRF
+  boundary.
+- `VITE_IMAGE_PROXY_BASE_URL` overrides the proxy origin; on the web build the
+  default is same-origin `/api`, and in the Capacitor shell it is the media
+  relay origin.
+
+## Android updates (sideloaded APK)
+
+The APK is published to the rolling `android-latest` GitHub release by
+`.github/workflows/android-apk.yml`. Android cannot update a sideloaded app by
+itself, so the app compares its own `versionCode` with
+`android-version.json` (published beside the APK) through
+`/api/android-version` and offers the download when a newer build exists.
+
+Two repository settings make install-over-the-top work:
+
+1. **A stable signing key.** Without one, every CI runner generates a fresh
+   debug keystore, Android rejects the update because the signature changed, and
+   the only way forward is to uninstall — the exact problem this fixes. Add
+   these Actions secrets:
+   - `ANDROID_KEYSTORE_BASE64` — `base64 -i streamvy-release.keystore`
+   - `ANDROID_KEYSTORE_PASSWORD`
+   - `ANDROID_KEY_ALIAS`
+   - `ANDROID_KEY_PASSWORD`
+
+   The workflow decodes the keystore and signs the debug APK with it. Existing
+   installs signed with the old ephemeral key need one final uninstall; every
+   update after that installs over the previous build and keeps app data.
+
+2. **A monotonic `versionCode`.** The workflow sets `CAP_VERSION_CODE` to the
+   GitHub run number and `CAP_VERSION_NAME` to `1.<run>`, and `build.gradle`
+   reads both. Every build therefore supersedes the last.
+
+Do not reuse a versionCode. Android will treat a same-or-newer installed build
+as "not an update" and the prompt will stay silent.

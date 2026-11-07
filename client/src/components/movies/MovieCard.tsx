@@ -2,10 +2,10 @@ import { useState } from "react";
 import { Star, Film, Tv, Bookmark, Check } from "lucide-react";
 import { useLocation } from "wouter";
 import {
-  POSTER_SIZES_ATTRIBUTE,
-  POSTER_SRCSET_SIZES,
-  tmdbSrcSet,
-} from "@/lib/tmdbImages";
+  POSTER_IMAGE_SIZES,
+  optimizedImage,
+  posterSrcSet,
+} from "@/lib/imageOptimize";
 import { buildTitlePath } from "@/lib/watchRoute";
 import type { Movie } from "./types";
 
@@ -73,9 +73,10 @@ export const MovieCard: React.FC<MovieCardProps> = ({
   const hasPoster = Boolean(movie.poster) && !posterFailed;
 
   // The browser picks the smallest rendition that still covers the painted
-  // size at the device's pixel ratio, so a 3x phone gets w780 without every
-  // desktop tile downloading a full-resolution poster it cannot show.
-  const posterSrcSet = tmdbSrcSet(movie.poster, POSTER_SRCSET_SIZES);
+  // size at the device's pixel ratio. TMDB tiles get their native renditions;
+  // every other artwork host is downscaled once by `/api/image` instead of
+  // shipping the 3840px original into a ~200px tile.
+  const cardPosterSrcSet = posterSrcSet(movie.poster);
 
   const handlePlayClick = () => {
     if (onPlay) {
@@ -136,9 +137,9 @@ export const MovieCard: React.FC<MovieCardProps> = ({
         <div className="relative aspect-[2/3] w-full overflow-hidden bg-zinc-800">
           {hasPoster ? (
             <img
-              src={movie.poster ?? ""}
-              srcSet={posterSrcSet}
-              sizes={posterSrcSet ? POSTER_SIZES_ATTRIBUTE : undefined}
+              src={optimizedImage(movie.poster, 342)}
+              srcSet={cardPosterSrcSet}
+              sizes={cardPosterSrcSet ? POSTER_IMAGE_SIZES : undefined}
               alt={movie.title}
               className="h-full w-full object-cover"
               loading="lazy"

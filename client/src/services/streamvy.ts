@@ -404,6 +404,21 @@ interface CacheEntry<T> {
 const detailCache = new Map<string, CacheEntry<MovieBoxDetail>>();
 const homeCache: { entry: CacheEntry<MovieBoxHome> | null } = { entry: null };
 
+/**
+ * The last `/home` answer, persisted across page loads.
+ *
+ * `/home` is the one call every visit needs and it routinely takes 1.5-2s at
+ * the origin. Keeping the previous payload in `localStorage` lets a returning
+ * viewer paint the real shelves on the first tick while a fresh copy is
+ * fetched in the background; the network becomes an upgrade rather than a gate.
+ * The TTL is deliberately longer than the in-memory one -- a quarter-hour-old
+ * catalogue is still a useful catalogue, and a stricter TTL would put the
+ * viewer back in front of an empty grid to save a title that changed minutes
+ * ago.
+ */
+const HOME_CACHE_KEY = "streamvy:home:v2";
+const HOME_PERSIST_TTL_MS = 30 * 60 * 1000;
+
 const detailPathBySubject = new Map<string, string>();
 const subjectIdByPath = new Map<string, string>();
 const posterBySlug = new Map<string, string>();
@@ -455,6 +470,58 @@ function rememberDetail(detail: MovieBoxDetail): void {
 // Raw endpoint calls.
 // ---------------------------------------------------------------------------
 
+function rememberHome(payload: MovieBoxHome): void {
+  for (const section of payload.sections ?? []) {
+    for (const item of section.items ?? []) rememberSubject(item);
+  }
+}
+
+function readPersistedHome(): MovieBoxHome | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(HOME_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as {
+      at?: number;
+      payload?: MovieBoxHome;
+    };
+    if (!parsed?.payload || !Array.isArray(parsed.payload.sections)) {
+      return null;
+    }
+    if (!parsed.at || Date.now() - parsed.at > HOME_PERSIST_TTL_MS) {
+      return null;
+    }
+    rememberHome(parsed.payload);
+    return parsed.payload;
+  } catch {
+    // Private mode, a quota error or a corrupt entry. The network path below
+    // is the fallback, not a second failure.
+    return null;
+  }
+}
+
+function writePersistedHome(payload: MovieBoxHome): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      HOME_CACHE_KEY,
+      JSON.stringify({ at: Date.now(), payload })
+    );
+  } catch {
+    // A full quota must not break browsing.
+  }
+}
+
+function fetchHome(): Promise<MovieBoxHome> {
+  return streamvyGet<MovieBoxHome>("/home", { context: "Home" }).then(
+    payload => {
+      rememberHome(payload);
+      writePersistedHome(payload);
+      return payload;
+    }
+  );
+}
+
 /** `GET /home`. */
 export function getHome(force = false): Promise<MovieBoxHome> {
   const now = Date.now();
@@ -462,14 +529,25 @@ export function getHome(force = false): Promise<MovieBoxHome> {
   if (!force && cached && now - cached.at < CATALOG_CACHE_TTL_MS) {
     return cached.promise;
   }
-  const promise = streamvyGet<MovieBoxHome>("/home", { context: "Home" }).then(
-    payload => {
-      for (const section of payload.sections ?? []) {
-        for (const item of section.items ?? []) rememberSubject(item);
-      }
-      return payload;
-    }
-  );
+
+  // A persisted answer is returned immediately and refreshed behind the
+  // viewer. The in-flight network promise replaces the memory entry so a later
+  // call gets the fresh one, but nothing on this call waits for it.
+  const persisted = force ? null : readPersistedHome();
+  if (persisted) {
+    const resolved = Promise.resolve(persisted);
+    homeCache.entry = { at: now, promise: resolved };
+    fetchHome()
+      .then(payload => {
+        homeCache.entry = { at: Date.now(), promise: Promise.resolve(payload) };
+      })
+      .catch(() => {
+        // Keep serving the persisted copy when the refresh fails.
+      });
+    return resolved;
+  }
+
+  const promise = fetchHome();
   homeCache.entry = { at: now, promise };
   promise.catch(() => {
     if (homeCache.entry?.promise === promise) homeCache.entry = null;

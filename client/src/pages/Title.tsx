@@ -11,7 +11,13 @@ import { fetchTrailerByTmdbId, type TrailerInfo } from "@/services/api";
 import { fetchMovieMeta, type MovieMeta } from "@/services/meta";
 import { savedListIds, subscribeList, toggleListSave } from "@/services/lists";
 import { useEmbedFailure } from "@/hooks/useEmbedFailure";
-import { tmdbImage, type TmdbImageSize } from "@/lib/tmdbImages";
+import {
+  BACKDROP_IMAGE_SIZES,
+  POSTER_IMAGE_SIZES,
+  backdropSrcSet,
+  optimizedImage,
+  posterSrcSet,
+} from "@/lib/imageOptimize";
 import { resolveTrailer } from "@/lib/tmdbTrailers";
 import { TrailerBrandingMask } from "@/components/stream/TrailerBrandingMask";
 import { buildTitlePath, buildWatchPath } from "@/lib/watchRoute";
@@ -19,13 +25,6 @@ import { publishWatchSeo, resetWatchSeo } from "@/lib/watchSeo";
 import { formatRuntime } from "@/lib/format";
 import { genreColor } from "@/lib/genreColors";
 import type { Movie } from "@/components/movies/types";
-
-const TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p";
-
-function imageUrl(path: string, size: TmdbImageSize): string {
-  if (path.startsWith("http")) return tmdbImage(path, size);
-  return `${TMDB_IMAGE_BASE_URL}/${size}${path}`;
-}
 
 function SectionHead({
   id,
@@ -250,9 +249,13 @@ export default function TitlePage() {
               <section className="relative h-[64vh] min-h-[460px] w-full overflow-hidden">
                 {movie.backdrop ? (
                   <img
-                    src={imageUrl(movie.backdrop, "original")}
+                    src={optimizedImage(movie.backdrop, 1280)}
+                    srcSet={backdropSrcSet(movie.backdrop)}
+                    sizes={BACKDROP_IMAGE_SIZES}
                     alt=""
                     loading="eager"
+                    fetchPriority="high"
+                    decoding="async"
                     className="absolute inset-0 h-full w-full object-cover"
                   />
                 ) : (
@@ -409,9 +412,10 @@ export default function TitlePage() {
                             <div className="mx-auto aspect-square w-20 overflow-hidden rounded-full border border-white/10 bg-white/5">
                               {person.profilePath ? (
                                 <img
-                                  src={imageUrl(person.profilePath, "w185")}
+                                  src={optimizedImage(person.profilePath, 185)}
                                   alt=""
                                   loading="lazy"
+                                  decoding="async"
                                   className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.06]"
                                 />
                               ) : (
@@ -456,9 +460,12 @@ export default function TitlePage() {
                           <div className="relative aspect-[2/3] overflow-hidden rounded-md border border-white/10 bg-black">
                             {item.poster ? (
                               <img
-                                src={imageUrl(item.poster, "w342")}
+                                src={optimizedImage(item.poster, 342)}
+                                srcSet={posterSrcSet(item.poster)}
+                                sizes={POSTER_IMAGE_SIZES}
                                 alt=""
                                 loading="lazy"
+                                decoding="async"
                                 className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.06]"
                               />
                             ) : (

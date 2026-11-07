@@ -39,4 +39,22 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Keeps playback from sleeping the device mid-film. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Lets the app distinguish a dropped network from a server error. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Required on Android 13+ before any notification (download complete,
+         new-episode reminders) may be posted. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- The app ships as a sideloaded APK, so updates are installed by the app
+         itself rather than by the Play Store. Android 8+ gates that behind this
+         permission. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Saving an APK/video to shared storage on pre-scoped-storage devices. -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
 </manifest>

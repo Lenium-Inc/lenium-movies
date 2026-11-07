@@ -1,5 +1,6 @@
 import { useLocation } from "wouter";
 import { Play } from "lucide-react";
+import { optimizedImage } from "@/lib/imageOptimize";
 import { buildTitlePath } from "@/lib/watchRoute";
 import { RowScroller } from "./RowScroller";
 import type { Movie } from "./types";
@@ -86,7 +87,7 @@ export function ContinueRow({ title, items }: ContinueRowProps) {
                 </span>
                 {art ? (
                   <img
-                    src={art}
+                    src={optimizedImage(art, 640)}
                     alt=""
                     loading="lazy"
                     decoding="async"

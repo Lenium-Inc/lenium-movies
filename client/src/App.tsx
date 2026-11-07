@@ -9,6 +9,7 @@ import { useAuth } from "./context/AuthContext";
 import { useIdleLogout } from "./hooks/useIdleLogout";
 import Home from "./pages/Home";
 import { RouteSeo } from "./components/layout/RouteSeo";
+import { AppUpdatePrompt } from "./components/layout/AppUpdatePrompt";
 
 // Route-level code splitting. Home and NotFound stay eager: they are the
 // landing and catch-all, the two chunks every session touches. Everything
@@ -128,6 +129,7 @@ export default function App() {
         */}
         <div className="sv-shell min-h-screen">
           <Router />
+          <AppUpdatePrompt />
         </div>
       </ThemeProvider>
     </ErrorBoundary>

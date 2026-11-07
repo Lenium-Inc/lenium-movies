@@ -13,7 +13,8 @@ import { toast } from "sonner";
 import type { Movie } from "./types";
 import { RemindMeButton } from "./RemindMeButton";
 import { formatRuntime } from "@/lib/format";
-import { tmdbImage, tmdbSrcSet } from "@/lib/tmdbImages";
+import { tmdbImage } from "@/lib/tmdbImages";
+import { optimizedImage } from "@/lib/imageOptimize";
 import { genreColor, withAlpha } from "@/lib/genreColors";
 import { absoluteUrl } from "@/lib/siteUrl";
 import { buildTitlePath } from "@/lib/watchRoute";
@@ -44,19 +45,21 @@ export interface SpotlightProps {
 const EASE = [0.32, 0.72, 0, 1] as const;
 
 /**
- * The hero card tops out at 1280 CSS px, so w1280 covers it at 1x and is only
- * mildly soft at 2x. The previous `original` rendition was frequently a
- * 3840px JPEG -- several megabytes per rotation for detail the card's scrims
- * and copy obscure anyway. The browser is offered a 780 candidate too, so a
- * phone does not download the full 1280.
+ * One rendition, not a `srcset`: Chrome fetched both the `src` and the selected
+ * candidate for this full-bleed image, doubling the bytes of the heaviest asset
+ * on the page. 1600 CSS px is sharp enough for the card and is a fraction of
+ * the 3840px original MovieBox stores.
  */
-const HERO_SRCSET_SIZES = ["w780", "w1280"] as const;
-const HERO_SIZES_ATTRIBUTE =
-  "(min-width: 1280px) 1280px, (min-width: 768px) 100vw, 100vw";
-
+/**
+ * The hero can fall back to the poster when the catalogue has no landscape
+ * still -- which is the common case for MovieBox titles, whose `stills` field
+ * is empty. Previously that left the hero as a blank gradient even though the
+ * title had artwork. The poster is cropped by `object-cover`, which reads far
+ * better than an empty card.
+ */
 function backdropUrl(backdrop: string | null | undefined): string | null {
   if (!backdrop) return null;
-  return tmdbImage(backdrop, "w1280") || null;
+  return optimizedImage(backdrop, 1600) || null;
 }
 
 /**
@@ -143,7 +146,9 @@ export function Spotlight({
   }, [count, paused, rotateSeconds, index]);
 
   const current: Movie | undefined = count > 0 ? items[index] : undefined;
-  const art = backdropUrl(current?.backdrop ?? current?.backdrop_url);
+  const art = backdropUrl(
+    current?.backdrop ?? current?.backdrop_url ?? current?.poster
+  );
 
   /*
    * Warm the next slide's artwork while the current one is on screen.
@@ -156,7 +161,9 @@ export function Spotlight({
   useEffect(() => {
     if (count < 2) return;
     const next = items[(index + 1) % count];
-    const nextArt = backdropUrl(next?.backdrop ?? next?.backdrop_url);
+    const nextArt = backdropUrl(
+      next?.backdrop ?? next?.backdrop_url ?? next?.poster
+    );
     if (!nextArt) return;
     let cancelled = false;
     const warm = () => {
@@ -353,11 +360,6 @@ export function Spotlight({
                 {art ? (
                   <img
                     src={art}
-                    srcSet={
-                      tmdbSrcSet(current.backdrop ?? current.backdrop_url, HERO_SRCSET_SIZES) ||
-                      undefined
-                    }
-                    sizes={HERO_SIZES_ATTRIBUTE}
                     alt=""
                     aria-hidden
                     loading="eager"
