@@ -87,8 +87,13 @@ function VyteendaLink({ className }: { className: string }) {
  * command-palette search trigger (⌘K / "/"), and the profile entry.
  */
 export function Navbar({ view, onNavigate }: NavbarProps) {
+  const [location] = useLocation();
   const [scrolled, setScrolled] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [location]);
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 16);
@@ -156,7 +161,7 @@ export function Navbar({ view, onNavigate }: NavbarProps) {
             <NavbarSearch />
           </div>
 
-          <div className="shrink-0">
+          <div className="hidden shrink-0 sm:block">
             <NotificationsBell />
           </div>
 
@@ -172,7 +177,7 @@ export function Navbar({ view, onNavigate }: NavbarProps) {
               <Menu className="h-4 w-4" />
             )}
           </button>
-          <div className="shrink-0">
+          <div className="hidden shrink-0 sm:block">
             <ProfileMenu />
           </div>
         </div>
@@ -181,8 +186,14 @@ export function Navbar({ view, onNavigate }: NavbarProps) {
       {/* Mobile menu panel */}
       {menuOpen && (
         <div className="sv-chrome border-t lg:hidden">
-          <div className="px-4 pt-3 sm:hidden">
-            <NavbarSearch fullWidth />
+          {/* Mobile view (<sm): Notification & profile thingy under the menu, no search bar */}
+          <div className="flex items-center justify-between border-b border-white/10 px-4 py-3 sm:hidden">
+            <div className="flex items-center gap-3">
+              <ProfileMenu />
+            </div>
+            <div className="flex items-center gap-2">
+              <NotificationsBell />
+            </div>
           </div>
           <nav className="grid grid-cols-2 gap-x-4 gap-y-3 px-4 py-4 sm:grid-cols-3">
             {NAV_LINKS.map(link => (

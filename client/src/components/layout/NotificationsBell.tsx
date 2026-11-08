@@ -142,7 +142,7 @@ export function NotificationsBell() {
       </button>
 
       {open && (
-        <div className="fixed left-4 right-4 top-[72px] z-50 rounded-xl border border-zinc-800 bg-zinc-900/95 p-2 shadow-2xl backdrop-blur-xl sm:absolute sm:left-auto sm:right-0 sm:top-full sm:mt-3 sm:w-[340px]">
+        <div className="absolute right-0 top-full z-50 mt-2 w-[calc(100vw-2rem)] max-w-[340px] rounded-xl border border-zinc-800 bg-zinc-900/95 p-2 shadow-2xl backdrop-blur-xl sm:left-auto sm:right-0 sm:mt-3 sm:w-[340px]">
           <div className="flex items-center justify-between px-2 py-1.5">
             <p className="text-sm font-semibold text-white">Reminders</p>
             {count > 0 && (
