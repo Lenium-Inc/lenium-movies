@@ -52,6 +52,28 @@ Unlisted origins receive no `Access-Control-Allow-Origin` and are blocked by the
 browser. Requests with no `Origin` header — including the Express wrapper's
 server-to-server call into Flask — are unaffected.
 
+## Account API origin
+
+The account API (`/api/auth/*`) is served by this deployment, **not** by the
+MovieBox catalogue API. The SPA resolves it separately:
+
+| Build            | Value when `VITE_AUTH_API_BASE_URL` is unset |
+| ---------------- | -------------------------------------------- |
+| Production       | same origin (`/api/auth/*` on Vercel)        |
+| Local development| `VITE_API_BASE_URL`, when it names a local account backend |
+
+Set `VITE_AUTH_API_BASE_URL` to move the API to another origin. It is inlined at
+build time, so changing it needs a redeploy. The retired Flask/Render service is
+not a fallback.
+
+The Capacitor APK loads the bundled SPA from `https://localhost`, so whatever
+serves `/api/auth/*` must allow that origin (and `capacitor://localhost`).
+Same-origin on the website does not carry over to the app.
+
+The title page's trailer lookup (`/api/trailer`) needs `TMDB_API_KEY` on the
+Vercel project. It is an Edge function and answers `{ "trailer": null }`
+when no playable YouTube trailer exists, so the page falls back to artwork.
+
 ## Headers Render injects after the app
 
 `X-Render-Origin-Server` and `rndr-id` are added by Render's edge *after* this

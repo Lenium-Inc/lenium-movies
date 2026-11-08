@@ -81,6 +81,12 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    // Vite 7 defaults to the "baseline widely available" set (Chromium 107+).
+    // The Android app runs in the device's system WebView, and Huawei phones
+    // update that through AppGallery rather than Play, so a 2020-era device can
+    // still be on Chromium 87-99. Transpiling down to that floor costs a little
+    // bundle size and keeps the shell executable there.
+    target: ["chrome87", "safari14", "firefox91"],
     rollupOptions: {
       output: {
         // Framework and icon code change on almost every deploy while the

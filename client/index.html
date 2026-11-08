@@ -206,10 +206,25 @@
     -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!--
+      A stylesheet <link> is render-blocking even with display=swap. On a
+      device that cannot reach Google (de-Googled Android/HarmonyOS, or a
+      blocked network) that turns a missing font into a blank page while the
+      request times out. Load it off the critical path and let the system font
+      paint first; the browser swaps in the web font if and when it arrives.
+    -->
     <link
       rel="stylesheet"
       href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,500;1,600&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap"
+      media="print"
+      onload="this.media='all'"
     />
+    <noscript>
+      <link
+        rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,500;1,600&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap"
+      />
+    </noscript>
   </head>
   <body>
     <div id="root"></div>

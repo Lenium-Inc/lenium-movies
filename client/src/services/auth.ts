@@ -6,7 +6,8 @@
  * Watch history lives per-account on the backend, so switching accounts means
  * switching histories.
  */
-import { MOVIE_API_BASE_URL } from "@/services/api";
+import { Capacitor } from "@capacitor/core";
+import { STREAMVY_PROXY_BASE_URL } from "@/services/streamvy";
 
 export interface ApiUser {
   id: string;
@@ -33,6 +34,37 @@ export interface RemoteHistoryItem {
   completed: number;
   watched_at: number;
 }
+
+/**
+ * The account API is served by this deployment at `/api/auth/*`. It is not the
+ * MovieBox catalogue API: `MOVIE_API_BASE_URL` points at MovieBox, which has no
+ * account routes, so sharing that origin turned every signup/login into a 404.
+ *
+ * `VITE_AUTH_API_BASE_URL` overrides the origin. Unset means same-origin on
+ * Vercel and previews; in local development `VITE_API_BASE_URL` is used when it
+ * points at a running account backend.
+ */
+function resolveAuthBaseUrl(): string {
+  const explicit = ((import.meta.env.VITE_AUTH_API_BASE_URL as string) || "").trim();
+  if (explicit) return explicit.replace(/\/+$/, "");
+  if (import.meta.env.DEV) {
+    const local = ((import.meta.env.VITE_API_BASE_URL as string) || "").trim();
+    return local.replace(/\/+$/, "");
+  }
+  // In the Capacitor shell a relative URL resolves to `https://localhost`,
+  // which is the bundled WebView, not the deployed account API. Use the same
+  // public origin the image and trailer proxies already use.
+  if (Capacitor.isNativePlatform()) {
+    try {
+      return new URL(STREAMVY_PROXY_BASE_URL).origin;
+    } catch {
+      return "https://www.streamvy.me";
+    }
+  }
+  return "";
+}
+
+export const AUTH_API_BASE_URL = resolveAuthBaseUrl();
 
 const TOKEN_KEY = "lenium_auth_token";
 const USER_KEY = "lenium_auth_user";
@@ -132,7 +164,7 @@ export class AuthNetworkError extends Error {
   /** The fully-resolved URL that was requested, base origin included. */
   url: string;
   constructor(url: string, method: string) {
-    const origin = MOVIE_API_BASE_URL || "this origin (relative request)";
+    const origin = AUTH_API_BASE_URL || "this origin (relative request)";
     super(
       `Could not reach the account API at ${origin} — the browser blocked the ` +
         "response, so this is a network or CORS fault rather than a rejected " +
@@ -151,7 +183,7 @@ export class AuthNetworkError extends Error {
         "deploy that predates this route answers the preflight with 404, which " +
         "fails the request even though the endpoint is correct on the current " +
         "code. Checked origin: " +
-        `${origin}. (VITE_MOVIE_API_BASE_URL is inlined at build time.)`
+        `${origin}. (VITE_AUTH_API_BASE_URL is inlined at build time.)`
     );
   }
 }
@@ -176,7 +208,7 @@ export async function request<T>(
     const token = getToken();
     if (token) headers.Authorization = `Bearer ${token}`;
   }
-  const url = `${MOVIE_API_BASE_URL}${path}`;
+  const url = `${AUTH_API_BASE_URL}${path}`;
 
   let response: Response;
   try {
@@ -298,7 +330,7 @@ export async function apiDeleteAccount(input: {
   await request<{ success: boolean }>("/api/auth/account", {
     method: "DELETE",
     auth: true,
-    body: JSON.stringify({ email: input.email, password: input.password }),
+    body: { email: input.email, password: input.password },
   });
   // Only reached on success: the account and every session are already gone
   // server-side, so there is no meaningful state to keep locally.

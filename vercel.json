@@ -6,11 +6,11 @@
   "cleanUrls": true,
   "rewrites": [
     {
-      "source": "/api/(.*)",
-      "destination": "/api/$1"
+      "source": "/api/:path*",
+      "destination": "/api/[...path]"
     },
     {
-      "source": "/(.*)",
+      "source": "/((?!api/).*)",
       "destination": "/index"
     }
   ],
@@ -27,6 +27,10 @@
   ],
   "functions": {
     "api/image.ts": {
+      "memory": 1024,
+      "maxDuration": 30
+    },
+    "api/[...path].ts": {
       "memory": 1024,
       "maxDuration": 30
     }

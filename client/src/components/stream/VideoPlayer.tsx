@@ -13,6 +13,7 @@ import {
   Volume2,
   VolumeX,
   Maximize,
+  Minimize,
   ChevronDown,
   Check,
   Captions,
@@ -22,7 +23,9 @@ import {
   X,
   SkipBack,
   SkipForward,
+  Scaling,
 } from "lucide-react";
+import { Capacitor } from "@capacitor/core";
 import { formatPlayerTime } from "@/lib/format";
 // Type-only: the runtime value is loaded via dynamic import() in the stream
 // effect so hls.js stays out of the entry chunk; this import is erased.
@@ -52,6 +55,63 @@ export const labelForHeight = (height: number): string => {
   if (height >= 2000) return "4K";
   return `${Math.round(height)}p`;
 };
+
+/**
+ * How the picture is fitted into the player rectangle.
+ *
+ * `fit` is the default because cropping someone's film to fill a phone screen
+ * is a worse first impression than a black bar. The other two are opt-in and
+ * persisted, so a viewer who prefers a cropped, edge-to-edge image does not
+ * have to choose it again on every title.
+ */
+type PlayerDisplayMode = "fit" | "fill" | "stretch";
+
+const DISPLAY_MODE_STORAGE_KEY = "lenium_player_display_mode";
+
+const DISPLAY_MODES: {
+  id: PlayerDisplayMode;
+  label: string;
+  note: string;
+}[] = [
+  { id: "fit", label: "Fit", note: "Whole picture, black bars" },
+  { id: "fill", label: "Fill", note: "Fill frame, crop edges" },
+  { id: "stretch", label: "Stretch", note: "Fill frame, may distort" },
+];
+
+const OBJECT_FIT_CLASS: Record<PlayerDisplayMode, string> = {
+  fit: "object-contain",
+  fill: "object-cover",
+  stretch: "object-fill",
+};
+
+function readDisplayMode(): PlayerDisplayMode {
+  try {
+    const saved = localStorage.getItem(DISPLAY_MODE_STORAGE_KEY);
+    if (saved === "fit" || saved === "fill" || saved === "stretch") {
+      return saved;
+    }
+  } catch {
+    /* storage unavailable */
+  }
+  return "fit";
+}
+
+function aspectLabel(aspect: number): string {
+  if (!Number.isFinite(aspect) || aspect <= 0) return "";
+  const common: [number, number][] = [
+    [16, 9],
+    [4, 3],
+    [21, 9],
+    [2.39, 1],
+    [2.35, 1],
+    [1.85, 1],
+    [1, 1],
+  ];
+  for (const [width, height] of common) {
+    if (Math.abs(aspect - width / height) < 0.035) return `${width}:${height}`;
+  }
+  return `${aspect.toFixed(2)}:1`;
+}
 
 /**
  * Extract the variant ladder from a parsed HLS master playlist.
@@ -239,6 +299,12 @@ export interface VideoPlayerProps {
    */
   onProgress?: (progress: { seconds: number; durationSeconds: number }) => void;
   /**
+   * The media reached its end. Fired once per full play-through from the
+   * `<video>` element's own `ended` event, which is the only reliable signal:
+   * the last `onProgress` sample can be a full minute before the credits roll.
+   */
+  onEnded?: () => void;
+  /**
    * Base language code to open this title on, or null to open on whatever the
    * manifest declares first.
    *
@@ -268,6 +334,12 @@ export interface VideoPlayerProps {
    * silently behind an overlay they just closed would be surprising.
    */
   suspended?: boolean;
+  /**
+   * A control node for the player's own bottom bar. The Watch page passes the
+   * compact download menu here so downloads stay reachable in fullscreen,
+   * where the page-level button is outside the fullscreen element.
+   */
+  downloadControl?: React.ReactNode;
 }
 
 const QUALITY_ORDER = ["8K", "4K", "1080p", "720p", "480p", "360p", "Auto"] as const;
@@ -319,9 +391,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   autoPlay = true,
   autoCycling = false,
   onProgress,
+  onEnded,
   preferredLanguage = null,
   startAtSeconds = 0,
   suspended = false,
+  downloadControl,
 }) => {
   const [isPlaying, setIsPlaying] = useState<boolean>(autoPlay);
   const [isMuted, setIsMuted] = useState<boolean>(false);
@@ -330,6 +404,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [duration, setDuration] = useState<number>(0);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [showControls, setShowControls] = useState<boolean>(true);
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  const [displayMode, setDisplayMode] = useState<PlayerDisplayMode>(readDisplayMode);
+  const [displayMenuOpen, setDisplayMenuOpen] = useState(false);
+  const [sourceAspect, setSourceAspect] = useState<number | null>(null);
+  const [seekHint, setSeekHint] = useState<"back" | "forward" | null>(null);
   const [qualityMenuOpen, setQualityMenuOpen] = useState<boolean>(false);
   const [subtitleMenuOpen, setSubtitleMenuOpen] = useState<boolean>(false);
   const [audioMenuOpen, setAudioMenuOpen] = useState<boolean>(false);
@@ -340,6 +419,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setSubtitleMenuOpen(false);
     setSubtitleSearch("");
   };
+  const chooseDisplayMode = (mode: PlayerDisplayMode) => {
+    setDisplayMode(mode);
+    try {
+      localStorage.setItem(DISPLAY_MODE_STORAGE_KEY, mode);
+    } catch {
+      /* storage unavailable */
+    }
+  };
+  const displayAspectLabel = sourceAspect ? aspectLabel(sourceAspect) : "";
   const [currentQuality, setCurrentQuality] = useState<string>(initialQuality);
   const [hlsLevels, setHlsLevels] = useState<
     { quality: string; height: number }[]
@@ -429,9 +517,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // and re-seek) even when the URL had not changed. Reading it through a ref
   // keeps the effect keyed on the source alone while the handler stays fresh.
   const onSourceErrorRef = useRef(onSourceError);
+  const onEndedRef = useRef(onEnded);
   useEffect(() => {
     onSourceErrorRef.current = onSourceError;
   });
+  useEffect(() => {
+    onEndedRef.current = onEnded;
+  }, [onEnded]);
   const reportSourceError = useCallback(() => {
     onSourceErrorRef.current?.();
   }, []);
@@ -530,6 +622,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const stallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hlsRef = useRef<any>(null);
   const dashPlayerRef = useRef<any>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const downmixAttemptedRef = useRef(false);
+  const seekHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const effectiveIsLoading = externalIsLoading || isLoading;
 
@@ -854,6 +949,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     const handleLoadedMetadata = () => {
       setDuration(video.duration);
+      if (video.videoWidth > 0 && video.videoHeight > 0) {
+        setSourceAspect(video.videoWidth / video.videoHeight);
+      }
       clearStallWatch();
       initAmbientCanvas();
       // Resume before any frame is requested: a fresh load opens at 0:00, so
@@ -901,7 +999,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       clearStallWatch();
       setIsLoading(false);
     };
-    const handleEnded = () => setIsPlaying(false);
+    const handleEnded = () => {
+      setIsPlaying(false);
+      onEndedRef.current?.();
+    };
     // First frame is actually decodable -> the poster has done its job, and
     // this is also the earliest point where play() cannot run ahead of the
     // picture. Covers progressive MP4 and native (Safari) HLS, which never
@@ -1251,10 +1352,91 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }, 3000);
   }, [hasUserInteracted, isPlaying]);
 
+  /**
+   * Android's WebView decodes the resolver's 5.1 AAC tracks with the centre
+   * channel left out of the stereo fold-down: music and effects play, dialogue
+   * does not. Building an explicit stereo mix through Web Audio keeps L/R and
+   * adds the centre channel to both, which is where film dialogue lives.
+   *
+   * Gated to the Android shell because desktop browsers already fold 5.1 down
+   * correctly, and routing every player through Web Audio is a larger change
+   * than this fix needs.
+   */
+  const enableStereoDownmix = useCallback(() => {
+    if (downmixAttemptedRef.current) return;
+    if (Capacitor.getPlatform() !== "android") return;
+    const video = videoRef.current;
+    if (!video) return;
+    downmixAttemptedRef.current = true;
+    let ctx: AudioContext | null = null;
+    let source: MediaElementAudioSourceNode | null = null;
+    try {
+      const Ctor =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext?: typeof AudioContext })
+          .webkitAudioContext;
+      if (!Ctor) return;
+      ctx = new Ctor();
+      source = ctx.createMediaElementSource(video);
+      // Six explicit channels in, two out. A stereo source leaves the extra
+      // inputs silent, so the same graph is harmless for ordinary titles.
+      source.channelCount = 6;
+      source.channelCountMode = "explicit";
+      source.channelInterpretation = "speakers";
+      const splitter = ctx.createChannelSplitter(6);
+      const merger = ctx.createChannelMerger(2);
+      source.connect(splitter);
+
+      const left = ctx.createGain();
+      const right = ctx.createGain();
+      const centre = ctx.createGain();
+      const lfe = ctx.createGain();
+      const surroundLeft = ctx.createGain();
+      const surroundRight = ctx.createGain();
+      left.gain.value = 1;
+      right.gain.value = 1;
+      // -3 dB per side is the standard centre fold-down; the effects and
+      // surrounds sit lower so they do not mask the dialogue they were
+      // previously drowning out.
+      centre.gain.value = Math.SQRT1_2;
+      lfe.gain.value = 0.5;
+      surroundLeft.gain.value = 0.5;
+      surroundRight.gain.value = 0.5;
+
+      splitter.connect(left, 0);
+      left.connect(merger, 0, 0);
+      splitter.connect(right, 1);
+      right.connect(merger, 0, 1);
+      splitter.connect(centre, 2);
+      centre.connect(merger, 0, 0);
+      centre.connect(merger, 0, 1);
+      splitter.connect(lfe, 3);
+      lfe.connect(merger, 0, 0);
+      lfe.connect(merger, 0, 1);
+      splitter.connect(surroundLeft, 4);
+      surroundLeft.connect(merger, 0, 0);
+      splitter.connect(surroundRight, 5);
+      surroundRight.connect(merger, 0, 1);
+      merger.connect(ctx.destination);
+
+      audioContextRef.current = ctx;
+      void ctx.resume().catch(() => {});
+    } catch {
+      // A cross-origin source without CORS, or a WebView without Web Audio:
+      // put the element back on its native audio path rather than silence it.
+      try {
+        source?.connect(ctx!.destination);
+      } catch {
+        /* nothing left to restore */
+      }
+    }
+  }, []);
+
   const togglePlay = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
     setHasUserInteracted(true);
+    enableStereoDownmix();
     if (isPlaying) {
       video.pause();
       setIsPlaying(false);
@@ -1275,7 +1457,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       .catch(() => {
         setIsPlaying(false);
       });
-  }, [isPlaying, attemptAutoplay]);
+  }, [isPlaying, attemptAutoplay, enableStereoDownmix]);
 
   const handleSeek = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1284,6 +1466,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const seekTime = (parseFloat(e.target.value) / 100) * duration;
       video.currentTime = seekTime;
       setProgress(parseFloat(e.target.value));
+    },
+    [duration]
+  );
+
+  const seekBy = useCallback(
+    (delta: number) => {
+      const video = videoRef.current;
+      if (!video) return;
+      const end =
+        Number.isFinite(video.duration) && video.duration > 0
+          ? video.duration
+          : duration;
+      video.currentTime = Math.max(
+        0,
+        Math.min(end > 0 ? end : Number.POSITIVE_INFINITY, video.currentTime + delta)
+      );
+      setSeekHint(delta < 0 ? "back" : "forward");
+      if (seekHintTimerRef.current) clearTimeout(seekHintTimerRef.current);
+      seekHintTimerRef.current = setTimeout(() => setSeekHint(null), 550);
     },
     [duration]
   );
@@ -1312,13 +1513,40 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   }, [isMuted, volume]);
 
+  useEffect(() => {
+    const sync = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", sync);
+    return () => document.removeEventListener("fullscreenchange", sync);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (seekHintTimerRef.current) clearTimeout(seekHintTimerRef.current);
+      const ctx = audioContextRef.current;
+      audioContextRef.current = null;
+      if (ctx) void ctx.close().catch(() => {});
+    },
+    []
+  );
+
   const toggleFullscreen = useCallback(() => {
     const player = playerRef.current;
     if (!player) return;
-    if (!document.fullscreenElement) {
-      player.requestFullscreen();
-    } else {
-      document.exitFullscreen();
+    if (document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => {});
+      return;
+    }
+    // Never lock the orientation: the viewer may tilt the device in either
+    // direction while fullscreen, and Android respects that only when the
+    // orientation is left unlocked.
+    try {
+      window.screen?.orientation?.unlock?.();
+    } catch {
+      /* orientation lock API unavailable */
+    }
+    const request = player.requestFullscreen?.();
+    if (request && typeof request.catch === "function") {
+      request.catch(() => {});
     }
   }, []);
 
@@ -1754,7 +1982,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // when the viewer clicks anywhere else, so clicks outside the player root
   // dismiss all three.
   useEffect(() => {
-    if (!subtitleMenuOpen && !audioMenuOpen && !qualityMenuOpen) return;
+    if (!subtitleMenuOpen && !audioMenuOpen && !qualityMenuOpen && !displayMenuOpen) return;
     const handleOutside = (event: MouseEvent) => {
       const root = playerRef.current;
       if (root && event.target instanceof Node && !root.contains(event.target)) {
@@ -1762,11 +1990,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         setSubtitleSearch("");
         setAudioMenuOpen(false);
         setQualityMenuOpen(false);
+        setDisplayMenuOpen(false);
       }
     };
     document.addEventListener("mousedown", handleOutside);
     return () => document.removeEventListener("mousedown", handleOutside);
-  }, [subtitleMenuOpen, audioMenuOpen, qualityMenuOpen]);
+  }, [subtitleMenuOpen, audioMenuOpen, qualityMenuOpen, displayMenuOpen]);
 
   const preventContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -1776,14 +2005,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     <div
       ref={playerRef}
       onMouseMove={handleMouseMove}
+      onPointerDown={enableStereoDownmix}
       onContextMenu={preventContextMenu}
-      className="relative w-full h-full aspect-video rounded-2xl overflow-hidden bg-black select-none font-sans"
+      className="relative w-full h-full aspect-video rounded-none overflow-hidden bg-black select-none font-sans [&:fullscreen]:aspect-auto [&:fullscreen]:rounded-none sm:rounded-2xl"
     >
       <canvas
         ref={canvasRef}
         className="absolute inset-0 -z-10 w-full h-full"
         aria-hidden="true"
       />
+
+
 
       {/*
         Buffering only. A failure is reported to the page and never drawn here:
@@ -1820,9 +2052,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       <video
         ref={videoRef}
         poster={poster}
-        className="w-full h-full object-contain cursor-pointer"
+        className={`relative z-10 h-full w-full cursor-pointer bg-black ${OBJECT_FIT_CLASS[displayMode]}`}
         onClick={togglePlay}
         onContextMenu={preventContextMenu}
+        crossOrigin={Capacitor.getPlatform() === "android" ? "anonymous" : undefined}
         playsInline
         preload="metadata"
         controls={false}
@@ -1842,8 +2075,66 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         ))}
       </video>
 
+      {/*
+        Mobile seek surface. A thumb on the left or right third jumps ten
+        seconds in that direction; the middle third still toggles playback.
+        The desktop controls keep their explicit buttons, but on a phone the
+        hand already covers the lower bar, so the whole edge of the picture is
+        the target instead.
+      */}
+      <button
+        type="button"
+        aria-label="Rewind 10 seconds"
+        onClick={event => {
+          event.stopPropagation();
+          seekBy(-10);
+        }}
+        className="group absolute inset-y-0 left-0 z-20 flex w-1/3 items-center justify-start pl-5 text-white/70 transition-colors active:bg-white/10 sm:hidden"
+      >
+        <span className="flex flex-col items-center gap-0.5 opacity-0 transition-opacity group-active:opacity-100">
+          <RotateCcw className="h-7 w-7" />
+          <span className="text-[10px] font-semibold">10s</span>
+        </span>
+      </button>
+      <button
+        type="button"
+        aria-label="Forward 10 seconds"
+        onClick={event => {
+          event.stopPropagation();
+          seekBy(10);
+        }}
+        className="group absolute inset-y-0 right-0 z-20 flex w-1/3 items-center justify-end pr-5 text-white/70 transition-colors active:bg-white/10 sm:hidden"
+      >
+        <span className="flex flex-col items-center gap-0.5 opacity-0 transition-opacity group-active:opacity-100">
+          <RotateCw className="h-7 w-7" />
+          <span className="text-[10px] font-semibold">10s</span>
+        </span>
+      </button>
+      <button
+        type="button"
+        aria-label={isPlaying ? "Pause" : "Play"}
+        onClick={event => {
+          event.stopPropagation();
+          togglePlay();
+        }}
+        className="absolute inset-y-0 left-1/3 right-1/3 z-20 sm:hidden"
+      />
+
+      {seekHint ? (
+        <div className="pointer-events-none absolute left-1/2 top-1/2 z-30 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-1 rounded-2xl bg-black/70 px-4 py-3 text-white shadow-xl">
+          {seekHint === "back" ? (
+            <RotateCcw className="h-6 w-6" />
+          ) : (
+            <RotateCw className="h-6 w-6" />
+          )}
+          <span className="text-xs font-semibold">
+            {seekHint === "back" ? "10 seconds back" : "10 seconds forward"}
+          </span>
+        </div>
+      ) : null}
+
       <div
-        className={`absolute top-0 inset-x-0 p-4 bg-gradient-to-b from-black/80 via-black/40 to-transparent flex items-center justify-end transition-opacity duration-300 z-30 ${
+        className={`absolute top-0 inset-x-0 p-3 sm:p-4 bg-gradient-to-b from-black/80 via-black/40 to-transparent flex items-center justify-end transition-opacity duration-300 z-30 ${
           showControls && hasUserInteracted
             ? "opacity-100"
             : "opacity-0 pointer-events-none"
@@ -1860,7 +2151,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       </div>
 
       <div
-        className={`absolute bottom-0 inset-x-0 p-4 bg-gradient-to-t from-black/95 via-black/60 to-transparent flex flex-col gap-2.5 transition-opacity duration-300 z-30 ${
+        className={`absolute bottom-0 inset-x-0 p-3 sm:p-4 bg-gradient-to-t from-black/95 via-black/60 to-transparent flex flex-col gap-2.5 transition-opacity duration-300 z-30 ${
           showControls && hasUserInteracted
             ? "opacity-100"
             : "opacity-0 pointer-events-none"
@@ -1897,21 +2188,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             </button>
 
             <button
-              onClick={() => {
-                const v = videoRef.current;
-                if (v) v.currentTime -= 10;
-              }}
-              className="hover:text-violet-500 transition-colors flex-shrink-0"
+              onClick={() => seekBy(-10)}
+              className="hidden flex-shrink-0 transition-colors hover:text-violet-500 sm:flex"
               aria-label="Rewind 10s"
             >
               <RotateCcw className="w-5 h-5" />
             </button>
             <button
-              onClick={() => {
-                const v = videoRef.current;
-                if (v) v.currentTime += 10;
-              }}
-              className="hover:text-violet-500 transition-colors flex-shrink-0"
+              onClick={() => seekBy(10)}
+              className="hidden flex-shrink-0 transition-colors hover:text-violet-500 sm:flex"
               aria-label="Forward 10s"
             >
               <RotateCw className="w-5 h-5" />
@@ -1936,7 +2221,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 step="0.05"
                 value={isMuted ? 0 : volume}
                 onChange={handleVolumeChange}
-                className="w-20 h-1 bg-white/30 rounded-lg appearance-none cursor-pointer accent-white hover:accent-violet-500 transition-all"
+                className="hidden w-20 h-1 bg-white/30 rounded-lg appearance-none cursor-pointer accent-white hover:accent-violet-500 transition-all sm:block"
                 onMouseDown={() => {
                   if (controlsTimeoutRef.current)
                     clearTimeout(controlsTimeoutRef.current);
@@ -1944,7 +2229,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               />
             </div>
 
-            <span className="text-xs font-medium text-white/80 flex-shrink-0">
+            <span className="flex-shrink-0 text-[11px] font-medium text-white/80 sm:text-xs">
               {formatPlayerTime(videoRef.current?.currentTime || 0)} /{" "}
               {formatPlayerTime(duration)}
             </span>
@@ -1963,6 +2248,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   else setSubtitleMenuOpen(true);
                   setQualityMenuOpen(false);
                   setAudioMenuOpen(false);
+                  setDisplayMenuOpen(false);
                 }}
                 className="h-8 w-8 grid place-items-center rounded-md bg-white/10 hover:bg-white/20 transition-all"
                 aria-label="Subtitles"
@@ -2072,6 +2358,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     setAudioMenuOpen(!audioMenuOpen);
                     closeSubtitleMenu();
                     setQualityMenuOpen(false);
+                    setDisplayMenuOpen(false);
                   }}
                   className="h-8 w-8 grid place-items-center rounded-md bg-white/10 hover:bg-white/20 transition-all"
                   aria-label="Audio"
@@ -2135,6 +2422,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     setQualityMenuOpen(!qualityMenuOpen);
                     closeSubtitleMenu();
                     setAudioMenuOpen(false);
+                    setDisplayMenuOpen(false);
                   }}
                   className="flex items-center gap-1 px-1 text-xs font-semibold tracking-wider text-white/70 hover:text-white transition-colors"
                   aria-label="Quality"
@@ -2216,12 +2504,101 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               </div>
             )}
 
+            <div className="relative z-40">
+              <button
+                onClick={() => {
+                  setDisplayMenuOpen(!displayMenuOpen);
+                  closeSubtitleMenu();
+                  setAudioMenuOpen(false);
+                  setQualityMenuOpen(false);
+                }}
+                className="grid h-8 w-8 place-items-center rounded-md bg-white/10 transition-all hover:bg-white/20"
+                aria-label="Display mode"
+                aria-expanded={displayMenuOpen}
+                title="Display mode"
+              >
+                <Scaling className="h-4 w-4" />
+              </button>
+              {displayMenuOpen && (
+                <div
+                  role="menu"
+                  aria-label="Display mode"
+                  className={`${MENU_PANEL_CLASS} w-64`}
+                >
+                  <p className={MENU_HEADING_CLASS}>
+                    Display{displayAspectLabel ? ` · ${displayAspectLabel}` : ""}
+                  </p>
+                  {DISPLAY_MODES.map(mode => (
+                    <button
+                      key={mode.id}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={displayMode === mode.id}
+                      onClick={event => {
+                        event.stopPropagation();
+                        chooseDisplayMode(mode.id);
+                        setDisplayMenuOpen(false);
+                      }}
+                      className={MENU_ROW_CLASS}
+                    >
+                      <span className="flex min-w-0 flex-col">
+                        <span
+                          className={
+                            displayMode === mode.id
+                              ? "font-semibold text-white"
+                              : "text-white/85"
+                          }
+                        >
+                          {mode.label}
+                        </span>
+                        <span className="text-[10px] leading-tight text-white/45">
+                          {mode.note}
+                        </span>
+                      </span>
+                      <Check
+                        aria-hidden
+                        className={`${MENU_CHECK_CLASS} ${
+                          displayMode === mode.id ? "" : "invisible"
+                        }`}
+                      />
+                    </button>
+                  ))}
+                  <div className="mt-1 border-t border-white/10 pt-1">
+                    <button
+                      type="button"
+                      onClick={event => {
+                        event.stopPropagation();
+                        setDisplayMenuOpen(false);
+                        toggleFullscreen();
+                      }}
+                      className={`${MENU_ROW_CLASS} text-white/85`}
+                    >
+                      {isFullscreen ? (
+                        <Minimize className="h-4 w-4 shrink-0" />
+                      ) : (
+                        <Maximize className="h-4 w-4 shrink-0" />
+                      )}
+                      <span>{isFullscreen ? "Exit fullscreen" : "Fullscreen"}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {isFullscreen && downloadControl ? (
+              <div className="shrink-0">{downloadControl}</div>
+            ) : null}
+
             <button
               onClick={toggleFullscreen}
               className="hover:text-violet-500 transition-colors flex-shrink-0"
-              aria-label="Fullscreen"
+              aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
             >
-              <Maximize className="w-5 h-5" />
+              {isFullscreen ? (
+                <Minimize className="w-5 h-5" />
+              ) : (
+                <Maximize className="w-5 h-5" />
+              )}
             </button>
           </div>
         </div>

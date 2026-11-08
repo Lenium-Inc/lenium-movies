@@ -90,10 +90,10 @@ const FRAME_SANDBOX =
   "allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox allow-forms";
 
 const PLAYER_FRAME_CLASS =
-  "relative w-full mx-auto aspect-video min-h-[300px] rounded-[18px] overflow-hidden border border-white/10 group";
+  "relative w-full mx-auto aspect-video min-h-[300px] overflow-hidden border-x-0 border-t border-white/10 rounded-none bg-black shadow-[0_30px_90px_-40px_rgba(0,0,0,0.95)] group sm:rounded-[18px] sm:border-x sm:border-b";
 
 const PLAYER_GLOW_CLASS =
-  "absolute -inset-x-2 -top-7 -bottom-3 rounded-[24px] blur-[50px] opacity-70 -z-10 pointer-events-none transition-all duration-700";
+  "absolute -inset-x-0 -top-7 -bottom-3 rounded-[24px] blur-[50px] opacity-70 -z-10 pointer-events-none transition-all duration-700 sm:-inset-x-2";
 
 const HERO_GLOW_STYLE: CSSProperties = {
   background:
@@ -106,7 +106,7 @@ const HERO_FRAME_STYLE: CSSProperties = {
 };
 
 const WATCH_GHOST_BUTTON =
-  "inline-flex h-[42px] items-center gap-2 rounded-[10px] border border-white/14 bg-transparent px-4 text-sm text-[#f1f3f8] transition hover:bg-white/[0.08] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400";
+  "inline-flex h-[42px] w-[42px] items-center justify-center gap-2 rounded-[10px] border border-white/14 bg-transparent px-0 text-sm text-[#f1f3f8] transition hover:bg-white/[0.08] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400 sm:w-auto sm:px-4";
 
 const WATCH_GHOST_ICON_BUTTON =
   "grid h-[42px] w-[42px] place-items-center rounded-[10px] border border-white/14 bg-transparent text-[#f1f3f8] transition hover:bg-white/[0.08] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400";
@@ -220,6 +220,11 @@ export function WatchPage() {
 
   const [myRating, setMyRating] = useState<number>(0);
   const [watchedSeconds, setWatchedSeconds] = useState(0);
+  // Live playback clock, distinct from `watchedSeconds`, which is the
+  // accumulated total across sessions and therefore useless for "is this
+  // episode about to end?".
+  const [playbackClock, setPlaybackClock] = useState({ seconds: 0, duration: 0 });
+  const [playbackEnded, setPlaybackEnded] = useState(false);
   const [trailer, setTrailer] = useState<TrailerInfo | null>(null);
   const [episodeDetails, setEpisodeDetails] = useState<any>(null);
   const [currentEpisodeTitle, setCurrentEpisodeTitle] = useState("");
@@ -299,7 +304,7 @@ export function WatchPage() {
     if (!movie) return;
     let active = true;
     setTrailer(null);
-    void fetchTrailer(movie.title, movie.year)
+    void fetchTrailer(movie.title, movie.year, isSeries ? "tv" : "movie")
       .then(info => {
         if (active) setTrailer(info);
       })
@@ -309,7 +314,7 @@ export function WatchPage() {
     return () => {
       active = false;
     };
-  }, [movie?.title, movie?.year]);
+  }, [movie?.title, movie?.year, isSeries]);
 
   const fetchEpisodeInfo = useCallback(async (s: number, e: number) => {
     // The catalogue knows how many episodes exist, not what each one is about.
@@ -582,6 +587,11 @@ export function WatchPage() {
     return `${movie.providerId}:${mediaType}:${season}:${episode}`;
   }, [movie, isSeries, season, episode]);
 
+  useEffect(() => {
+    setPlaybackClock({ seconds: 0, duration: 0 });
+    setPlaybackEnded(false);
+  }, [progressIdentityKey]);
+
   /**
    * Where this title was stopped, read from the store rather than the session:
    * Continue Watching promises a resume, and a promise that only keeps while
@@ -603,6 +613,12 @@ export function WatchPage() {
       if (!movie) return;
       const mediaType: "movie" | "tv" = isSeries ? "tv" : "movie";
       const key = `${movie.providerId}:${mediaType}:${season}:${episode}`;
+
+      setPlaybackClock({ seconds, duration: durationSeconds });
+      // Seeking back out of the credits hides the prompt again; otherwise a
+      // viewer who scrubs home is offered "next episode" for the rest of the
+      // play-through.
+      if (seconds < durationSeconds - 90) setPlaybackEnded(false);
 
       const cursor = progressCursorRef.current;
       if (cursor.key !== key) progressCursorRef.current = { key, seconds: 0 };
@@ -906,6 +922,21 @@ export function WatchPage() {
     [isSeries, tvSeasons, season, episode]
   );
 
+  /**
+   * The next-episode control is a decision for the end of an episode, not a
+   * permanent fixture over the picture. It appears once fewer than 90 seconds
+   * remain, or the moment playback actually ends (credits included), so a
+   * viewer mid-episode is not invited to skip ahead by a button that never
+   * goes away.
+   */
+  const nextEpisodeDue = useMemo(() => {
+    if (!nextEpisodeTarget || streamUnavailable) return false;
+    if (playbackEnded) return true;
+    const { seconds, duration } = playbackClock;
+    if (!Number.isFinite(duration) || duration <= 0) return false;
+    return seconds >= duration - 90;
+  }, [nextEpisodeTarget, streamUnavailable, playbackEnded, playbackClock]);
+
   const currentSeasonEpisodes = useMemo<StreamEpisode[]>(() => {
     const manifest = resolved?.stream?.episodes ?? [];
     const fromManifest = manifest
@@ -1136,12 +1167,12 @@ export function WatchPage() {
   if (movieLoading) {
     return (
       <div className="min-h-screen text-white">
-        <main className="pt-16 pb-12 px-4 sm:px-6 lg:px-6">
+        <main className="pb-12 px-0 sm:px-6 lg:px-6">
           <div className="mx-auto max-w-[1760px]">
             <div className="flex flex-wrap items-start gap-6">
               <div className="min-w-0 flex-1 basis-[640px]">
                 <div className="relative">
-                  <div aria-hidden className={PLAYER_GLOW_CLASS} />
+                  <div aria-hidden className={PLAYER_GLOW_CLASS} style={HERO_GLOW_STYLE} />
                   <div className={PLAYER_FRAME_CLASS}>
                     <StreamLoader />
                   </div>
@@ -1210,15 +1241,15 @@ export function WatchPage() {
     .join(" · ");
 
   return (
-    <div className="min-h-screen text-white">
-      <main className="pt-16 pb-12 px-4 sm:px-6 lg:px-6">
+    <div className="min-h-screen overflow-x-clip text-white">
+      <main className="pb-12 px-0 sm:px-6 lg:px-6">
         <div className="mx-auto max-w-[1760px]">
           <div className="flex flex-wrap items-start gap-6">
             <div className="min-w-0 flex-1 basis-[640px]">
               <div className="relative">
-                <div aria-hidden className={PLAYER_GLOW_CLASS} />
+                <div aria-hidden className={PLAYER_GLOW_CLASS} style={HERO_GLOW_STYLE} />
                 <div className={PLAYER_FRAME_CLASS}>
-                  <div className="absolute top-[18px] left-[18px] z-20">
+                  <div className="absolute top-[18px] left-[18px] z-40">
                     <button
                       onClick={handleBackToDetails}
                       aria-label="Back"
@@ -1228,7 +1259,7 @@ export function WatchPage() {
                     </button>
                   </div>
 
-                  {nextEpisodeTarget && !playingTrailer && !streamUnavailable ? (
+                  {nextEpisodeDue && !playingTrailer && nextEpisodeTarget ? (
                     <div className="absolute top-[18px] right-[18px] z-30">
                       <button
                         onClick={() =>
@@ -1293,6 +1324,7 @@ export function WatchPage() {
                           autoCycling={autoCycling}
                           onSourceError={handleSourceError}
                           onProgress={handleProgress}
+                          onEnded={() => setPlaybackEnded(true)}
                           preferredLanguage={preferredTrackLanguage}
                           startAtSeconds={
                             progressCursorRef.current.key === progressIdentityKey
@@ -1300,6 +1332,14 @@ export function WatchPage() {
                               : storedResume
                           }
                           suspended={playingTrailer && !!resolvedTrailer}
+                          downloadControl={
+                            <DownloadButton
+                              title={movie.title}
+                              year={movie.year}
+                              variants={resolved?.stream?.streams ?? []}
+                              compact
+                            />
+                          }
                           hideCloseButton
                         />
                       ) : null}
@@ -1385,7 +1425,7 @@ export function WatchPage() {
                 </div>
               </div>
 
-              <div className="pt-7">
+              <div className="px-4 pt-7 sm:px-0">
                 <h1 className="m-0 text-[clamp(24px,2.3vw,32px)] font-bold leading-[1.1] tracking-[-0.02em] text-white">
                   {movie.title}
                 </h1>
@@ -1410,6 +1450,7 @@ export function WatchPage() {
                   <button
                     type="button"
                     className={WATCH_GHOST_BUTTON}
+                    aria-label={isInMyList(movie.id) ? "Remove from My List" : "Add to My List"}
                     aria-pressed={isInMyList(movie.id)}
                     onClick={() => {
                       if (!authUser) {
@@ -1445,7 +1486,9 @@ export function WatchPage() {
                     ) : (
                       <Plus className="h-4 w-4" aria-hidden />
                     )}
-                    {isInMyList(movie.id) ? "In My List" : "My List"}
+                    <span className="hidden sm:inline">
+                      {isInMyList(movie.id) ? "In My List" : "My List"}
+                    </span>
                   </button>
 
                   {!upcoming && !streamUnavailable ? (
@@ -1484,7 +1527,7 @@ export function WatchPage() {
               </div>
             </div>
 
-            <aside className="min-w-[280px] flex-1 basis-[320px] lg:w-[320px] lg:flex-none">
+            <aside className="min-w-[280px] flex-1 basis-[320px] px-4 sm:px-0 lg:w-[320px] lg:flex-none">
               <div className="flex items-end gap-6 border-b border-white/10">
                 {asideTabs.map(tab => {
                   const active = activeTab === tab.id;

@@ -68,7 +68,7 @@ function toItem(r: SearchSuggestion): PaletteItem {
  * ⌘K / Ctrl+K focuses the input directly (it no longer toggles a dialog), and
  * "/" is kept because the hero header advertises it.
  */
-export function NavbarSearch() {
+export function NavbarSearch({ fullWidth = false }: { fullWidth?: boolean }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [suggestions, setSuggestions] = useState<PaletteItem[]>([]);
@@ -292,8 +292,8 @@ export function NavbarSearch() {
     <div ref={rootRef} className="relative min-w-0">
       <div
         className={`flex items-center gap-2 rounded-full border bg-white/[0.06] px-3 py-1.5 transition focus-within:border-white/30 focus-within:bg-white/10 ${
-          open ? "border-white/30 bg-white/10" : "border-white/10"
-        }`}
+          fullWidth ? "w-full" : ""
+        } ${open ? "border-white/30 bg-white/10" : "border-white/10"}`}
       >
         <Search className="h-3.5 w-3.5 shrink-0 text-white/50" />
         <input
@@ -318,7 +318,11 @@ export function NavbarSearch() {
           // `min-w-0` lets this shrink instead of forcing the header wider than
           // the viewport on narrow phones, which is what pushed the nav off
           // screen before. The width steps up at each breakpoint instead.
-          className="w-[6.5rem] min-w-0 bg-transparent text-xs text-white outline-none placeholder:text-white/50 focus:outline-none sm:w-[12rem] lg:w-[16rem]"
+          className={`min-w-0 bg-transparent text-xs text-white outline-none placeholder:text-white/50 focus:outline-none ${
+            fullWidth
+              ? "w-full"
+              : "w-[6.5rem] sm:w-[12rem] lg:w-[16rem]"
+          }`}
         />
         {loading ? (
           <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-white/40" />
@@ -349,7 +353,9 @@ export function NavbarSearch() {
         <div
           id="navbar-search-results"
           role="listbox"
-          className="absolute left-0 right-0 top-full z-50 mt-2 max-h-[min(24rem,60vh)] min-w-[16rem] overflow-y-auto overscroll-contain rounded-xl border border-zinc-800 bg-zinc-900/95 p-1.5 shadow-2xl backdrop-blur-xl"
+          className={`absolute left-0 right-0 top-full z-50 mt-2 max-h-[min(24rem,60vh)] overflow-y-auto overscroll-contain rounded-xl border border-zinc-800 bg-zinc-900/95 p-1.5 shadow-2xl backdrop-blur-xl ${
+            fullWidth ? "min-w-0" : "min-w-[16rem]"
+          }`}
         >
           {hasQuery && loading && suggestions.length === 0 ? (
             <div className="flex items-center gap-2 px-3 py-3 text-xs text-zinc-500">

@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLocation, useParams, useSearch } from "wouter";
-import { Bookmark, Check, Play, Star } from "lucide-react";
+import { Bookmark, Check, Film, Play, Star, X } from "lucide-react";
 import { Navbar } from "@/components/layout/Navbar";
 import {
   APPLY_SEARCH_EVENT,
   SELECT_TITLE_EVENT,
   type PaletteItem,
 } from "@/components/layout/NavbarSearch";
-import { fetchTrailerByTmdbId, type TrailerInfo } from "@/services/api";
+import { fetchTrailer, type TrailerInfo } from "@/services/api";
 import { fetchMovieMeta, type MovieMeta } from "@/services/meta";
 import { savedListIds, subscribeList, toggleListSave } from "@/services/lists";
 import { useEmbedFailure } from "@/hooks/useEmbedFailure";
@@ -77,6 +77,7 @@ export default function TitlePage() {
   );
   const [trailer, setTrailer] = useState<TrailerInfo | null>(null);
   const [trailerFrameLoaded, setTrailerFrameLoaded] = useState(false);
+  const [trailerOpen, setTrailerOpen] = useState(false);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
@@ -103,27 +104,59 @@ export default function TitlePage() {
   }, [id, kind]);
 
   useEffect(() => {
-    if (!id) return;
+    const movie = meta?.movie;
+    if (!movie?.title) {
+      setTrailer(null);
+      return;
+    }
     let active = true;
     setTrailer(null);
-    void fetchTrailerByTmdbId(id, kind)
+    setTrailerOpen(false);
+    // The route id is a catalogue slug, so the lookup runs on the loaded
+    // title/year rather than passing a MovieBox id to TMDB.
+    void fetchTrailer(movie.title, movie.year, movie.mediaType)
       .then(info => {
-        if (active && info) setTrailer(info);
+        if (active) setTrailer(info);
       })
-      .catch(() => {});
+      .catch(() => {
+        if (active) setTrailer(null);
+      });
     return () => {
       active = false;
     };
-  }, [id, kind]);
+  }, [meta?.movie.title, meta?.movie.year, meta?.movie.mediaType]);
 
   const { failed: trailerFailed, frameRef: trailerFrameRef } = useEmbedFailure(
     trailer ? `${trailer.provider}:${trailer.id}` : null
   );
   const trailerSrc = resolveTrailer(trailer, { loop: false });
+  const fullTrailer = useMemo(
+    () =>
+      resolveTrailer(trailer, {
+        loop: false,
+        controls: true,
+        muted: false,
+      }),
+    [trailer]
+  );
 
   useEffect(() => {
     setTrailerFrameLoaded(false);
   }, [trailerSrc?.src]);
+
+  useEffect(() => {
+    if (!trailerOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setTrailerOpen(false);
+    };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [trailerOpen]);
 
   useEffect(() => {
     if (status === "ready" && meta) {
@@ -344,23 +377,38 @@ export default function TitlePage() {
                             })
                           )
                         }
-                        className="flex items-center justify-center gap-2 rounded-xl bg-white px-8 py-3 text-sm font-bold text-black shadow-lg shadow-black/30 transition-all hover:bg-neutral-200 active:scale-[0.98]"
+                        aria-label="Play now"
+                        className="flex h-12 w-12 items-center justify-center gap-2 rounded-xl bg-white px-0 py-0 text-sm font-bold text-black shadow-lg shadow-black/30 transition-all hover:bg-neutral-200 active:scale-[0.98] sm:h-auto sm:w-auto sm:px-8 sm:py-3"
                       >
                         <Play className="h-5 w-5 fill-current" />
-                        Play now
+                        <span className="hidden sm:inline">Play now</span>
                       </button>
+                      {trailer && !trailerFailed ? (
+                        <button
+                          type="button"
+                          onClick={() => setTrailerOpen(true)}
+                          aria-label="Watch trailer"
+                          className="flex h-12 w-12 items-center justify-center gap-2 rounded-xl border border-white/20 bg-white/10 px-0 py-0 text-sm font-semibold text-white backdrop-blur-sm transition hover:bg-white/15 sm:h-auto sm:w-auto sm:px-5 sm:py-3"
+                        >
+                          <Film className="h-4 w-4" />
+                          <span className="hidden sm:inline">Watch trailer</span>
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         onClick={() => toggleMyList(movie)}
+                        aria-label={saved ? "Remove from My List" : "Add to My List"}
                         aria-pressed={saved}
-                        className="flex items-center gap-2 rounded-xl border border-white/20 bg-white/10 px-5 py-3 text-sm font-semibold text-white backdrop-blur-sm transition hover:bg-white/15"
+                        className="flex h-12 w-12 items-center justify-center gap-2 rounded-xl border border-white/20 bg-white/10 px-0 py-0 text-sm font-semibold text-white backdrop-blur-sm transition hover:bg-white/15 sm:h-auto sm:w-auto sm:px-5 sm:py-3"
                       >
                         {saved ? (
                           <Check className="h-4 w-4" />
                         ) : (
                           <Bookmark className="h-4 w-4" />
                         )}
-                        <span>{saved ? "In My List" : "Add to My List"}</span>
+                        <span className="hidden sm:inline">
+                          {saved ? "In My List" : "Add to My List"}
+                        </span>
                       </button>
                     </div>
                   </div>
@@ -507,6 +555,37 @@ export default function TitlePage() {
                   .
                 </p>
               </main>
+
+              {trailerOpen && fullTrailer ? (
+                <div
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label={`${movie.title} trailer`}
+                  onClick={() => setTrailerOpen(false)}
+                  className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 p-3 backdrop-blur-sm sm:p-6"
+                >
+                  <button
+                    type="button"
+                    onClick={() => setTrailerOpen(false)}
+                    aria-label="Close trailer"
+                    className="absolute right-3 top-3 grid h-11 w-11 place-items-center rounded-full border border-white/20 bg-black/60 text-white transition hover:bg-white/15 sm:right-6 sm:top-6"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                  <div
+                    onClick={event => event.stopPropagation()}
+                    className="aspect-video w-full max-w-5xl overflow-hidden rounded-xl border border-white/10 bg-black shadow-2xl"
+                  >
+                    <iframe
+                      src={fullTrailer.src}
+                      title={`${movie.title} — ${fullTrailer.label}`}
+                      allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
+                      allowFullScreen
+                      className="h-full w-full"
+                    />
+                  </div>
+                </div>
+              ) : null}
             </>
           );
         })()

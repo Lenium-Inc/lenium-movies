@@ -21,7 +21,7 @@ import { buildTitlePath } from "@/lib/watchRoute";
 import { resolveTrailer } from "@/lib/tmdbTrailers";
 import { TrailerBrandingMask } from "@/components/stream/TrailerBrandingMask";
 import { useTrailerPlayback } from "@/hooks/useTrailerPlayback";
-import { fetchTrailerByTmdbId, type TrailerInfo } from "@/services/api";
+import { fetchTrailer, type TrailerInfo } from "@/services/api";
 import { isUpcoming, releaseCountdownLabel } from "@/services/notifications";
 import { nativeShare } from "@/lib/native";
 
@@ -211,11 +211,13 @@ export function Spotlight({
   const startTrailer = useCallback(
     (movie: Movie) => {
       if (lookingUp || trailerForId) return;
-      const tmdbId = movie.providerId;
-      if (!tmdbId) return;
+      // The catalogue identifies this title by a provider slug, not a TMDB id,
+      // so the lookup is a year-qualified title search on the server.
+      if (!movie.title) return;
       setLookingUp(true);
-      void fetchTrailerByTmdbId(
-        tmdbId,
+      void fetchTrailer(
+        movie.title,
+        movie.year,
         movie.mediaType === "tv" ? "tv" : "movie"
       )
         .then(info => {

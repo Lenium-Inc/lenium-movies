@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { ChevronDown, Download } from "lucide-react";
 import {
   proxiedDownloadUrl,
@@ -15,6 +16,11 @@ interface DownloadButtonProps {
   title: string;
   year?: number | null;
   variants: StreamVariant[];
+  /**
+   * Square icon-only form for the player's fullscreen control bar, where the
+   * page's labelled button has been left behind outside the fullscreen element.
+   */
+  compact?: boolean;
 }
 
 interface DownloadTier {
@@ -110,39 +116,71 @@ export function DownloadButton({
   title,
   year,
   variants,
+  compact = false,
 }: DownloadButtonProps) {
   const tiers = buildDownloadTiers(variants);
+  const detailsRef = useRef<HTMLDetailsElement | null>(null);
+
+  useEffect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      const details = detailsRef.current;
+      if (
+        details?.open &&
+        event.target instanceof Node &&
+        !details.contains(event.target)
+      ) {
+        details.open = false;
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, []);
 
   return (
-    <details className="group relative">
+    <details ref={detailsRef} className="group relative">
       <summary
         className={`list-none [&::-webkit-details-marker]:hidden ${
           tiers.length ? "cursor-pointer" : "cursor-not-allowed"
         }`}
         aria-label={tiers.length ? "Download options" : "Download unavailable"}
+        aria-haspopup="menu"
         onClick={event => {
           if (!tiers.length) event.preventDefault();
         }}
       >
-        <span
-          aria-disabled={!tiers.length}
-          className={`inline-flex items-center gap-2 rounded-md border border-white/15 px-4 py-3 text-sm font-medium text-white transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 ${
-            tiers.length
-              ? "hover:bg-white/10"
-              : "cursor-not-allowed opacity-50"
-          }`}
-        >
-          <Download className="h-4 w-4" />
-          <span>Download</span>
-          <ChevronDown
-            aria-hidden
-            className="h-4 w-4 transition-transform group-open:rotate-180"
-          />
-        </span>
+        {compact ? (
+          <span
+            aria-disabled={!tiers.length}
+            className={`grid h-8 w-8 place-items-center rounded-md bg-white/10 text-white transition-all ${
+              tiers.length
+                ? "hover:bg-white/20"
+                : "cursor-not-allowed opacity-50"
+            }`}
+            title={tiers.length ? "Download" : "Download unavailable"}
+          >
+            <Download className="h-4 w-4" />
+          </span>
+        ) : (
+          <span
+            aria-disabled={!tiers.length}
+            className={`inline-flex h-[42px] w-[42px] items-center justify-center gap-2 rounded-[10px] border border-white/15 px-0 text-sm font-medium text-white transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 sm:h-auto sm:w-auto sm:rounded-md sm:px-4 sm:py-3 ${
+              tiers.length
+                ? "hover:bg-white/10"
+                : "cursor-not-allowed opacity-50"
+            }`}
+          >
+            <Download className="h-4 w-4" />
+            <span className="hidden sm:inline">Download</span>
+            <ChevronDown
+              aria-hidden
+              className="hidden h-4 w-4 transition-transform group-open:rotate-180 sm:block"
+            />
+          </span>
+        )}
       </summary>
 
       {tiers.length ? (
-        <div className="absolute right-0 z-30 mt-2 w-64 rounded-xl border border-white/10 bg-zinc-900/95 p-2 shadow-2xl backdrop-blur-xl">
+        <div className="absolute left-0 z-30 mt-2 w-[min(16rem,calc(100vw-5rem))] rounded-xl border border-white/10 bg-zinc-900/95 p-2 shadow-2xl backdrop-blur-xl sm:left-auto sm:right-0 sm:w-64">
           {tiers.map(tier => {
             const filename = buildDownloadFilename(
               { title, year },

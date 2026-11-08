@@ -1,0 +1,11 @@
+# Heavy local-only trees. Vercel builds the Vite client from client/ and the
+# Node functions from api/, so none of these are part of the deployment.
+movie-backend
+media_indexer
+android
+dist
+
+# Tests are not serverless routes.
+api/**/*.test.ts
+
+session-ses_e54c.md

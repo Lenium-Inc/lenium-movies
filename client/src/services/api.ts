@@ -1264,57 +1264,88 @@ function isTrailerPayload(value: unknown): value is { trailer?: TrailerInfo } {
   return typeof trailer.provider === "string" && typeof trailer.id === "string";
 }
 
+const TRAILER_TIMEOUT_MS = 8_000;
+
 /**
- * Fetch the official preview trailer for a title through the movie backend.
- * The backend consults TMDB (year-qualified) so the preview always belongs to
- * the requested film. Returns null when no trailer exists — the caller then
- * falls back to backdrop artwork on hover.
+ * `AbortSignal.timeout` is Chromium 103+, and the same older WebViews that
+ * cannot parse Tailwind's `oklch` palette also lack it. Without this fallback
+ * the title page's trailer lookup would throw before the request was even
+ * sent, which reads as "this title has no trailer" rather than a timeout.
+ */
+function trailerAbortSignal(): AbortSignal | undefined {
+  if (
+    typeof AbortSignal !== "undefined" &&
+    typeof AbortSignal.timeout === "function"
+  ) {
+    return AbortSignal.timeout(TRAILER_TIMEOUT_MS);
+  }
+  if (typeof AbortController === "undefined") return undefined;
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), TRAILER_TIMEOUT_MS);
+  return controller.signal;
+}
+
+/**
+ * One trailer lookup against `/api/trailer`.
+ *
+ * The route owns the TMDB key and the ranking; this side only has to turn a
+ * query into a small same-origin request and treat every failure as "no
+ * trailer", which is exactly what the callers' artwork fallback wants.
+ */
+async function requestTrailer(
+  params: URLSearchParams
+): Promise<TrailerInfo | null> {
+  try {
+    const response = await fetch(`${streamvyProxyUrl("/trailer")}?${params}`, {
+      headers: { Accept: "application/json" },
+      signal: trailerAbortSignal(),
+    });
+    if (!response.ok) return null;
+    const payload = (await response.json()) as unknown;
+    return isTrailerPayload(payload) ? payload.trailer ?? null : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetch the official preview trailer for a title.
+ *
+ * Titles in this catalogue carry a MovieBox slug, not a TMDB id, so the lookup
+ * is a year-qualified TMDB search on the server. Returns null when nothing
+ * playable exists — callers fall back to artwork.
  */
 export async function fetchTrailer(
-  _title: string,
-  _year?: number | null
+  title: string,
+  year?: number | null,
+  mediaType: "movie" | "tv" = "movie"
 ): Promise<TrailerInfo | null> {
-  // The catalogue's trailers are direct MP4 addresses on the MovieBox CDN, but
-  // `resolveTrailer` only knows how to frame YouTube/Dailymotion/Vimeo embeds.
-  // Returning null keeps the hero on its backdrop art instead of mounting an
-  // iframe around a file URL it cannot play.
-  return null;
+  const trimmed = title?.trim();
+  if (!trimmed) return null;
+  const params = new URLSearchParams({
+    title: trimmed,
+    type: mediaType === "tv" ? "tv" : "movie",
+  });
+  if (year) params.set("year", String(year));
+  return requestTrailer(params);
 }
 
 /**
- * Fetch the ranked trailer list by TMDB ID, best candidate first.
+ * Fetch a trailer by TMDB id, when a caller actually has one.
  *
- * The backend does the ranking and the URL construction, so this is the one
- * call a title-detail view should make. It returns 200 with `trailer: null` for
- * a title with no playable upload and for an unknown id alike, which is right:
- * "nothing to show" is the useful answer either way, and a `404` would have
- * made callers distinguish an id typo from an empty catalog to produce the same
- * artwork fallback.
- */
-async function fetchRankedTrailer(
-  _tmdbId: string | number,
-  _mediaType: "movie" | "tv"
-): Promise<TrailerInfo | null> {
-  return null;
-}
-
-/**
- * Fetch trailer by TMDB ID directly from TMDB via backend.
- *
- * `mediaType` defaults to `movie` to match the backend, but callers have to pass
- * the real one: a TMDB id is only meaningful against its own type, and relying
- * on the default asked for the wrong title's trailer for every series.
- *
- * Tries the ranked endpoint first and falls back to the older key-only route.
- * The fallback is not defensive busywork: the two routes are answered by
- * different functions in the same backend, and a title that resolves to nothing
- * should go unnoticed rather than taking a hover preview down with it.
+ * Kept separate from the title search because a numeric lookup skips the
+ * search request entirely; passing a catalogue slug here would only make the
+ * route discard it and fall back to a search with no title to search for.
  */
 export async function fetchTrailerByTmdbId(
-  _tmdbId: string | number,
-  _mediaType: "movie" | "tv" = "movie"
+  tmdbId: string | number,
+  mediaType: "movie" | "tv" = "movie"
 ): Promise<TrailerInfo | null> {
-  return null;
+  const id = String(tmdbId ?? "").trim();
+  if (!/^\d+$/.test(id)) return null;
+  return requestTrailer(
+    new URLSearchParams({ id, type: mediaType === "tv" ? "tv" : "movie" })
+  );
 }
 
 /**

@@ -123,3 +123,4 @@ skills-lock.json
 
 .aider*
 .vercel
+.env*

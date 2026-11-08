@@ -293,7 +293,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
       : "Sign in";
 
   return (
-    <div className="relative min-h-dvh overflow-hidden bg-[var(--booth-void)] text-white">
+    <div className="relative min-h-screen min-h-dvh overflow-hidden bg-[var(--booth-void)] text-white">
       {/*
         The film on the wall behind the booth.
 
@@ -366,7 +366,7 @@ export default function AuthPage({ mode }: AuthPageProps) {
       */}
       <div
         className={
-          "relative z-10 mx-auto flex min-h-dvh w-full max-w-[30rem] flex-col " +
+          "relative z-10 mx-auto flex min-h-screen min-h-dvh w-full max-w-[30rem] flex-col " +
           "justify-center px-5 pt-[max(2rem,env(safe-area-inset-top))] " +
           "pb-[max(2rem,env(safe-area-inset-bottom))] sm:px-8 sm:py-16"
         }

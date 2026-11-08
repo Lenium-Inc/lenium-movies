@@ -133,9 +133,9 @@ function params(site: TrailerSite, id: string, opts: PreviewOptions): string {
       // a suggestion it is free to ignore. The embed picks the highest quality
       // the connection sustains, which is the same thing a viewer gets.
       const query = new URLSearchParams({
-        autoplay: "1",
-        mute: "1",
-        controls: "0",
+        autoplay: opts.autoplay === false ? "0" : "1",
+        mute: opts.muted === false ? "0" : "1",
+        controls: opts.controls ? "1" : "0",
         loop: opts.loop ? "1" : "0",
         playlist: id,
         playsinline: "1",
@@ -156,19 +156,19 @@ function params(site: TrailerSite, id: string, opts: PreviewOptions): string {
 
     case "dailymotion":
       return new URLSearchParams({
-        autoplay: "1",
-        muted: "1",
+        autoplay: opts.autoplay === false ? "0" : "1",
+        muted: opts.muted === false ? "0" : "1",
         loop: opts.loop ? "1" : "0",
-        controls: "0",
+        controls: opts.controls ? "1" : "0",
         enablejsapi: "1",
       }).toString();
 
     case "vimeo":
       return new URLSearchParams({
-        autoplay: "1",
-        muted: "1",
+        autoplay: opts.autoplay === false ? "0" : "1",
+        muted: opts.muted === false ? "0" : "1",
         loop: opts.loop ? "1" : "0",
-        controls: "0",
+        controls: opts.controls ? "1" : "0",
         dnt: "1",
       }).toString();
   }
@@ -177,6 +177,18 @@ function params(site: TrailerSite, id: string, opts: PreviewOptions): string {
 export interface PreviewOptions {
   /** Loop the clip. On for a hover preview, off for a watched trailer. */
   loop?: boolean;
+  /**
+   * Show the provider's own transport controls. Decorative frames (hero,
+   * hover) keep them off; a trailer the viewer deliberately opened needs them.
+   */
+  controls?: boolean;
+  /**
+   * Start with sound. Defaults to muted because unmuted autoplay is blocked
+   * nearly everywhere; the clicked-trailer modal opts in after a user gesture.
+   */
+  muted?: boolean;
+  /** Autoplay. Off for frames the viewer starts manually. */
+  autoplay?: boolean;
   /**
    * The `origin` parameter some players require before they will play.
    *

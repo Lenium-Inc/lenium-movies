@@ -6,7 +6,6 @@ import type { View } from "@/components/layout/navigation";
 import { ProfileMenu } from "@/components/layout/ProfileMenu";
 import { NavbarSearch } from "@/components/layout/NavbarSearch";
 import { NotificationsBell } from "@/components/layout/NotificationsBell";
-import { AndroidDownloadLink } from "@/components/layout/AndroidDownloadLink";
 import { savedListIds, subscribeList } from "@/services/lists";
 
 interface NavbarProps {
@@ -146,10 +145,6 @@ export function Navbar({ view, onNavigate }: NavbarProps) {
         </nav>
 
         <div className="ml-auto flex min-w-0 items-center gap-2.5">
-          {/* The web is the storefront for the sideloaded APK, so the download
-              lives in the persistent chrome rather than only behind a profile
-              dropdown the viewer may never open. */}
-          <AndroidDownloadLink className="hidden lg:inline-flex" />
           {/*
             A real input, not a button that opens one. It used to be two
             separate controls -- a wide pill on desktop and an icon on mobile --
@@ -157,7 +152,9 @@ export function Navbar({ view, onNavigate }: NavbarProps) {
             behind an opaque backdrop. One inline field covers every viewport, and
             its results drop down underneath instead of taking over the page.
           */}
-          <NavbarSearch />
+          <div className="hidden min-w-0 sm:block">
+            <NavbarSearch />
+          </div>
 
           <div className="shrink-0">
             <NotificationsBell />
@@ -184,7 +181,10 @@ export function Navbar({ view, onNavigate }: NavbarProps) {
       {/* Mobile menu panel */}
       {menuOpen && (
         <div className="sv-chrome border-t lg:hidden">
-          <nav className="flex items-center gap-6 px-4 py-3">
+          <div className="px-4 pt-3 sm:hidden">
+            <NavbarSearch fullWidth />
+          </div>
+          <nav className="grid grid-cols-2 gap-x-4 gap-y-3 px-4 py-4 sm:grid-cols-3">
             {NAV_LINKS.map(link => (
               <button
                 key={link.id}
@@ -202,9 +202,6 @@ export function Navbar({ view, onNavigate }: NavbarProps) {
             <VyteendaLink className="text-sm font-medium" />
             <MyListLink className="text-sm font-medium" />
           </nav>
-          <div className="px-4 pb-3">
-            <AndroidDownloadLink className="w-full justify-center" />
-          </div>
         </div>
       )}
     </header>
