@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLocation, useParams, useSearch } from "wouter";
 import { Bookmark, Check, Film, Play, Star, X } from "lucide-react";
 import { Navbar } from "@/components/layout/Navbar";
@@ -79,6 +79,38 @@ export default function TitlePage() {
   const [trailerFrameLoaded, setTrailerFrameLoaded] = useState(false);
   const [trailerOpen, setTrailerOpen] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  /*
+   * Start the expensive parts of playback on the Play control's hover/focus,
+   * not on the click. The route chunk, the detail record and the stream walk
+   * are all cacheable; doing them a beat early is the difference between a
+   * spinner and a first frame that is already there. Every failure is silent:
+   * this is a head start, and the watch page owns the real error path.
+   */
+  const prewarmPlayback = useCallback(() => {
+    const movie = meta?.movie;
+    if (!movie?.providerId) return;
+    void import("@/pages/Watch");
+    void import("@/services/api")
+      .then(async ({ resolveStream, getStreamSource }) => {
+        const resolved = await resolveStream(movie.providerId, movie.year, {
+          detailPath: movie.providerId,
+          mediaType: movie.mediaType,
+        });
+        if (!resolved.stream.id) return;
+        await getStreamSource({
+          tmdbId: resolved.stream.id,
+          detailPath: resolved.stream.detail_path || movie.providerId,
+          mediaType: movie.mediaType,
+          season: movie.mediaType === "tv" ? resumeSeason ?? 1 : undefined,
+          episode: movie.mediaType === "tv" ? resumeEpisode ?? 1 : undefined,
+        });
+      })
+      .catch(() => {
+        /* the watch page reports a real failure if the viewer plays */
+      });
+  }, [meta?.movie, resumeSeason, resumeEpisode]);
+
 
   useEffect(() => {
     let active = true;
@@ -365,7 +397,11 @@ export default function TitlePage() {
                     <div className="mt-5 flex flex-wrap items-center gap-3">
                       <button
                         type="button"
-                        onClick={() =>
+                        onMouseEnter={prewarmPlayback}
+                        onFocus={prewarmPlayback}
+                        onTouchStart={prewarmPlayback}
+                        onClick={() => {
+                          prewarmPlayback();
                           navigate(
                             buildWatchPath(movie.providerId, {
                               mediaType: movie.mediaType,
@@ -375,8 +411,8 @@ export default function TitlePage() {
                               season: resumeSeason,
                               episode: resumeEpisode,
                             })
-                          )
-                        }
+                          );
+                        }}
                         aria-label="Play now"
                         className="flex h-12 w-12 items-center justify-center gap-2 rounded-xl bg-white px-0 py-0 text-sm font-bold text-black shadow-lg shadow-black/30 transition-all hover:bg-neutral-200 active:scale-[0.98] sm:h-auto sm:w-auto sm:px-8 sm:py-3"
                       >

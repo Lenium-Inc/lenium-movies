@@ -2057,7 +2057,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         onContextMenu={preventContextMenu}
         crossOrigin={Capacitor.getPlatform() === "android" ? "anonymous" : undefined}
         playsInline
-        preload="metadata"
+        preload="auto"
         controls={false}
         controlsList="nodownload noplaybackrate"
         disablePictureInPicture
