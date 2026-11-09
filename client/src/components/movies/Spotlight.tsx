@@ -491,15 +491,15 @@ export function Spotlight({
          * to the edge of the frame. */}
         <div className="absolute inset-x-0 bottom-0 z-10 px-6 pb-12 sm:px-10 sm:pb-14 lg:px-14 lg:pb-16">
           <div className="max-w-xl">
-            <AnimatePresence initial={false} mode="popLayout">
+            <AnimatePresence initial={false} mode="wait">
               {current ? (
                 <motion.div
                   key={current.id}
                   className="space-y-5"
                   initial={{ opacity: 0, y: 22 }}
                   animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -12 }}
-                  transition={{ duration: 0.5, ease: EASE }}
+                  exit={{ opacity: 0, y: -12, transition: { duration: 0.18 } }}
+                  transition={{ duration: 0.35, ease: EASE }}
                 >
                   {titleLogoUrl ? (
                     <img

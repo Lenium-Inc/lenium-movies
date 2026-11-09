@@ -533,7 +533,10 @@ input[type="search"]::-webkit-search-decoration {
 }
 .hero-drift {
   animation: hero-drift 18s ease-in-out infinite alternate;
-  will-change: transform;
+  /* No `will-change: transform` here. Promoting the full-bleed hero image to
+     its own compositor layer while framer-motion also transforms its parent
+     made Chrome paint the artwork black on some GPUs (and consistently in
+     headless captures). The drift is cheap enough without the hint. */
 }
 @media (prefers-reduced-motion: reduce) {
   .hero-drift {

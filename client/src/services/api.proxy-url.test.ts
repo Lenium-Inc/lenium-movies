@@ -55,4 +55,16 @@ describe("media relay origin", () => {
       "https://relay.example.com/proxy/stream?url=https%3A%2F%2Fcdn.example.com%2Fa.mp4";
     expect(streamvy.proxiedVideoUrl(handle)).toBe(handle);
   });
+
+  it("recognises the Edge relay handle and unwraps its target", async () => {
+    const { streamvy } = await load("https://media.example.com");
+    const handle =
+      "https://www.streamvy.me/api/proxy/stream?url=https%3A%2F%2Fcdn.example.com%2Fa.mp4";
+
+    expect(streamvy.isProxiedVideoUrl(handle)).toBe(true);
+    expect(streamvy.proxiedVideoTarget(handle)).toBe(
+      "https://cdn.example.com/a.mp4"
+    );
+    expect(streamvy.proxiedVideoUrl(handle)).toBe(handle);
+  });
 });

@@ -96,6 +96,22 @@ describe("buildDownloadTiers", () => {
     expect(tiers[0]?.candidate.url).toBe("https://cdn.example/hd.mp4");
   });
 
+  it("unwraps the Vercel Edge relay handle before classifying it", () => {
+    // Production playback goes through `/api/proxy/stream` on the Edge host,
+    // not the API's bare `/proxy/stream`. The tier builder must recognise both
+    // or the Download control reports "unavailable" for a progressive file.
+    const tiers = buildDownloadTiers([
+      {
+        ...variant("1080p", 1080, "unused.mp4"),
+        url: "https://www.streamvy.me/api/proxy/stream?url=https%3A%2F%2Fcdn.example%2Finception.mp4",
+      },
+    ]);
+
+    expect(tiers).toHaveLength(1);
+    expect(tiers[0]?.label).toBe("1080p (Full HD)");
+    expect(tiers[0]?.candidate.url).toBe("https://cdn.example/inception.mp4");
+  });
+
   it("builds tiers from backend-minted download handles", () => {
     // The resolver ships play URLs as opaque tokenised handles that can never
     // pass a client-side container sniff; the per-stream `downloadUrl` is the

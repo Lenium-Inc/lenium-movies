@@ -744,7 +744,11 @@ const PASSTHROUGH_SCHEME = /^(blob|data):/i;
 export function isProxiedVideoUrl(url: string): boolean {
   try {
     const path = new URL(url, "https://url.invalid").pathname;
-    return path === VIDEO_PROXY_PATH || path === "/api/proxy/video";
+    // Suffix match, not equality: the same relay is served from `/proxy/stream`
+    // on the API host and `/api/proxy/stream` on the Vercel Edge host. Matching
+    // the whole pathname made the Edge handle look like an ordinary URL, so
+    // downloads refused to unwrap it and reported "Download unavailable".
+    return path.endsWith("/proxy/stream") || path.endsWith("/proxy/video");
   } catch {
     return false;
   }
