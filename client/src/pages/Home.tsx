@@ -156,65 +156,8 @@ export default function Home() {
      * the app: the palette, the cards and every surface token resolved to
      * `#0b0c10` / slate, so this one wrapper read as a slightly different black
      * behind the shelves. The shell owns the background now.
-     */
-    <div className="sv-accent-scope min-h-screen" style={accentStyle}>
-      <TopProgressBar isLoading={loading || searchLoading || discoverLoading} />
-      {isHomeView && heroWashUrl ? (
-        <div
-          aria-hidden
-          className="pointer-events-none fixed inset-x-0 top-0 z-0 h-[80vh] overflow-hidden"
-        >
-          <img
-            src={heroWashUrl}
-            alt=""
-            loading="lazy"
-            decoding="async"
-            className="h-full w-full scale-110 object-cover opacity-30 blur-3xl"
-          />
-          {/* Fades the blurred art back into the base colour. `transparent`
-              is used deliberately: a named base here would paint a visible
-              ellipse edge over the shell's own gradient. */}
-          <div className="absolute inset-0 bg-[radial-gradient(ellipse_90%_70%_at_50%_0%,transparent_20%,var(--bg)_100%)]" />
-        </div>
-      ) : null}
-      <div className="relative z-10">
-        <Navbar view={view} onNavigate={setSection} />
-
-        {/* The hero is a sibling of <main>, not a child of it, because <main>
-            is the page's 1480px content column and the whole point of a
-            full-bleed hero is that it ignores that column. It sits directly under
-            the nav and runs the full width of the viewport, and its own text is
-            re-aligned to the same gutter in Spotlight so the title still lines up
-            with the shelves underneath instead of drifting to the screen edge. */}
-        {showHero ? (
-          <div className="relative">
-            <Spotlight
-              items={heroItems}
-              onActiveChange={setHeroActive}
-              onMoreInfo={openTitle}
-            />
-          </div>
-        ) : isHomeView && loading ? (
-          /* Reserve the hero's exact box while `/home` is in flight. Rendering
-             nothing and then inserting a 540-660px block was the single largest
-             layout shift on the page. */
-          <div className="relative">
-            <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-              <div
-                aria-hidden
-                className="h-[min(660px,72vh)] min-h-[540px] w-full animate-pulse rounded-3xl border border-white/[0.07] bg-neutral-900/70"
-              />
-            </div>
-          </div>
-        ) : null}
-
-        {/* `relative z-10` plus a negative top margin is what makes the first
-            shelf sit *on* the hero instead of below it. The negative margin alone
-            would slide the content behind the hero, because the hero is painted
-            later in document order and both are in the same stacking context --
-            `z-10` is what puts the shelves back in front. Overlap is capped so the
             hero's title, copy and buttons are never covered by a shelf. */}
-        <main className="relative z-10 mx-auto mt-8 max-w-[1480px] px-4 pb-24 sm:px-6 lg:px-8">
+        <main className="relative z-10 mx-auto mt-8 max-w-[1480px] px-4 pb-24 sm:px-6 lg:px-8 overflow-x-auto">
           {/*
             The on-screen search bar.
 
@@ -229,11 +172,6 @@ export default function Home() {
             Hidden during a search: SearchStatusBar below already owns the
             active query and its Clear control.
           */}
-          {!isClientSearch ? (
-            <section aria-label="Search the catalogue" className="mb-8 max-w-2xl">
-              <NavbarSearch fullWidth shortcut={false} />
-            </section>
-          ) : null}
           {/*
             The site's own words, on the page a crawler lands on first.
 
@@ -414,7 +352,7 @@ export default function Home() {
                   )}
                 </section>
               ) : null}
-              <div className="mt-8">
+              <div className="mt-8 overflow-x-auto">
                 {loading ? (
                   <SkeletonMovieGrid count={12} />
                 ) : searchLoading && isClientSearch ? (
