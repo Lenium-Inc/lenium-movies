@@ -67,8 +67,20 @@ function toItem(r: SearchSuggestion): PaletteItem {
  *
  * ⌘K / Ctrl+K focuses the input directly (it no longer toggles a dialog), and
  * "/" is kept because the hero header advertises it.
+ *
+ * `shortcut` exists because the component is now mounted twice: once in the
+ * navbar and once, full width, on the home screen. A second copy of the global
+ * key listener would focus its own input *and* open its own dropdown, so only
+ * the navbar instance claims the shortcut (the one the header advertises) and
+ * the on-screen copy opts out.
  */
-export function NavbarSearch({ fullWidth = false }: { fullWidth?: boolean }) {
+export function NavbarSearch({
+  fullWidth = false,
+  shortcut = true,
+}: {
+  fullWidth?: boolean;
+  shortcut?: boolean;
+}) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [suggestions, setSuggestions] = useState<PaletteItem[]>([]);
@@ -113,6 +125,7 @@ export function NavbarSearch({ fullWidth = false }: { fullWidth?: boolean }) {
   // ⌘K / Ctrl+K focuses the field; "/" does too, but only outside a text field
   // so it stays typeable while composing a query.
   useEffect(() => {
+    if (!shortcut) return;
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
@@ -136,7 +149,7 @@ export function NavbarSearch({ fullWidth = false }: { fullWidth?: boolean }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [shortcut]);
 
   // The results grid's own Clear control dispatches this same event, so
   // listening here keeps the field in step with a search that was cleared

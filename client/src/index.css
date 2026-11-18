@@ -538,6 +538,16 @@ input[type="search"]::-webkit-search-decoration {
      made Chrome paint the artwork black on some GPUs (and consistently in
      headless captures). The drift is cheap enough without the hint. */
 }
+
+/* On mobile, nested animations (CSS drift + Framer Motion scale) frequently
+   trigger compositing bugs in headless and some mobile browsers. The crop is
+   too tight for the drift to be meaningful anyway. */
+@media (max-width: 640px) {
+  .hero-drift {
+    animation: none !important;
+    transform: scale(1.03) !important;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   .hero-drift {
     animation: none;
@@ -977,5 +987,42 @@ input[type="search"]::-webkit-search-decoration {
   .movie-card:hover .movie-card-caption,
   .movie-card:focus-within .movie-card-caption {
     transform: translateY(0);
+  }
+}
+
+/* ==========================================================================
+   Vyteenda deck sizing.
+
+   The card was a fixed 520px (560px from `sm:` up) box under a fixed 620px
+   stack container. On a phone that combination pushed the match/pass buttons
+   and the bottom of the card past the fold, and on a short browser window it
+   forced a dead scroll before the first card was even fully visible. The
+   height is now the viewport minus the chrome that sits around the deck
+   (navbar, header, progress rail, action buttons), clamped to floors so the
+   card never collapses on a landscape phone and a ceiling so it never
+   balloons on a tall desktop window.
+   ========================================================================== */
+.vt-card {
+  height: min(35rem, calc(100vh - 30rem));
+  min-height: 24rem;
+}
+@media (max-width: 639px) {
+  .vt-card {
+    height: min(27rem, calc(100vh - 21.5rem));
+    min-height: 20rem;
+  }
+}
+/* 100vh on a phone includes the area the URL bar covers, so the measured
+   height overstates what is actually visible and the card stays slightly too
+   tall. Small-viewport units measure the real visible box; upgrade where the
+   browser has them. */
+@supports (height: 100dvh) {
+  .vt-card {
+    height: min(35rem, calc(100dvh - 30rem));
+  }
+  @media (max-width: 639px) {
+    .vt-card {
+      height: min(27rem, calc(100dvh - 21.5rem));
+    }
   }
 }

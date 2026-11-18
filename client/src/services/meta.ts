@@ -21,6 +21,12 @@ import {
   type MovieBoxItem,
   type MovieBoxSubject,
 } from "@/services/streamvy";
+import {
+  tmdbEnabled,
+  tmdbHomeSections,
+  tmdbTitleDetails,
+  type TmdbTitleDetails,
+} from "@/services/tmdb";
 import type {
   CastMember,
   Movie,
@@ -119,6 +125,7 @@ function mapDetail(
     id: numericId(subject.subjectId),
     providerId:
       subject.detailPath?.trim() || handle?.trim() || subject.subjectId,
+    subjectId: subject.subjectId?.trim() || null,
     title: subject.title?.trim() || detail.metadata?.title?.trim() || "Untitled",
     year: yearFromDate(subject.releaseDate),
     runtime: runtimeMinutes(subject.duration),
@@ -232,6 +239,77 @@ async function similarTitles(
 }
 
 /**
+ * A TMDB record as the title page's `Movie`.
+ *
+ * This is the details-page half of the catalogue fallback: the cards on the
+ * home page may have come from TMDB while the media API was down, and opening
+ * one should still show its title, artwork and synopsis rather than the raw id.
+ */
+function mapTmdbDetails(details: TmdbTitleDetails): Movie {
+  return {
+    id: details.id,
+    providerId: String(details.id),
+    title: details.title,
+    year: details.year,
+    runtime: details.runtime,
+    rating: null,
+    score: details.score,
+    genre: details.genres,
+    poster: details.poster_url || null,
+    backdrop: details.backdrop_url || details.poster_url || null,
+    synopsis: details.overview,
+    director: details.director,
+    cast: details.cast,
+    castMembers: [],
+    country: null,
+    language: null,
+    releaseDate: details.release_date,
+    source: "tmdb",
+    mediaType: details.mediaType,
+    ...(details.mediaType === "tv"
+      ? {
+          seasons: details.seasons ?? 1,
+          episodes_per_season: details.episodes_per_season ?? 1,
+        }
+      : {}),
+    ...(details.score !== null ? { vote_average: details.score } : {}),
+    genres: details.genres,
+    overview: details.overview,
+  };
+}
+
+/** Neighbours for a fallback title, taken from the cached TMDB shelves. */
+async function tmdbSimilarTitles(
+  mediaType: "movie" | "tv"
+): Promise<SimilarItem[]> {
+  try {
+    const sections = await tmdbHomeSections();
+    const seen = new Set<string>();
+    const similar: SimilarItem[] = [];
+    for (const section of sections) {
+      if (section.mediaType !== mediaType) continue;
+      for (const movie of section.movies) {
+        if (seen.has(movie.id)) continue;
+        seen.add(movie.id);
+        similar.push({
+          providerId: movie.id,
+          mediaType,
+          title: movie.title,
+          year: movie.year ?? null,
+          poster: movie.poster_url || null,
+          score: movie.vote_average ?? null,
+          synopsis: movie.overview ?? "",
+        });
+        if (similar.length >= 18) return similar;
+      }
+    }
+    return similar;
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Full metadata plus a similar-titles wall, without resolving a stream.
  *
  * `handle` is the detail slug (the route param); a subject id works only when
@@ -248,7 +326,18 @@ export async function fetchMovieMeta(
     const similar = await similarTitles(detail, movie.mediaType);
     return { movie, similar };
   } catch {
-    return null;
+    // A numeric handle is a TMDB id from the fallback catalogue. Anything else
+    // (a MovieBox slug or a 19-digit subject id) has no TMDB record to ask for.
+    if (!tmdbEnabled()) return null;
+    try {
+      const details = await tmdbTitleDetails(handle, kind);
+      if (!details) return null;
+      const movie = mapTmdbDetails(details);
+      const similar = await tmdbSimilarTitles(movie.mediaType);
+      return { movie, similar };
+    } catch {
+      return null;
+    }
   }
 }
 

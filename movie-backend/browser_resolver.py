@@ -54,6 +54,9 @@ _ARGS = [
     "--mute-audio",
     "--disable-blink-features=AutomationControlled",
     "--no-sandbox",
+    # Containers (Cloud Run, Render) mount a 64 MB /dev/shm, where Chromium's
+    # default shared-memory buffers crash the renderer on media-heavy pages.
+    "--disable-dev-shm-usage",
 ]
 #: Ad and analytics hosts the provider page pulls in. They are aborted before
 #: the request leaves the process: they never carry media, several answer with

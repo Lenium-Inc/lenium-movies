@@ -5,6 +5,7 @@ import {
   Info,
   Link2,
   Play,
+  Smartphone,
   Star,
 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
@@ -23,7 +24,8 @@ import { TrailerBrandingMask } from "@/components/stream/TrailerBrandingMask";
 import { useTrailerPlayback } from "@/hooks/useTrailerPlayback";
 import { fetchTrailer, type TrailerInfo } from "@/services/api";
 import { isUpcoming, releaseCountdownLabel } from "@/services/notifications";
-import { nativeShare } from "@/lib/native";
+import { isNativeApp, nativeShare } from "@/lib/native";
+import { ANDROID_APP_URL } from "@/lib/androidApp";
 
 export interface SpotlightProps {
   items: readonly Movie[];
@@ -593,7 +595,7 @@ export function Spotlight({
                     <div className="flex flex-wrap items-center gap-2.5 sm:gap-3">
                       {upcoming ? (
                         <RemindMeButton movie={current} />
-                      ) : (
+                      ) : isNativeApp() ? (
                         <button
                           type="button"
                           onClick={() => handlePlay(current)}
@@ -607,6 +609,19 @@ export function Spotlight({
                           <Play className="h-4 w-4 fill-current" aria-hidden />
                           Play
                         </button>
+                      ) : (
+                        <a
+                          href={ANDROID_APP_URL}
+                          className={
+                            "inline-flex min-h-11 items-center gap-2 rounded-xl bg-white px-6 " +
+                            "text-sm font-bold text-black transition " +
+                            "hover:bg-[var(--accent)] hover:text-white focus-visible:outline focus-visible:outline-2 " +
+                            "focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
+                          }
+                        >
+                          <Smartphone className="h-4 w-4" aria-hidden />
+                          Watch free in app
+                        </a>
                       )}
 
                       <button

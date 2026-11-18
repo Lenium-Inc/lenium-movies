@@ -1,10 +1,12 @@
 import { useMemo, useState, useEffect, useRef } from "react";
-import { Check, ChevronDown, Play, Loader2 } from "lucide-react";
+import { Check, ChevronDown, Play, Loader2, Smartphone } from "lucide-react";
 import { useStatsRevision } from "@/hooks/useStats";
 import { getProgressFraction } from "@/services/stats";
 import { formatRuntime } from "@/lib/format";
 import { fetchSeasonDetails } from "@/services/api";
 import type { StreamEpisode, StreamMovie } from "@/services/api";
+import { ANDROID_APP_URL } from "@/lib/androidApp";
+import { isNativeApp } from "@/lib/native";
 
 interface EpisodeMatrixProps {
   movie: StreamMovie;
@@ -201,6 +203,21 @@ export function EpisodeMatrix({ movie, onPlay }: EpisodeMatrixProps) {
         )}
       </div>
 
+      {!isNativeApp() ? (
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-3">
+          <p className="text-[12px] leading-5 text-white/55">
+            Episodes play in the Stream Vy Android app.
+          </p>
+          <a
+            href={ANDROID_APP_URL}
+            className="inline-flex min-h-9 items-center gap-2 rounded-lg bg-white px-3.5 text-xs font-bold text-black transition hover:bg-white/90"
+          >
+            <Smartphone className="h-3.5 w-3.5" />
+            Watch free in app
+          </a>
+        </div>
+      ) : null}
+
       <div className="mt-3 space-y-2">
         {grouped.map(([season, list]) => {
           const open = openSeasons.has(season);
@@ -304,14 +321,16 @@ export function EpisodeMatrix({ movie, onPlay }: EpisodeMatrixProps) {
                             )}
                           </div>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => onPlay(episode)}
-                          aria-label={`Play ${details?.title || episode.title}`}
-                          className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white text-black transition hover:bg-white/90"
-                        >
-                          <Play className="h-3.5 w-3.5 fill-current" />
-                        </button>
+                        {isNativeApp() ? (
+                          <button
+                            type="button"
+                            onClick={() => onPlay(episode)}
+                            aria-label={`Play ${details?.title || episode.title}`}
+                            className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white text-black transition hover:bg-white/90"
+                          >
+                            <Play className="h-3.5 w-3.5 fill-current" />
+                          </button>
+                        ) : null}
                       </li>
                     );
                   })}

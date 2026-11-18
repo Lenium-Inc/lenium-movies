@@ -8,6 +8,10 @@
     "dev:next": "next dev",
     "build": "vite build && esbuild server/_core/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist",
     "build:next": "next build",
+    "build:cf": "vite build",
+    "deploy:cf": "npm run build:cf && wrangler deploy",
+    "preview:cf": "npm run build:cf && wrangler dev",
+    "check:cf": "npm run build:cf && wrangler deploy --dry-run --outdir .wrangler/dry-run",
     "start": "NODE_ENV=production node dist/index.js",
     "start:next": "next start",
     "check": "tsc --noEmit && npm run check:secrets",
@@ -29,6 +33,7 @@
     "@hookform/resolvers": "^5.2.2",
     "@neon/config": "^1.7.3",
     "@neon/env": "^1.4.4",
+    "@neondatabase/serverless": "^1.2.0",
     "@radix-ui/react-accordion": "^1.2.12",
     "@radix-ui/react-alert-dialog": "^1.1.15",
     "@radix-ui/react-aspect-ratio": "^1.1.7",
@@ -125,10 +130,15 @@
     "typescript": "5.9.3",
     "vite": "^7.1.7",
     "vite-plugin-manus-runtime": "0.0.59",
-    "vitest": "^2.1.4"
+    "vitest": "^2.1.4",
+    "wrangler": "^4.86.0"
   },
   "packageManager": "pnpm@10.4.1+sha512.c753b6c3ad7afa13af388fa6d808035a008e30ea9993f58c6663e2bc5ff21679aa834db094987129aa4d488b86df57f7b634981b2f827cdcacc698cc0cfb88af",
   "pnpm": {
+    "onlyBuiltDependencies": [
+      "@tailwindcss/oxide",
+      "esbuild"
+    ],
     "patchedDependencies": {
       "wouter@3.7.1": "patches/wouter@3.7.1.patch"
     },

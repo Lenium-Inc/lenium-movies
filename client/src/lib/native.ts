@@ -45,6 +45,27 @@ export async function initNative(): Promise<void> {
 
   try {
     const { App } = await import("@capacitor/app");
+
+    const openDeepLink = (raw: string | null | undefined) => {
+      if (!raw) return;
+      try {
+        const parsed = new URL(raw);
+        if (parsed.protocol !== "streamvy:") return;
+        if (parsed.host !== "watch") return;
+        const detailPath = decodeURIComponent(
+          parsed.pathname.replace(/^\/+/, "")
+        );
+        if (!detailPath) return;
+        window.location.assign(`/watch/${detailPath}${parsed.search || ""}`);
+      } catch {
+        // A malformed link is ignored; the app still opens normally.
+      }
+    };
+
+    await App.addListener("appUrlOpen", ({ url }) => openDeepLink(url));
+    const launch = await App.getLaunchUrl();
+    openDeepLink(launch?.url);
+
     await App.addListener("backButton", ({ canGoBack }) => {
       if (canGoBack) {
         window.history.back();

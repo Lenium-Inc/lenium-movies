@@ -40,6 +40,8 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        // Custom plugins must be registered before the bridge is created.
+        registerPlugin(StreamVyPlayerPlugin.class);
         super.onCreate(savedInstanceState);
 
         WebView webView = getBridge().getWebView();

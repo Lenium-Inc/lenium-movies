@@ -16,7 +16,7 @@ import { AppUpdatePrompt } from "./components/layout/AppUpdatePrompt";
 // else — especially Watch, which drags the player, hls.js and dash.js —
 // loads only when its path is actually visited.
 const Profile = lazy(() => import("./pages/Profile"));
-const WatchPage = lazy(() => import("./pages/Watch").then(m => ({ default: m.WatchPage })));
+const WatchPage = lazy(() => import("./pages/WatchGate"));
 const TitlePage = lazy(() => import("./pages/Title"));
 const MyList = lazy(() => import("./pages/MyList"));
 const ShareInvite = lazy(() => import("./pages/ShareInvite"));

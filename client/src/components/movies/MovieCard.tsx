@@ -132,7 +132,7 @@ export const MovieCard: React.FC<MovieCardProps> = ({
           "block w-full cursor-pointer text-left" +
           (variant === "score" ? " min-w-0 flex-1" : "")
         }
-        aria-label={`Play ${movie.title}`}
+        aria-label={`View ${movie.title}`}
       >
         <div className="relative aspect-[2/3] w-full overflow-hidden bg-zinc-800">
           {hasPoster ? (

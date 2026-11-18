@@ -1,0 +1,37 @@
+# The Cloud Run image needs gunicorn.conf.py and movie-backend only.
+.git
+.github
+.gitignore
+node_modules
+dist
+build
+.next
+.vercel
+.wrangler
+.agents
+.env
+.env.*
+.dev.vars
+.dev.vars.*
+
+# The SPA and the Worker are deployed separately.
+client
+api
+cf
+scripts
+docs
+shared
+server
+app
+components
+lib
+types
+
+*.md
+
+# Test-only and oversized assets inside the backend. The GeoIP snapshot is kept;
+# its compressed source is not needed at runtime.
+movie-backend/test_*.py
+movie-backend/data/*
+movie-backend/geoip/*.gz
+movie-backend/movies.json.export

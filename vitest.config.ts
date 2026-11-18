@@ -36,6 +36,9 @@ export default defineConfig({
       // what canonical URL every deployment ships, and it is only reachable
       // through a production build otherwise.
       "scripts/**/*.test.ts",
+      // The Worker's Node-handler adapter is only exercised by `wrangler dev`
+      // otherwise, which needs a newer runtime than CI images guarantee.
+      "cf/**/*.test.ts",
     ],
   },
 });

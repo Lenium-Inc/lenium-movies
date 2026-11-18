@@ -1,0 +1,53 @@
+# Render blueprint for the catalogue/playback backend.
+#
+# `movie-backend/` is a Flask app: it serves /api/catalog/*, /api/search,
+# /api/media, /api/v1/playback/* and the /home feed, and resolves stream URLs
+# with a headless Chromium (see movie-backend/browser_resolver.py). It cannot run
+# on Workers — no Python WSGI runtime, no Chromium — so it stays on Render while
+# the SPA and the account API run on the Cloudflare Worker.
+#
+# A Render Disk is required: the SQLite catalogue cache survives deploys there
+# but not on an ephemeral filesystem, and disks are not available on the free
+# plan.
+services:
+  - type: web
+    name: streamvy-api
+    runtime: python
+    plan: starter
+    region: frankfurt
+    branch: main
+    rootDir: movie-backend
+    # app.py imports authdb/catalog_* as top-level modules, so the working
+    # directory must be movie-backend/. Playwright is installed here rather than
+    # listed in requirements.txt because it is optional at import time: without
+    # a browser the extractors run but resolve no stream URL.
+    buildCommand: >-
+      pip install -r requirements.txt &&
+      (python -m playwright install --with-deps chromium ||
+      python -m playwright install chromium)
+    # `-c ../gunicorn.conf.py` because the config lives at the repo root and
+    # supplies `no_server_header` / `forwarded_allow_ips`.
+    startCommand: gunicorn -c ../gunicorn.conf.py -b 0.0.0.0:$PORT app:app
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: DATABASE_URL
+        sync: false
+      - key: TMDB_API_KEY
+        sync: false
+      - key: OMDB_API_KEY
+        sync: false
+      - key: TRAKT_CLIENT_ID
+        sync: false
+      - key: ADMIN_EMAILS
+        sync: false
+      # Browser origin allowlist. Cloudflare hosts the SPA, so the Worker's
+      # origin has to be here or the catalogue rejects its requests; the two
+      # Capacitor WebView origins cover the Android shell.
+      - key: ALLOWED_ORIGINS
+        value: https://www.streamvy.me,https://streamvy.me,https://streamvy.samuelnganga7933.workers.dev,https://localhost,capacitor://localhost
+    disk:
+      name: catalog-cache
+      mountPath: /opt/render/project/src/movie-backend/data
+      sizeGB: 1

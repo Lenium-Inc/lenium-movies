@@ -24,7 +24,26 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!-- The website's "Open in app" link. The React bundle turns this
+                 into /watch/<detailPath> so a shared title opens the same
+                 native player as a tap inside the catalogue. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="streamvy" android:host="watch" />
+            </intent-filter>
+
         </activity>
+
+        <activity
+            android:name=".NativePlayerActivity"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|uiMode|navigation|density"
+            android:exported="false"
+            android:label="@string/title_activity_main"
+            android:launchMode="singleTop"
+            android:screenOrientation="sensor"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

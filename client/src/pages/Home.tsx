@@ -10,6 +10,7 @@ import { withAlpha } from "@/lib/genreColors";
 import { Navbar } from "@/components/layout/Navbar";
 import {
   APPLY_SEARCH_EVENT,
+  NavbarSearch,
   SELECT_TITLE_EVENT,
   type PaletteItem,
 } from "@/components/layout/NavbarSearch";
@@ -214,6 +215,25 @@ export default function Home() {
             `z-10` is what puts the shelves back in front. Overlap is capped so the
             hero's title, copy and buttons are never covered by a shelf. */}
         <main className="relative z-10 mx-auto mt-8 max-w-[1480px] px-4 pb-24 sm:px-6 lg:px-8">
+          {/*
+            The on-screen search bar.
+
+            The navbar field was the only query surface on a phone, and it
+            shrinks to a 6.5rem pill there -- too small to hit and too narrow
+            to read a title in. This bar is full width on touch and sits at the
+            top of the catalogue content, while the navbar instance keeps the
+            ⌘K / "/" shortcut (hence `shortcut={false}`: two copies of that
+            listener would fight over focus). Both inputs speak the same
+            APPLY_SEARCH_EVENT, so they stay in sync either way.
+
+            Hidden during a search: SearchStatusBar below already owns the
+            active query and its Clear control.
+          */}
+          {!isClientSearch ? (
+            <section aria-label="Search the catalogue" className="mb-8 max-w-2xl">
+              <NavbarSearch fullWidth shortcut={false} />
+            </section>
+          ) : null}
           {/*
             The site's own words, on the page a crawler lands on first.
 
@@ -466,7 +486,7 @@ export default function Home() {
                     {rows.map((row, index) =>
                       row.kind === "continue" ? (
                         // The viewer's own queue gets the velvet treatment:
-                        // wide resume cards that play on click, rather than the
+                        // wide resume cards that open the title, rather than the
                         // poster grid every curator shelf below it uses.
                         <ContinueRow
                           key={row.title}

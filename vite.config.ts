@@ -3,6 +3,7 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
 import { defineConfig, loadEnv, type Plugin } from "vite";
+import { flattenCssLayersPlugin } from "./scripts/flattenCssLayers";
 import { seoOriginPlugin } from "./scripts/seoOriginPlugin";
 
 // =============================================================================
@@ -64,6 +65,12 @@ const plugins = [
   // the canonical URL, og:url and og:image name the host they are served from
   // instead of a production hostname baked into the file.
   seoOriginPlugin(),
+  // Tailwind v4 wraps its whole output in native cascade layers, which Chromium
+  // 87-98 WebViews (Huawei phones update through AppGallery, so a 2020-era
+  // device is often still there) discard entirely -- the visitor gets unstyled
+  // HTML. The JS target below is already chrome87; this brings the CSS down to
+  // the same floor by expanding @layer blocks in place.
+  flattenCssLayersPlugin(),
 ];
 
 export default defineConfig({

@@ -1,0 +1,8 @@
+# Local values for `npm run preview:cf` (wrangler dev).
+# Copy to `.dev.vars` — that file is gitignored. In production these are set with
+# `wrangler secret put <NAME>`; see docs/deployment.md.
+
+DATABASE_URL=postgresql://user:password@host/db?sslmode=require
+TMDB_API_KEY=
+# Optional: comma-separated extra browser origins allowed by the account API.
+ALLOWED_ORIGINS=

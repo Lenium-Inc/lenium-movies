@@ -98,6 +98,12 @@ jspm_packages/
 .out
 .storybook-out
 
+# Cloudflare Workers
+.wrangler/
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+
 # Temporary folders
 tmp/
 temp/

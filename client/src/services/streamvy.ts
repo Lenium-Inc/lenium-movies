@@ -18,6 +18,13 @@
  */
 
 import { parseSubtitleFile } from "@/lib/subtitleFile";
+import {
+  MOVIEBOX_DIRECT_ENABLED,
+  directCatalog,
+  directDetail,
+  directHome,
+  directSearch,
+} from "@/services/movieboxDirect";
 
 /**
  * An HTTP-level failure from the media API, carrying the status code.
@@ -512,14 +519,29 @@ function writePersistedHome(payload: MovieBoxHome): void {
   }
 }
 
-function fetchHome(): Promise<MovieBoxHome> {
-  return streamvyGet<MovieBoxHome>("/home", { context: "Home" }).then(
-    payload => {
-      rememberHome(payload);
-      writePersistedHome(payload);
-      return payload;
+function backendHome(): Promise<MovieBoxHome> {
+  return streamvyGet<MovieBoxHome>("/home", { context: "Home" });
+}
+
+async function loadHome(): Promise<MovieBoxHome> {
+  if (!MOVIEBOX_DIRECT_ENABLED) return backendHome();
+  try {
+    return await directHome();
+  } catch (directError) {
+    try {
+      return await backendHome();
+    } catch {
+      throw directError;
     }
-  );
+  }
+}
+
+function fetchHome(): Promise<MovieBoxHome> {
+  return loadHome().then(payload => {
+    rememberHome(payload);
+    writePersistedHome(payload);
+    return payload;
+  });
 }
 
 /** `GET /home`. */
@@ -555,18 +577,40 @@ export function getHome(force = false): Promise<MovieBoxHome> {
   return promise;
 }
 
-/** `GET /search?q=`. */
-export function searchSubjects(
+function backendSearch(
   query: string,
-  page = 1
+  page: number
 ): Promise<MovieBoxSearchPayload> {
   return streamvyGet<MovieBoxSearchPayload>("/search", {
     params: { q: query, page },
     context: "Search",
-  }).then(payload => {
-    for (const item of payload.items ?? []) rememberSubject(item);
-    return payload;
   });
+}
+
+async function loadSearch(
+  query: string,
+  page: number
+): Promise<MovieBoxSearchPayload> {
+  if (!MOVIEBOX_DIRECT_ENABLED) return backendSearch(query, page);
+  try {
+    return await directSearch(query, page);
+  } catch (directError) {
+    try {
+      return await backendSearch(query, page);
+    } catch {
+      throw directError;
+    }
+  }
+}
+
+/** `GET /search?q=`. */
+export async function searchSubjects(
+  query: string,
+  page = 1
+): Promise<MovieBoxSearchPayload> {
+  const payload = await loadSearch(query, page);
+  for (const item of payload.items ?? []) rememberSubject(item);
+  return payload;
 }
 
 /** `GET /search/suggest?q=`. */
@@ -586,18 +630,40 @@ export function suggestSubjects(query: string): Promise<MovieBoxSuggestion[]> {
   });
 }
 
-/** `GET /movies`, `/tv-series` or `/animation`. */
-export function getCatalog(
+function backendCatalog(
   kind: "movies" | "tv-series" | "animation",
   opts: { page?: number; sort?: string } = {}
 ): Promise<MovieBoxCatalogPage> {
   return streamvyGet<MovieBoxCatalogPage>(`/${kind}`, {
     params: { page: opts.page ?? 1, sort: opts.sort },
     context: kind === "movies" ? "Movies" : kind === "tv-series" ? "TV series" : "Animation",
-  }).then(payload => {
-    for (const item of payload.items ?? []) rememberSubject(item);
-    return payload;
   });
+}
+
+async function loadCatalog(
+  kind: "movies" | "tv-series" | "animation",
+  opts: { page?: number; sort?: string } = {}
+): Promise<MovieBoxCatalogPage> {
+  if (!MOVIEBOX_DIRECT_ENABLED) return backendCatalog(kind, opts);
+  try {
+    return await directCatalog(kind, opts);
+  } catch (directError) {
+    try {
+      return await backendCatalog(kind, opts);
+    } catch {
+      throw directError;
+    }
+  }
+}
+
+/** `GET /movies`, `/tv-series` or `/animation`. */
+export async function getCatalog(
+  kind: "movies" | "tv-series" | "animation",
+  opts: { page?: number; sort?: string } = {}
+): Promise<MovieBoxCatalogPage> {
+  const payload = await loadCatalog(kind, opts);
+  for (const item of payload.items ?? []) rememberSubject(item);
+  return payload;
 }
 
 /**
@@ -609,14 +675,30 @@ export function getCatalog(
  * numeric id cannot be recovered -- routes in this app are built from slugs for
  * exactly that reason.
  */
+function backendDetail(slug: string): Promise<MovieBoxDetailEnvelope> {
+  return streamvyGet<MovieBoxDetailEnvelope>(
+    `/detail/${encodeURIComponent(slug)}`,
+    { context: "Title details", timeoutMs: STREAMVY_STREAM_TIMEOUT_MS }
+  );
+}
+
+async function loadDetail(slug: string): Promise<MovieBoxDetailEnvelope> {
+  if (!MOVIEBOX_DIRECT_ENABLED) return backendDetail(slug);
+  try {
+    return await directDetail(slug);
+  } catch (directError) {
+    try {
+      return await backendDetail(slug);
+    } catch {
+      throw directError;
+    }
+  }
+}
+
 export function getDetail(handle: string): Promise<MovieBoxDetail> {
   const clean = (handle ?? "").trim();
   if (!clean) return Promise.reject(new Error("A title handle is required"));
 
-  // `subjectIdByPath` maps a slug to its subject id, not the other way
-  // around. Reading it here used to turn a perfectly good slug into a
-  // subject id and then ask `/detail/{subject_id}`, which the live API
-  // answers with a 502. Only a subject id needs translating back to a slug.
   const slug = isUsableSubjectId(clean)
     ? detailPathBySubject.get(clean) ?? clean
     : clean;
@@ -625,10 +707,7 @@ export function getDetail(handle: string): Promise<MovieBoxDetail> {
   const cached = detailCache.get(slug);
   if (cached && now - cached.at < CATALOG_CACHE_TTL_MS) return cached.promise;
 
-  const promise = streamvyGet<MovieBoxDetailEnvelope>(
-    `/detail/${encodeURIComponent(slug)}`,
-    { context: "Title details", timeoutMs: STREAMVY_STREAM_TIMEOUT_MS }
-  ).then(envelope => {
+  const promise = loadDetail(slug).then(envelope => {
     if (!envelope?.data?.subject) {
       throw new Error("The media API answered a detail payload with no subject");
     }

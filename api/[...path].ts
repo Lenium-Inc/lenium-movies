@@ -18,7 +18,7 @@ const { Pool } = pg;
 
 type Row = Record<string, any>;
 
-type HandlerRequest = {
+export type HandlerRequest = {
   url?: string;
   method?: string;
   headers?: Record<string, string | string[] | undefined> & {
@@ -27,7 +27,7 @@ type HandlerRequest = {
   body?: unknown;
 };
 
-type HandlerResponse = {
+export type HandlerResponse = {
   status(code: number): HandlerResponse;
   json(body: unknown): void;
   send(body?: unknown): void;

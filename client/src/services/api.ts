@@ -32,6 +32,12 @@ import {
   type MovieBoxResource,
   type MovieBoxSeasonBlock,
 } from "@/services/streamvy";
+import {
+  tmdbDiscover,
+  tmdbEnabled,
+  tmdbHomeSections,
+  tmdbSearch,
+} from "@/services/tmdb";
 
 export { ApiError, isRateLimited, proxiedVideoTarget };
 
@@ -534,7 +540,7 @@ interface HomeSectionView {
   movies: StreamMovie[];
 }
 
-async function homeSections(): Promise<HomeSectionView[]> {
+async function backendHomeSections(): Promise<HomeSectionView[]> {
   const payload = await getHome();
   const raw = Array.isArray(payload.sections) ? payload.sections : [];
   return raw
@@ -552,6 +558,31 @@ async function homeSections(): Promise<HomeSectionView[]> {
       };
     })
     .filter(section => section.movies.length > 0);
+}
+
+/**
+ * The home shelves, with a browser-side TMDB fallback when the media API is
+ * unreachable.
+ *
+ * Every shelf helper (`fetchTrending`, `fetchPopular`, `fetchNowPlaying`,
+ * `fetchOnTheAir`, `fetchFeeds`) reads the catalogue through here, so one
+ * fallback keeps the whole home page populated instead of each helper growing
+ * its own recovery path. The fallback shelves are named to match the same regex
+ * filters those helpers already apply.
+ */
+async function homeSections(): Promise<HomeSectionView[]> {
+  try {
+    return await backendHomeSections();
+  } catch (err) {
+    if (!tmdbEnabled()) throw err;
+    try {
+      return await tmdbHomeSections();
+    } catch {
+      // The fallback failed too. Report the original backend failure rather
+      // than a TMDB error the viewer cannot act on.
+      throw err;
+    }
+  }
 }
 
 /** Flatten sections, keeping the first occurrence of each subject. */
@@ -584,16 +615,29 @@ function sectionsMatching(
 export async function searchCatalog(query: string): Promise<StreamMovie[]> {
   const trimmed = query.trim();
   if (!trimmed) return [];
-  const payload = await searchSubjects(trimmed);
-  const items = Array.isArray(payload.items) ? payload.items : [];
-  return items
-    .filter(item => Boolean(item.slug?.trim()))
-    .map(item =>
-      movieFromItem(
-        item,
-        /\bseries\b/i.test(item.name ?? "") ? "tv" : "movie"
-      )
-    );
+  try {
+    const payload = await searchSubjects(trimmed);
+    const items = Array.isArray(payload.items) ? payload.items : [];
+    return items
+      .filter(item => Boolean(item.slug?.trim()))
+      .map(item =>
+        movieFromItem(
+          item,
+          /\bseries\b/i.test(item.name ?? "") ? "tv" : "movie"
+        )
+      );
+  } catch (err) {
+    // A dead media API should not make search look broken: TMDB can answer the
+    // same question, just without the slugs playback needs.
+    if (!tmdbEnabled()) throw err;
+    try {
+      const fallback = await tmdbSearch(trimmed);
+      if (fallback.length > 0) return fallback;
+    } catch {
+      // Fall through and report the backend failure.
+    }
+    throw err;
+  }
 }
 
 export interface ResolvedStream {
@@ -1437,27 +1481,41 @@ export async function searchSuggest(
 ): Promise<SearchSuggestion[]> {
   const trimmed = query.trim();
   if (!trimmed || trimmed.length < 2) return [];
-  const suggestions = await suggestSubjects(trimmed);
-  return suggestions
-    .map((suggestion): SearchSuggestion | null => {
-      const slug = suggestion.slug?.trim() || "";
-      const subjectId = suggestion.subject_id?.trim() || "";
-      const handle = slug || subjectId;
-      const title = suggestion.title?.trim() || slug;
-      if (!handle || !title) return null;
-      return {
-        id: handle,
-        ...(slug ? { detail_path: slug } : {}),
-        ...(subjectId ? { subject_id: subjectId } : {}),
-        title,
-        poster_url:
-          (slug && peekPoster(slug)) ||
-          suggestion.poster_url?.trim() ||
-          "",
-        media_type: "movie",
-      };
-    })
-    .filter((suggestion): suggestion is SearchSuggestion => suggestion !== null);
+  try {
+    const suggestions = await suggestSubjects(trimmed);
+    return suggestions
+      .map((suggestion): SearchSuggestion | null => {
+        const slug = suggestion.slug?.trim() || "";
+        const subjectId = suggestion.subject_id?.trim() || "";
+        const handle = slug || subjectId;
+        const title = suggestion.title?.trim() || slug;
+        if (!handle || !title) return null;
+        return {
+          id: handle,
+          ...(slug ? { detail_path: slug } : {}),
+          ...(subjectId ? { subject_id: subjectId } : {}),
+          title,
+          poster_url:
+            (slug && peekPoster(slug)) ||
+            suggestion.poster_url?.trim() ||
+            "",
+          media_type: "movie",
+        };
+      })
+      .filter(
+        (suggestion): suggestion is SearchSuggestion => suggestion !== null
+      );
+  } catch (err) {
+    if (!tmdbEnabled()) throw err;
+    const fallback = await tmdbSearch(trimmed).catch(() => []);
+    return fallback.slice(0, 8).map(movie => ({
+      id: movie.id,
+      title: movie.title,
+      poster_url: movie.poster_url,
+      ...(movie.year ? { year: String(movie.year) } : {}),
+      media_type: movie.media_type === "tv" ? "tv" : "movie",
+    }));
+  }
 }
 
 function isSuggestion(value: unknown): value is SearchSuggestion {
@@ -1842,6 +1900,30 @@ function catalogItemFromMovie(
   };
 }
 
+/**
+ * A TMDB fallback movie as the discover grid's card.
+ *
+ * There is no section here to supply genres, so the movie's own list is used.
+ * `detail_path` stays absent on purpose: TMDB has no MovieBox slug, and an
+ * invented one would send playback to a title that does not exist.
+ */
+function catalogItemFromTmdbMovie(movie: StreamMovie): CatalogItem {
+  return {
+    id: movie.id,
+    tmdb_id: movie.id,
+    title: movie.title,
+    media_type: movie.media_type,
+    year: movie.year,
+    poster_url: movie.poster_url,
+    backdrop_url: movie.backdrop_url,
+    overview: movie.overview,
+    vote_average: movie.vote_average,
+    popularity: movie.popularity,
+    genres: movie.genres,
+    source: "tmdb",
+  };
+}
+
 export async function fetchDiscover(
   params: DiscoverParams = {}
 ): Promise<DiscoverResult> {
@@ -1865,7 +1947,31 @@ export async function fetchDiscover(
   if (inFlight) return inFlight;
 
   const request = (async (): Promise<DiscoverResult> => {
-    const sections = await homeSections();
+    let sections: HomeSectionView[];
+    try {
+      sections = await backendHomeSections();
+    } catch (err) {
+      // Discover is the infinite grid, so the fallback asks TMDB for a real
+      // page instead of slicing the home shelves: that keeps both pagination
+      // and the genre filter working while the media API is down.
+      if (!tmdbEnabled()) throw err;
+      const fallback = await tmdbDiscover({
+        mediaType,
+        page,
+        perPage,
+        genre: params.genre,
+      });
+      const result: DiscoverResult = {
+        items: fallback.movies.map(catalogItemFromTmdbMovie),
+        page: fallback.page,
+        per_page: fallback.perPage,
+        total: fallback.total,
+        has_more: fallback.hasMore,
+        source: "live",
+      };
+      setCache(cacheKey, result);
+      return result;
+    }
 
     let selected = sectionsMatching(
       sections,

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
-import { Play, Star, Film, Tv } from "lucide-react";
+import { Info, Star, Film, Tv } from "lucide-react";
 import { Link } from "wouter";
 import type { TrailerInfo } from "@/services/api";
 import { formatRuntime } from "@/lib/format";
@@ -249,7 +249,7 @@ export function MediaCard({
       <button
         type="button"
         onClick={() => onPlay?.(id)}
-        aria-label={`Play ${title}`}
+        aria-label={`View ${title}`}
         className="relative block w-full overflow-hidden rounded-xl border border-white/10 bg-[#121212] text-left shadow-[0_6px_18px_rgba(0,0,0,0.5)] transition-[transform,box-shadow,border-color] duration-300 ease-out hover:-translate-y-1.5 hover:scale-[1.02] hover:border-white/25 hover:shadow-[0_22px_48px_rgba(0,0,0,0.7),0_0_0_1px_rgba(255,255,255,0.12)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
       >
         <div className="relative aspect-[2/3] w-full overflow-hidden">
@@ -342,10 +342,12 @@ export function MediaCard({
             </span>
           )}
 
-          {/* Quick-action play button */}
+          {/* Quick-action details button. The card's job is to open the title
+              page; playback lives in the app, so a Play glyph here would
+              promise an action the website cannot perform. */}
           <div className="absolute inset-0 grid place-items-center opacity-0 transition-opacity duration-200 group-hover:opacity-100">
             <span className="grid h-12 w-12 scale-75 place-items-center rounded-full bg-white text-black shadow-[0_10px_28px_rgba(255,255,255,0.18)] ring-1 ring-white/40 transition-transform duration-200 group-hover:scale-100">
-              <Play className="h-5 w-5 fill-current" />
+              <Info className="h-5 w-5" />
             </span>
           </div>
         </div>

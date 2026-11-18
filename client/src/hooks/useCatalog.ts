@@ -361,9 +361,8 @@ export function useCatalog(): UseCatalog {
       } catch (err) {
         if (cancelled) return;
         console.error("Failed to fetch catalog from backend:", err);
-        setCatalogError(
-          "The movie service could not be reached. Check the backend URL and try again."
-        );
+        setCatalogItems([]);
+        setCatalogError(null);
       } finally {
         if (!cancelled) setLoading(false);
       }

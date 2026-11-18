@@ -8,6 +8,14 @@ export type Movie = {
   id: number;
   /** Original provider ID (TMDB ID as string) */
   providerId: string;
+  /**
+   * MovieBox's opaque subject id, when the record came from its catalogue.
+   *
+   * Playback is keyed by this id while routes and metadata are keyed by the
+   * `detailPath` slug, so the native player needs both. Absent on TMDB-only
+   * fallback records.
+   */
+  subjectId?: string | null;
   /** Display title */
   title: string;
   /** Release year (null if unknown) */

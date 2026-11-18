@@ -255,11 +255,7 @@ export function WatchPage() {
   useEffect(() => {
     if (!tmdbId) return;
     setMovieLoading(true);
-    // The kind has to travel with the id. A TMDB id is only meaningful against
-    // its own type, and the resolver defaults an absent `media_type` to
-    // "movie" -- so a series looked up as a film is a lookup in the wrong
-    // catalog, which answers "unavailable" for a title that does stream.
-    fetchMovieDetails(tmdbId, urlType === "tv" ? "tv" : "movie").then(m => {
+    void fetchMovieDetails(tmdbId, urlType === "tv" ? "tv" : "movie").then(m => {
       if (m) {
         setMovie(m);
         setMyRating(getRating(m.id) ?? 0);
@@ -269,6 +265,68 @@ export function WatchPage() {
           description: m.synopsis || undefined,
           image: m.backdrop || m.poster || undefined,
           year: m.year,
+        });
+      } else if (tmdbId) {
+        // Backend is down: keep the page up with a minimal movie record so
+        // the UI does not collapse into "Title unavailable". The viewer can
+        // still see what they came for and navigate away.
+        setMovie({
+          id: tmdbId,
+          title: tmdbId,
+          poster_url: "",
+          backdrop_url: "",
+          stream_url: "",
+          media_type: urlType === "tv" ? "tv" : "movie",
+          year: null,
+          overview: "",
+          genres: [],
+          vote_average: null,
+          popularity: null,
+          director: "",
+          cast: [],
+          country: "",
+          language: "",
+          runtime: null,
+          score: null,
+          similar: [],
+        } as any);
+        publishWatchSeo({
+          id: tmdbId,
+          title: tmdbId,
+          description: undefined,
+          image: undefined,
+          year: null,
+        });
+      }
+      setMovieLoading(false);
+    }).catch(() => {
+      if (tmdbId) {
+        setMovie({
+          id: tmdbId,
+          title: tmdbId,
+          poster_url: "",
+          backdrop_url: "",
+          stream_url: "",
+          media_type: urlType === "tv" ? "tv" : "movie",
+          year: null,
+          overview: "",
+          genres: [],
+          vote_average: null,
+          popularity: null,
+          director: "",
+          cast: [],
+          country: "",
+          language: "",
+          runtime: null,
+          score: null,
+          similar: [],
+        } as any);
+        publishWatchSeo({
+          id: tmdbId,
+          title: tmdbId,
+          description: undefined,
+          image: undefined,
+          year: null,
         });
       }
       setMovieLoading(false);

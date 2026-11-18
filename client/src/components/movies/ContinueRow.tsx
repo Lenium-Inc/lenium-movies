@@ -1,5 +1,5 @@
 import { useLocation } from "wouter";
-import { Play } from "lucide-react";
+import { Info } from "lucide-react";
 import { optimizedImage } from "@/lib/imageOptimize";
 import { buildTitlePath } from "@/lib/watchRoute";
 import { RowScroller } from "./RowScroller";
@@ -15,9 +15,8 @@ import type { Movie } from "./types";
  *
  * A card opens the title page, like every other click path on the site. The
  * resume point is not lost in the detour: `buildTitlePath` carries the
- * season/episode as query params, and the title page's Play button hands them
- * straight to the watch route, so "pick this back up" resumes rather than
- * restarting at S1E1.
+ * season/episode as query params, and the title page hands them to the app's
+ * native player, so "pick this back up" resumes rather than restarting at S1E1.
  */
 
 interface ContinueRowProps {
@@ -41,11 +40,11 @@ export function ContinueRow({ title, items }: ContinueRowProps) {
   const [, navigate] = useLocation();
   if (!items.length) return null;
 
-  const play = (movie: Movie) => {
+  const openTitle = (movie: Movie) => {
     const handle = movie.providerId || String(movie.id);
     if (!handle) return;
     // Route through the details page like every other click path; the resume
-    // season/episode ride along so Play can pick up where the viewer stopped.
+    // season/episode ride along so the app can pick up where the viewer stopped.
     navigate(
       buildTitlePath(handle, movie.mediaType || "movie", {
         season: movie.resumeSeason,
@@ -72,8 +71,8 @@ export function ContinueRow({ title, items }: ContinueRowProps) {
             <button
               key={`${movie.providerId ?? movie.id}-${index}`}
               type="button"
-              onClick={() => play(movie)}
-              aria-label={`Resume ${movie.title}`}
+              onClick={() => openTitle(movie)}
+              aria-label={`Open ${movie.title}`}
               className="group relative block w-full cursor-pointer overflow-hidden rounded-lg border border-white/10 bg-black/40 text-left"
             >
               <div className="relative aspect-video w-full overflow-hidden bg-zinc-900">
@@ -104,7 +103,7 @@ export function ContinueRow({ title, items }: ContinueRowProps) {
 
                 <span className="pointer-events-none absolute inset-0 grid place-items-center opacity-0 transition duration-300 group-hover:opacity-100 group-focus-visible:opacity-100">
                   <span className="grid h-10 w-10 place-items-center rounded-full border border-white/25 bg-black/50 backdrop-blur-sm">
-                    <Play className="ml-0.5 h-4 w-4 fill-white text-white" />
+                    <Info className="h-4 w-4 text-white" />
                   </span>
                 </span>
 

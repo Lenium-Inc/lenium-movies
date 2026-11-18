@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLocation, useParams, useSearch } from "wouter";
-import { Bookmark, Check, Film, Play, Star, X } from "lucide-react";
+import { Bookmark, Check, Film, Info, Play, Smartphone, Star, X } from "lucide-react";
 import { Navbar } from "@/components/layout/Navbar";
 import {
   APPLY_SEARCH_EVENT,
@@ -21,6 +21,8 @@ import {
 import { resolveTrailer } from "@/lib/tmdbTrailers";
 import { TrailerBrandingMask } from "@/components/stream/TrailerBrandingMask";
 import { buildTitlePath, buildWatchPath } from "@/lib/watchRoute";
+import { ANDROID_APP_URL } from "@/lib/androidApp";
+import { isNativeApp } from "@/lib/native";
 import { publishWatchSeo, resetWatchSeo } from "@/lib/watchSeo";
 import { formatRuntime } from "@/lib/format";
 import { genreColor } from "@/lib/genreColors";
@@ -88,28 +90,12 @@ export default function TitlePage() {
    * this is a head start, and the watch page owns the real error path.
    */
   const prewarmPlayback = useCallback(() => {
-    const movie = meta?.movie;
-    if (!movie?.providerId) return;
-    void import("@/pages/Watch");
-    void import("@/services/api")
-      .then(async ({ resolveStream, getStreamSource }) => {
-        const resolved = await resolveStream(movie.providerId, movie.year, {
-          detailPath: movie.providerId,
-          mediaType: movie.mediaType,
-        });
-        if (!resolved.stream.id) return;
-        await getStreamSource({
-          tmdbId: resolved.stream.id,
-          detailPath: resolved.stream.detail_path || movie.providerId,
-          mediaType: movie.mediaType,
-          season: movie.mediaType === "tv" ? resumeSeason ?? 1 : undefined,
-          episode: movie.mediaType === "tv" ? resumeEpisode ?? 1 : undefined,
-        });
-      })
-      .catch(() => {
-        /* the watch page reports a real failure if the viewer plays */
-      });
-  }, [meta?.movie, resumeSeason, resumeEpisode]);
+    if (!meta?.movie?.providerId) return;
+    // The route is now a pure app hand-off; the only useful head start is the
+    // chunk itself. Resolving a stream here would burn a media request for a
+    // player the browser is no longer allowed to run.
+    void import("@/pages/WatchGate");
+  }, [meta?.movie?.providerId]);
 
 
   useEffect(() => {
@@ -128,6 +114,32 @@ export default function TitlePage() {
         return;
       }
       setMeta(result);
+      setStatus("ready");
+    }).catch(() => {
+      if (!active) return;
+      setMeta({
+        movie: {
+          id,
+          title: id,
+          poster_url: "",
+          backdrop_url: "",
+          stream_url: "",
+          media_type: "movie",
+          year: null,
+          overview: "",
+          genres: [],
+          vote_average: null,
+          popularity: null,
+          director: "",
+          cast: [],
+          country: "",
+          language: "",
+          runtime: null,
+          score: null,
+          similar: [],
+        },
+        similar: [],
+      } as any);
       setStatus("ready");
     });
     return () => {
@@ -395,30 +407,41 @@ export default function TitlePage() {
                       )}
                     </div>
                     <div className="mt-5 flex flex-wrap items-center gap-3">
-                      <button
-                        type="button"
-                        onMouseEnter={prewarmPlayback}
-                        onFocus={prewarmPlayback}
-                        onTouchStart={prewarmPlayback}
-                        onClick={() => {
-                          prewarmPlayback();
-                          navigate(
-                            buildWatchPath(movie.providerId, {
-                              mediaType: movie.mediaType,
-                              // Resume targeting, carried here from the Continue
-                              // Watching shelf so "pick this back up" survives
-                              // the detour through this page. Ignored for a film.
-                              season: resumeSeason,
-                              episode: resumeEpisode,
-                            })
-                          );
-                        }}
-                        aria-label="Play now"
-                        className="flex h-12 w-12 items-center justify-center gap-2 rounded-xl bg-white px-0 py-0 text-sm font-bold text-black shadow-lg shadow-black/30 transition-all hover:bg-neutral-200 active:scale-[0.98] sm:h-auto sm:w-auto sm:px-8 sm:py-3"
-                      >
-                        <Play className="h-5 w-5 fill-current" />
-                        <span className="hidden sm:inline">Play now</span>
-                      </button>
+                      {isNativeApp() ? (
+                        <button
+                          type="button"
+                          onMouseEnter={prewarmPlayback}
+                          onFocus={prewarmPlayback}
+                          onTouchStart={prewarmPlayback}
+                          onClick={() => {
+                            prewarmPlayback();
+                            navigate(
+                              buildWatchPath(movie.providerId, {
+                                mediaType: movie.mediaType,
+                                // Resume targeting, carried here from the Continue
+                                // Watching shelf so "pick this back up" survives
+                                // the detour through this page. Ignored for a film.
+                                season: resumeSeason,
+                                episode: resumeEpisode,
+                              })
+                            );
+                          }}
+                          aria-label="Play now"
+                          className="flex h-12 items-center justify-center gap-2 rounded-xl bg-white px-5 py-0 text-sm font-bold text-black shadow-lg shadow-black/30 transition-all hover:bg-neutral-200 active:scale-[0.98] sm:h-auto sm:w-auto sm:px-8 sm:py-3"
+                        >
+                          <Play className="h-5 w-5 fill-current" />
+                          <span>Play</span>
+                        </button>
+                      ) : (
+                        <a
+                          href={ANDROID_APP_URL}
+                          aria-label="Watch free in the Stream Vy app"
+                          className="flex h-12 items-center justify-center gap-2 rounded-xl bg-white px-5 py-0 text-sm font-bold text-black shadow-lg shadow-black/30 transition-all hover:bg-neutral-200 active:scale-[0.98] sm:h-auto sm:w-auto sm:px-6 sm:py-3"
+                        >
+                          <Smartphone className="h-5 w-5" />
+                          <span>Watch free in app</span>
+                        </a>
+                      )}
                       {trailer && !trailerFailed ? (
                         <button
                           type="button"
@@ -561,7 +584,7 @@ export default function TitlePage() {
                             )}
                             <div className="absolute inset-0 grid place-items-center bg-black/55 opacity-0 transition duration-200 group-hover:opacity-100 group-focus-visible:opacity-100">
                               <span className="grid h-10 w-10 place-items-center rounded-full bg-white text-black shadow-lg">
-                                <Play className="h-4 w-4 fill-current" />
+                                <Info className="h-4 w-4" />
                               </span>
                             </div>
                           </div>

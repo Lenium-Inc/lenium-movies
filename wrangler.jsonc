@@ -1,0 +1,47 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+
+  // One Worker serves the SPA and every API route that used to be a Vercel
+  // function. `wrangler deploy` uploads the built client (dist/public) as
+  // static assets and the Worker handles /api/*.
+  "name": "streamvy",
+  "main": "cf/worker.ts",
+  "compatibility_date": "2025-09-01",
+  // pg / node:crypto / Buffer in the account API need the Node compatibility
+  // layer. It also populates `process.env` from the vars and secrets below, so
+  // the existing handlers keep reading configuration the same way.
+  "compatibility_flags": ["nodejs_compat"],
+
+  "assets": {
+    "directory": "./dist/public",
+    "binding": "ASSETS",
+    // Client-side routes (/watch/:id, /title/:id, /my-list, …) render from
+    // index.html, the same rewrite vercel.json performed.
+    "not_found_handling": "single-page-application",
+    // /api/* must reach the Worker even though a 404 there would otherwise be
+    // caught by the SPA fallback.
+    "run_worker_first": ["/api/*"],
+  },
+
+  // The account API imports `pg`, whose native driver cannot run in Workers.
+  // This alias swaps it for the Neon serverless driver, which speaks the same
+  // Pool/Client API over WebSockets. api/[...path].ts is untouched and still
+  // deploys to a Node host unchanged.
+  "alias": {
+    "pg": "./cf/pg-shim.ts",
+  },
+
+  "observability": {
+    "enabled": true,
+  },
+
+  // Runtime configuration (set with `wrangler secret put …`):
+  //   DATABASE_URL     Neon Postgres connection string (account API)
+  //   TMDB_API_KEY     /api/trailer lookup
+  //   ALLOWED_ORIGINS  comma-separated extra CORS origins (optional)
+  //
+  // Build-time configuration (VITE_*, baked into dist/public by `vite build`):
+  //   VITE_SITE_URL                 canonical origin, e.g. https://streamvy.me
+  //   VITE_STREAMVY_PROXY_BASE_URL  /api for same-origin relays
+  // See docs/deployment.md.
+}

@@ -149,7 +149,7 @@ export function Navbar({ view, onNavigate }: NavbarProps) {
           <MyListLink className="text-sm font-medium" />
         </nav>
 
-        <div className="ml-auto flex min-w-0 items-center gap-2.5">
+        <div className="ml-auto flex min-w-0 items-center gap-2 sm:gap-2.5">
           {/*
             A real input, not a button that opens one. It used to be two
             separate controls -- a wide pill on desktop and an icon on mobile --
@@ -157,7 +157,7 @@ export function Navbar({ view, onNavigate }: NavbarProps) {
             behind an opaque backdrop. One inline field covers every viewport, and
             its results drop down underneath instead of taking over the page.
           */}
-          <div className="hidden min-w-0 sm:block">
+          <div className="min-w-0 flex-1 sm:flex-none">
             <NavbarSearch />
           </div>
 

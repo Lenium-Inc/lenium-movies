@@ -350,7 +350,7 @@ export default function Vyteenda() {
     <div className="sv-accent-scope min-h-screen text-white">
       <Navbar view="vyteenda" onNavigate={onNavigate} />
 
-      <main className="mx-auto max-w-6xl px-4 pt-6 pb-16 sm:px-6 lg:px-8">
+      <main className="mx-auto max-w-6xl px-4 pt-4 pb-10 sm:px-6 sm:pt-6 sm:pb-16 lg:px-8">
         <header className="mb-6 flex flex-wrap items-end justify-between gap-4">
           <div>
             <p className="inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.22em] text-[var(--text-muted)]">
@@ -360,7 +360,7 @@ export default function Vyteenda() {
             <h1 className="mt-2 font-display text-4xl font-black tracking-tight sm:text-5xl">
               Vyteenda
             </h1>
-            <p className="mt-2 max-w-xl text-sm leading-6 text-[var(--text-muted)]">
+            <p className="mt-2 hidden max-w-xl text-sm leading-6 text-[var(--text-muted)] sm:block">
               Swipe right or tap the heart to match. Every match lands in My
               List under Favorites; swipe left to pass.
             </p>
@@ -387,9 +387,15 @@ export default function Vyteenda() {
           />
         </div>
 
-        <div className="relative mx-auto flex min-h-[620px] max-w-xl items-center justify-center">
+        {/*
+          No fixed min-height here: the stack must hug the card exactly, or the
+          cards behind the top one -- sized off this container -- would be
+          taller than the card they sit behind. The loading and empty states
+          size themselves.
+        */}
+        <div className="relative mx-auto flex max-w-xl items-center justify-center">
           {loading ? (
-            <div className="grid h-[520px] w-full place-items-center rounded-3xl border border-white/10 bg-white/[0.03]">
+            <div className="vt-card grid w-full place-items-center rounded-3xl border border-white/10 bg-white/[0.03]">
               <div className="flex flex-col items-center gap-3 text-white/50">
                 <Loader2 className="h-7 w-7 animate-spin" />
                 <span className="text-sm">Dealing the deck…</span>
@@ -482,7 +488,7 @@ export default function Vyteenda() {
                 className="relative z-10 w-full cursor-grab touch-pan-y overflow-hidden rounded-3xl border border-white/10 bg-zinc-900 shadow-[0_30px_80px_rgba(0,0,0,0.6)] active:cursor-grabbing"
                 aria-label={`${current.title}${current.year ? `, ${current.year}` : ""}`}
               >
-                <div className="relative h-[520px] w-full sm:h-[560px]">
+                <div className="vt-card relative w-full">
                   {currentBackdrop ? (
                     <img
                       src={currentBackdrop}
@@ -501,7 +507,7 @@ export default function Vyteenda() {
                       srcSet={tmdbSrcSet(current.poster, POSTER_SRCSET)}
                       sizes={POSTER_SIZES}
                       alt={current.title}
-                      className="absolute left-1/2 top-5 h-[360px] w-auto max-w-[78%] -translate-x-1/2 rounded-xl object-cover shadow-2xl sm:h-[390px]"
+                      className="absolute left-1/2 top-5 h-[60%] max-h-[calc(100%-11rem)] w-auto max-w-[78%] -translate-x-1/2 rounded-xl object-cover shadow-2xl"
                       loading="eager"
                       fetchPriority="high"
                       decoding="async"
@@ -539,7 +545,7 @@ export default function Vyteenda() {
                         ))}
                       </div>
                       {current.synopsis ? (
-                        <p className="mt-3 line-clamp-3 text-sm leading-6 text-white/60">
+                        <p className="mt-3 line-clamp-2 text-sm leading-6 text-white/60 sm:line-clamp-3">
                           {current.synopsis}
                         </p>
                       ) : null}
@@ -577,7 +583,7 @@ export default function Vyteenda() {
         </div>
 
         {!loading && !error && current ? (
-          <div className="mt-8 flex items-center justify-center gap-4">
+          <div className="mt-6 flex items-center justify-center gap-4 sm:mt-8">
             <button
               type="button"
               onClick={undo}
@@ -616,7 +622,8 @@ export default function Vyteenda() {
           </div>
         ) : null}
 
-        <p className="mt-6 text-center text-xs text-white/35">
+        {/* Keyboard-only affordance; the touch deck has no such keys. */}
+        <p className="mt-6 hidden text-center text-xs text-white/35 sm:block">
           ← pass · → match · Backspace to undo
         </p>
       </main>

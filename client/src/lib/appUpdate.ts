@@ -1,3 +1,5 @@
+import { AUTH_API_BASE_URL } from "@/services/auth";
+
 import { ANDROID_APP_URL } from "./androidApp";
 import { isNativeApp } from "./native";
 
@@ -12,8 +14,12 @@ import { isNativeApp } from "./native";
  * a higher `versionCode`, which the release workflow enforces.
  */
 
-/** Same-origin proxy that reads the manifest from the release asset. */
-const VERSION_ENDPOINT = "https://www.streamvy.me/api/android-version";
+/**
+ * Proxy that reads the manifest from the release asset. On the web this is the
+ * same origin; inside the Capacitor shell it is the configured API origin, which
+ * moved from Vercel to Cloudflare with the rest of the backend.
+ */
+const VERSION_ENDPOINT = `${AUTH_API_BASE_URL}/api/android-version`;
 
 export interface AndroidRelease {
   versionCode: number;
